@@ -1,0 +1,34 @@
+printf "\n# external dependency repos\ncav-mae-sync/\nmerlot_reserve/\n" >> .gitignore
+printf "\n# large / generated artifacts\ndata/\noutputs*/\n**/*.pth\n**/*.pt\n**/*.ckpt\n**/*.npz\n**/*.h5\n**/*.pkl\n" >> .gitignore
+git add .gitignore
+git commit -m "Ignore external model repos and large artifacts"
+
+# large data & media
+data/
+*.mp4
+*.wav
+
+# model weights
+*.pth
+*.pt
+*.ckpt
+
+# external dependency repos
+cav-mae-sync/
+merlot_reserve/
+
+# external deps (cloned separately)
+cav-mae-sync/
+merlot_reserve/
+deps/
+
+# datasets & outputs
+data/
+outputs*/
+*.mp4
+*.wav
+
+# model weights
+*.pth
+*.pt
+*.ckpt

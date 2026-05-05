@@ -32,3 +32,4 @@ outputs*/
 *.pth
 *.pt
 *.ckpt
+__pycache__/

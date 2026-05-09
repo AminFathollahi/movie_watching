@@ -33,8 +33,8 @@ RSA Config (modular — swap ACTIVE_CONFIG to compare variants):
 Inputs:
     OUTPUT_DIR/integration_score.npy    (59412,)  from Script 05
     OUTPUT_DIR/integration_mask.npy     (59412,)  from Script 05
-    OUTPUT_DIR/R2_audio_nc.npy          (59412,)  from Script 04
-    OUTPUT_DIR/R2_video_nc.npy          (59412,)  from Script 04
+    OUTPUT_DIR/R2_{AUDIO_ROI}_nc.npy    (59412,)  from Script 04
+    OUTPUT_DIR/R2_{VIDEO_ROI}_nc.npy    (59412,)  from Script 04
     RSA_BASE/.../rsa_*_{hem}_*.npy      per-hemisphere RSA maps
 
 Outputs (per config):
@@ -51,12 +51,19 @@ Run
 # =============================================================================
 # CONFIG
 # =============================================================================
-
+import os
 DATA_BASE  = "/home/amin/Research/Representation/Movie/data/Setareh"
 TEMPLATE_CIFTI = (f"{DATA_BASE}/HCP_S1200_GroupAvg_v1/"
                   "S1200.curvature_MSMAll.32k_fs_LR.dscalar.nii")
 
-OUTPUT_DIR = "/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual"
+# ── ROI selection ─────────────────────────────────────────────────────────────
+# Must match the ROI_DEFS / AUDIO_ROI / VIDEO_ROI set in 01_extract_geometry.py.
+AUDIO_ROI = os.getenv("AUDIO_ROI")
+VIDEO_ROI = os.getenv("VIDEO_ROI")
+
+OUTPUT_DIR = f"/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/{AUDIO_ROI}_{VIDEO_ROI}"
+PREP_DIR   = f"{OUTPUT_DIR}/prep"
+CACHE_DIR  = f"{OUTPUT_DIR}/subsurfaces"
 CIFTI_DIR  = f"{OUTPUT_DIR}/cifti_maps"
 RESULTS_DIR = f"{OUTPUT_DIR}/results"
 
@@ -75,6 +82,7 @@ RSA_MODEL  = "pe-av-small-16-frame"
 #   k100_{norm}_{method}_delay5s  if hrf_tag='nohrf'
 # Filename: rsa_{model}_{modality}_k100_spearman_{norm}_{hrf_tag}_bin{bin}_{hem}_{method}.npy
 RSA_CONFIGS = {
+    "notnormalized_nohrf_global_2s"  : dict(norm="notnormalized",    hrf_tag="nohrf",   method="global", bin="2s"),
     "normalized_hrf_blockdiag_2s"    : dict(norm="normalized",    hrf_tag="hrf",   method="blockdiag", bin="2s"),
     "normalized_hrf_global_2s"       : dict(norm="normalized",    hrf_tag="hrf",   method="global",    bin="2s"),
     "notnormalized_hrf_blockdiag_2s" : dict(norm="notnormalized", hrf_tag="hrf",   method="blockdiag", bin="2s"),
@@ -83,8 +91,8 @@ RSA_CONFIGS = {
     "notnormalized_hrf_blockdiag_5s" : dict(norm="notnormalized", hrf_tag="hrf",   method="blockdiag", bin="5s"),
 }
 
-ACTIVE_CONFIG   = "normalized_nohrf_blockdiag_2s"   # ← swap to compare variants
-RUN_ALL_CONFIGS = False                            # ← set True to process all
+ACTIVE_CONFIG   = "notnormalized_nohrf_global_2s"   
+RUN_ALL_CONFIGS = False                            
 
 N_BOOTSTRAP = 1000    # bootstrap iterations for 95% CI on Spearman rho
 BOOTSTRAP_SEED = 42
@@ -106,6 +114,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(me
 log = logging.getLogger(__name__)
 os.makedirs(CIFTI_DIR,   exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
+
 
 # =============================================================================
 # RSA FILE LOADING
@@ -295,8 +304,8 @@ def main():
     log.info("\nLoading CF-model integration maps …")
     integration_score = np.load(os.path.join(OUTPUT_DIR, "integration_score.npy"))
     integration_mask  = np.load(os.path.join(OUTPUT_DIR, "integration_mask.npy"))
-    R2_audio_nc       = np.load(os.path.join(OUTPUT_DIR, "R2_audio_nc.npy"))
-    R2_video_nc       = np.load(os.path.join(OUTPUT_DIR, "R2_video_nc.npy"))
+    R2_audio_nc       = np.load(os.path.join(OUTPUT_DIR, f"R2_{AUDIO_ROI}_nc.npy"))
+    R2_video_nc       = np.load(os.path.join(OUTPUT_DIR, f"R2_{VIDEO_ROI}_nc.npy"))
     log.info(f"  integration_score: frac>0={np.mean(integration_score>0):.1%}  "
              f"integration_mask: n={int(integration_mask.sum())} verts")
 

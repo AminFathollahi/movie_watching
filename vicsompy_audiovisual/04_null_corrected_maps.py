@@ -3,42 +3,27 @@
 =========================
 Null-model correction mirroring Hedger et al. (2025) Figure 3a methodology.
 
-The banded ridge split R² (R2_audio, R2_video from Script 03) reflects how well
-the full *topographic* pattern of A1/V1 predicts each vertex. But some of that
-prediction comes from a non-topographic component: the overall mean activity level
-of A1 (or V1) at each timepoint. Any vertex that simply tracks the global A1
-signal will show R2_audio > 0 regardless of whether it has a specific topographic
-preference within A1.
+The banded ridge split R² (R2_{AUDIO_ROI}, R2_{VIDEO_ROI} from Script 03)
+reflects how well the topographic pattern of the audio/video ROI predicts each
+vertex. Some of that prediction is non-topographic (global mean activity).
 
 The null model isolates topographic specificity:
-    null_audio: predict Y from mean(A1 activity) alone — a single regressor
-    null_video: predict Y from mean(V1 activity) alone
+    null_audio: predict Y from mean(audio ROI activity) — single regressor
+    null_video: predict Y from mean(video ROI activity)
 
-    R2_audio_nc = R2_audio - R2_null_audio   ← topographic A1 specificity only
-    R2_video_nc = R2_video - R2_null_video   ← topographic V1 specificity only
-
-Positive null-corrected values = the topographic (spatially structured) CF model
-outperforms the non-topographic mean regressor. These are the maps that go into
-the 2D colormap in Figure 3a of the paper.
-
-Mean time-course reconstruction from LBOEs (avoids reloading 786 MB MAT files):
-    X_test[:, 0:64]  = BOLD_A1_L @ eigvec_L,  so mean BOLD_A1_L ≈ X_test @ mean_evec_L
-    where mean_evec_L = eigvec_L.mean(axis=0)  (mean over the 77 A1 left vertices)
+    R2_{AUDIO_ROI}_nc = R2_{AUDIO_ROI} - R2_null_{AUDIO_ROI}
+    R2_{VIDEO_ROI}_nc = R2_{VIDEO_ROI} - R2_null_{VIDEO_ROI}
 
 Inputs (from Scripts 02-03):
-    PREP_DIR/X_test.npy          (328, 528)
-    PREP_DIR/Y_test.npy          (328, 59412)
-    PREP_DIR/band_sizes.npy      [128, 400]
-    CACHE_DIR/sub_a1.pkl         eigenvectors for mean reconstruction
-    CACHE_DIR/sub_v1.pkl
-    OUTPUT_DIR/R2_audio.npy      (59412,)  split R² from Script 03
-    OUTPUT_DIR/R2_video.npy      (59412,)
+    PREP_DIR/X_test.npy, Y_test.npy, band_sizes.npy
+    CACHE_DIR/sub_{AUDIO_ROI}.pkl, sub_{VIDEO_ROI}.pkl
+    OUTPUT_DIR/R2_{AUDIO_ROI}.npy, R2_{VIDEO_ROI}.npy  (from Script 03)
 
 Outputs:
-    OUTPUT_DIR/R2_null_audio.{npy,dscalar.nii}
-    OUTPUT_DIR/R2_null_video.{npy,dscalar.nii}
-    OUTPUT_DIR/R2_audio_nc.{npy,dscalar.nii}   ← primary output
-    OUTPUT_DIR/R2_video_nc.{npy,dscalar.nii}   ← primary output
+    OUTPUT_DIR/R2_null_{AUDIO_ROI}.{npy,dscalar.nii}
+    OUTPUT_DIR/R2_null_{VIDEO_ROI}.{npy,dscalar.nii}
+    OUTPUT_DIR/R2_{AUDIO_ROI}_nc.{npy,dscalar.nii}   ← primary output
+    OUTPUT_DIR/R2_{VIDEO_ROI}_nc.{npy,dscalar.nii}   ← primary output
 
 Run
 ---
@@ -46,15 +31,23 @@ Run
     python 04_null_corrected_maps.py
 """
 
+
 # =============================================================================
 # CONFIG
 # =============================================================================
+
+import os
 
 DATA_BASE  = "/home/amin/Research/Representation/Movie/data/Setareh"
 TEMPLATE_CIFTI = (f"{DATA_BASE}/HCP_S1200_GroupAvg_v1/"
                   "S1200.curvature_MSMAll.32k_fs_LR.dscalar.nii")
 
-OUTPUT_DIR = "/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual"
+# ── ROI selection ─────────────────────────────────────────────────────────────
+# Must match the ROI_DEFS / AUDIO_ROI / VIDEO_ROI set in 01_extract_geometry.py.
+AUDIO_ROI = os.getenv("AUDIO_ROI")
+VIDEO_ROI = os.getenv("VIDEO_ROI")
+
+OUTPUT_DIR = f"/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/{AUDIO_ROI}_{VIDEO_ROI}"
 PREP_DIR   = f"{OUTPUT_DIR}/prep"
 CACHE_DIR  = f"{OUTPUT_DIR}/subsurfaces"
 CIFTI_DIR  = f"{OUTPUT_DIR}/cifti_maps"
@@ -151,77 +144,77 @@ def main():
 
     # --- Load subsurface eigenvectors ---
     log.info("\nLoading subsurface pickles …")
-    with open(os.path.join(CACHE_DIR, "sub_a1.pkl"), "rb") as fh:
-        sub_a1 = pickle.load(fh)
-    with open(os.path.join(CACHE_DIR, "sub_v1.pkl"), "rb") as fh:
-        sub_v1 = pickle.load(fh)
-    if not hasattr(sub_a1, "n_lboe"):
-        sub_a1.n_lboe = sub_a1.L_eigenvectors.shape[1]
-    if not hasattr(sub_v1, "n_lboe"):
-        sub_v1.n_lboe = sub_v1.L_eigenvectors.shape[1]
-    log.info(f"  A1: n_lboe={sub_a1.n_lboe}  L={sub_a1.L_eigenvectors.shape}  R={sub_a1.R_eigenvectors.shape}")
-    log.info(f"  V1: n_lboe={sub_v1.n_lboe}  L={sub_v1.L_eigenvectors.shape}  R={sub_v1.R_eigenvectors.shape}")
+    with open(os.path.join(CACHE_DIR, f"sub_{AUDIO_ROI.lower()}.pkl"), "rb") as fh:
+        sub_audio = pickle.load(fh)
+    with open(os.path.join(CACHE_DIR, f"sub_{VIDEO_ROI.lower()}.pkl"), "rb") as fh:
+        sub_video = pickle.load(fh)
+    if not hasattr(sub_audio, "n_lboe"):
+        sub_audio.n_lboe = sub_audio.L_eigenvectors.shape[1]
+    if not hasattr(sub_video, "n_lboe"):
+        sub_video.n_lboe = sub_video.L_eigenvectors.shape[1]
+    log.info(f"  {AUDIO_ROI.upper()}: n_lboe={sub_audio.n_lboe}  "
+             f"L={sub_audio.L_eigenvectors.shape}  R={sub_audio.R_eigenvectors.shape}")
+    log.info(f"  {VIDEO_ROI.upper()}: n_lboe={sub_video.n_lboe}  "
+             f"L={sub_video.L_eigenvectors.shape}  R={sub_video.R_eigenvectors.shape}")
 
     # --- Load design matrix and targets ---
     log.info("\nLoading test arrays …")
-    X_test     = np.load(os.path.join(PREP_DIR, "X_test.npy"))      # (328, 528)
-    Y_test     = np.load(os.path.join(PREP_DIR, "Y_test.npy"))      # (328, 59412)
+    X_test     = np.load(os.path.join(PREP_DIR, "X_test.npy"))
+    Y_test     = np.load(os.path.join(PREP_DIR, "Y_test.npy"))
     band_sizes = np.load(os.path.join(PREP_DIR, "band_sizes.npy"))
-    n_audio    = int(band_sizes[0])   # 128
-    n_lboe_a1  = sub_a1.n_lboe       # 64
-    n_lboe_v1  = sub_v1.n_lboe       # 200
+    n_audio    = int(band_sizes[0])
+    n_lboe_audio = sub_audio.n_lboe
+    n_lboe_video = sub_video.n_lboe
     log.info(f"  X_test: {X_test.shape}   Y_test: {Y_test.shape}")
 
     # --- Load existing split R² from Script 03 ---
     log.info("\nLoading split R² from Script 03 …")
-    R2_audio = np.load(os.path.join(OUTPUT_DIR, "R2_audio.npy"))   # (59412,)
-    R2_video = np.load(os.path.join(OUTPUT_DIR, "R2_video.npy"))   # (59412,)
-    log.info(f"  R2_audio: mean={R2_audio.mean():.4f}  frac>0={np.mean(R2_audio>0):.1%}")
-    log.info(f"  R2_video: mean={R2_video.mean():.4f}  frac>0={np.mean(R2_video>0):.1%}")
+    R2_audio = np.load(os.path.join(OUTPUT_DIR, f"R2_{AUDIO_ROI}.npy"))
+    R2_video = np.load(os.path.join(OUTPUT_DIR, f"R2_{VIDEO_ROI}.npy"))
+    log.info(f"  R2_{AUDIO_ROI}: mean={R2_audio.mean():.4f}  frac>0={np.mean(R2_audio>0):.1%}")
+    log.info(f"  R2_{VIDEO_ROI}: mean={R2_video.mean():.4f}  frac>0={np.mean(R2_video>0):.1%}")
 
     # --- Reconstruct mean time courses from LBOE projections ---
-    # This approximates the "mean A1/V1 regressor" used in Hedger et al.'s null model
-    # without reloading the 786 MB MAT files.
-    log.info("\nReconstructing mean A1/V1 time courses from LBOE projections …")
-    X_audio = X_test[:, :n_audio]                         # (328, 128) A1 band
-    X_video = X_test[:, n_audio:]                         # (328, 400) V1 band
+    log.info(f"\nReconstructing mean {AUDIO_ROI.upper()}/{VIDEO_ROI.upper()} "
+             "time courses from LBOE projections …")
+    X_audio = X_test[:, :n_audio]
+    X_video = X_test[:, n_audio:]
 
-    mean_a1 = reconstruct_mean_timecourse(
-        X_audio, sub_a1.L_eigenvectors, sub_a1.R_eigenvectors, n_lboe_a1)
-    mean_v1 = reconstruct_mean_timecourse(
-        X_video, sub_v1.L_eigenvectors, sub_v1.R_eigenvectors, n_lboe_v1)
+    mean_audio = reconstruct_mean_timecourse(
+        X_audio, sub_audio.L_eigenvectors, sub_audio.R_eigenvectors, n_lboe_audio)
+    mean_video = reconstruct_mean_timecourse(
+        X_video, sub_video.L_eigenvectors, sub_video.R_eigenvectors, n_lboe_video)
 
-    log.info(f"  mean_a1: shape={mean_a1.shape}  std={mean_a1.std():.4f}")
-    log.info(f"  mean_v1: shape={mean_v1.shape}  std={mean_v1.std():.4f}")
+    log.info(f"  mean_{AUDIO_ROI}: shape={mean_audio.shape}  std={mean_audio.std():.4f}")
+    log.info(f"  mean_{VIDEO_ROI}: shape={mean_video.shape}  std={mean_video.std():.4f}")
 
     # --- Fit null models ---
-    # null_audio: how much does the MEAN A1 level alone predict each vertex?
-    # Any R2 here reflects global A1 responsiveness, not topographic specificity.
-    log.info("\nFitting null model for audio (mean A1 regressor) …")
-    R2_null_audio = fit_null_r2(mean_a1, Y_test)
+    log.info(f"\nFitting null model for audio (mean {AUDIO_ROI.upper()} regressor) …")
+    R2_null_audio = fit_null_r2(mean_audio, Y_test)
 
-    log.info("Fitting null model for video (mean V1 regressor) …")
-    R2_null_video = fit_null_r2(mean_v1, Y_test)
+    log.info(f"Fitting null model for video (mean {VIDEO_ROI.upper()} regressor) …")
+    R2_null_video = fit_null_r2(mean_video, Y_test)
 
-    log.info(f"  R2_null_audio: mean={R2_null_audio.mean():.4f}  frac>0={np.mean(R2_null_audio>0):.1%}")
-    log.info(f"  R2_null_video: mean={R2_null_video.mean():.4f}  frac>0={np.mean(R2_null_video>0):.1%}")
+    log.info(f"  R2_null_{AUDIO_ROI}: mean={R2_null_audio.mean():.4f}  "
+             f"frac>0={np.mean(R2_null_audio>0):.1%}")
+    log.info(f"  R2_null_{VIDEO_ROI}: mean={R2_null_video.mean():.4f}  "
+             f"frac>0={np.mean(R2_null_video>0):.1%}")
 
     # --- Null-corrected maps ---
-    # Positive values: the topographic CF model outperforms the mean regressor.
-    # These are the maps that go into the Figure 3a 2D colormap.
-    # Not clipped: negative values are informative (null model beats CF model there).
     R2_audio_nc = R2_audio - R2_null_audio
     R2_video_nc = R2_video - R2_null_video
-    log.info(f"\n  R2_audio_nc: mean={R2_audio_nc.mean():.4f}  frac>0={np.mean(R2_audio_nc>0):.1%}")
-    log.info(f"  R2_video_nc: mean={R2_video_nc.mean():.4f}  frac>0={np.mean(R2_video_nc>0):.1%}")
+    log.info(f"\n  R2_{AUDIO_ROI}_nc: mean={R2_audio_nc.mean():.4f}  "
+             f"frac>0={np.mean(R2_audio_nc>0):.1%}")
+    log.info(f"  R2_{VIDEO_ROI}_nc: mean={R2_video_nc.mean():.4f}  "
+             f"frac>0={np.mean(R2_video_nc>0):.1%}")
 
     # --- Save all maps ---
     log.info(f"\nSaving maps to {OUTPUT_DIR} …")
     template = nib.load(TEMPLATE_CIFTI)
-    save_map(R2_null_audio, "R2_null_audio", template)
-    save_map(R2_null_video, "R2_null_video", template)
-    save_map(R2_audio_nc,   "R2_audio_nc",   template)
-    save_map(R2_video_nc,   "R2_video_nc",   template)
+    save_map(R2_null_audio, f"R2_null_{AUDIO_ROI}", template)
+    save_map(R2_null_video, f"R2_null_{VIDEO_ROI}", template)
+    save_map(R2_audio_nc,   f"R2_{AUDIO_ROI}_nc",   template)
+    save_map(R2_video_nc,   f"R2_{VIDEO_ROI}_nc",   template)
 
     log.info("\nScript 04 complete.")
     log.info("  Next: python 05_audiovisual_integration_maps.py")

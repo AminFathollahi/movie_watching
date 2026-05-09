@@ -13,8 +13,8 @@ Figure 3a in Hedger et al. (2025) shows, per vertex:
 Since a CIFTI dscalar encodes one value per vertex, we produce several
 complementary maps that together replicate this 2D visualization in Workbench:
 
-1. R2_audio_nc.dscalar.nii  — already from Script 04, load with red/Reds colormap
-2. R2_video_nc.dscalar.nii  — already from Script 04, load with blue/Blues colormap
+1. R2_{AUDIO_ROI}_nc.dscalar.nii  — already from Script 04, load with red/Reds colormap
+2. R2_{VIDEO_ROI}_nc.dscalar.nii  — already from Script 04, load with blue/Blues colormap
    (dual-overlay of 1+2 in Workbench = Figure 3a)
 
 3. integration_score.dscalar.nii
@@ -24,7 +24,7 @@ complementary maps that together replicate this 2D visualization in Workbench:
    This is the single-map summary of the 2D colormap.
 
 4. modality_balance.dscalar.nii
-   R2_audio_nc − R2_video_nc
+   R2_{AUDIO_ROI}_nc − R2_{VIDEO_ROI}_nc
    Diverging colormap in Workbench shows which modality dominates per vertex.
    Positive = audio-dominant, negative = video-dominant, near-zero = balanced.
 
@@ -33,8 +33,8 @@ complementary maps that together replicate this 2D visualization in Workbench:
    Used by downstream scripts (06, 07, 08) as the audiovisual integration ROI.
 
 Inputs:
-    OUTPUT_DIR/R2_audio_nc.npy   (59412,)  from Script 04
-    OUTPUT_DIR/R2_video_nc.npy   (59412,)  from Script 04
+    OUTPUT_DIR/R2_{AUDIO_ROI}_nc.npy   (59412,)  from Script 04
+    OUTPUT_DIR/R2_{VIDEO_ROI}_nc.npy   (59412,)  from Script 04
 
 Outputs:
     OUTPUT_DIR/integration_score.{npy,dscalar.nii}
@@ -50,16 +50,23 @@ Run
 # =============================================================================
 # CONFIG
 # =============================================================================
-
+import os
 DATA_BASE  = "/home/amin/Research/Representation/Movie/data/Setareh"
 TEMPLATE_CIFTI = (f"{DATA_BASE}/HCP_S1200_GroupAvg_v1/"
                   "S1200.curvature_MSMAll.32k_fs_LR.dscalar.nii")
 
-OUTPUT_DIR = "/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual"
+# ── ROI selection ─────────────────────────────────────────────────────────────
+AUDIO_ROI = os.getenv("AUDIO_ROI")
+VIDEO_ROI = os.getenv("VIDEO_ROI")
+
+OUTPUT_DIR = f"/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/{AUDIO_ROI}_{VIDEO_ROI}"
+PREP_DIR   = f"{OUTPUT_DIR}/prep"
+CACHE_DIR  = f"{OUTPUT_DIR}/subsurfaces"
 CIFTI_DIR  = f"{OUTPUT_DIR}/cifti_maps"
 
 # Top percentile of integration_score used to define the integration mask
 MASK_PERCENTILE = 90   # top 10% of vertices
+
 
 # =============================================================================
 # IMPORTS
@@ -75,6 +82,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(me
                     datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
 os.makedirs(CIFTI_DIR, exist_ok=True)
+
 
 # =============================================================================
 # HELPERS
@@ -117,10 +125,10 @@ def main():
 
     # --- Load null-corrected maps from Script 04 ---
     log.info("\nLoading null-corrected R² maps …")
-    R2_audio_nc = np.load(os.path.join(OUTPUT_DIR, "R2_audio_nc.npy"))  # (59412,)
-    R2_video_nc = np.load(os.path.join(OUTPUT_DIR, "R2_video_nc.npy"))  # (59412,)
-    log.info(f"  R2_audio_nc: mean={R2_audio_nc.mean():.4f}  frac>0={np.mean(R2_audio_nc>0):.1%}")
-    log.info(f"  R2_video_nc: mean={R2_video_nc.mean():.4f}  frac>0={np.mean(R2_video_nc>0):.1%}")
+    R2_audio_nc = np.load(os.path.join(OUTPUT_DIR, f"R2_{AUDIO_ROI}_nc.npy"))
+    R2_video_nc = np.load(os.path.join(OUTPUT_DIR, f"R2_{VIDEO_ROI}_nc.npy"))
+    log.info(f"  R2_{AUDIO_ROI}_nc: mean={R2_audio_nc.mean():.4f}  frac>0={np.mean(R2_audio_nc>0):.1%}")
+    log.info(f"  R2_{VIDEO_ROI}_nc: mean={R2_video_nc.mean():.4f}  frac>0={np.mean(R2_video_nc>0):.1%}")
 
     template = nib.load(TEMPLATE_CIFTI)
 
@@ -140,24 +148,21 @@ def main():
     # --- Integration mask: binary ROI for downstream analyses (06, 07, 08) ---
     # Vertices in the top MASK_PERCENTILE of the integration_score.
     # Only computed over vertices with positive integration score (truly bimodal).
-    pos_mask = integration_score > 0
-    if pos_mask.sum() == 0:
-        raise RuntimeError("No vertices with positive integration score — check Script 04 outputs.")
 
-    threshold = np.percentile(integration_score[pos_mask], MASK_PERCENTILE)
+    threshold = np.percentile(integration_score, MASK_PERCENTILE)
     integration_mask = (integration_score >= threshold).astype(np.float32)
     log.info(f"\n  Integration mask: threshold={threshold:.5f}  "
              f"n_verts={int(integration_mask.sum())}  "
              f"({100*(1-MASK_PERCENTILE/100):.0f}% of positive-score vertices)")
-    save_map(integration_mask, "integration_mask", template)
+    save_map(integration_mask, f"top_{MASK_PERCENTILE}_percentile_integration", template)
 
     # --- Workbench viewing instructions ---
     log.info("\nWorkbench dual-overlay for Figure 3a replication:")
-    log.info("  Overlay 1: R2_video_nc.dscalar.nii  → colormap Blues  [0, 95th pct]")
-    log.info("  Overlay 2: R2_audio_nc.dscalar.nii  → colormap Reds   [0, 95th pct]")
+    log.info(f"  Overlay 1: R2_{VIDEO_ROI}_nc.dscalar.nii  → colormap Blues  [0, 95th pct]")
+    log.info(f"  Overlay 2: R2_{AUDIO_ROI}_nc.dscalar.nii  → colormap Reds   [0, 95th pct]")
     p95_audio = np.percentile(R2_audio_nc[R2_audio_nc > 0], 95) if (R2_audio_nc > 0).any() else 0
     p95_video = np.percentile(R2_video_nc[R2_video_nc > 0], 95) if (R2_video_nc > 0).any() else 0
-    log.info(f"  Suggested range: audio [0, {p95_audio:.4f}]  video [0, {p95_video:.4f}]")
+    log.info(f"  Suggested range: {AUDIO_ROI} [0, {p95_audio:.4f}]  {VIDEO_ROI} [0, {p95_video:.4f}]")
 
     log.info("\nScript 05 complete.")
     log.info("  Next: python 06_rsa_overlap.py")

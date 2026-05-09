@@ -1,13 +1,16 @@
 """
 01_extract_geometry.py
 ======================
-Phase 1: Load Glasser parcellation, define bilateral A1/V1 ROIs, build
-pycortex Subsurfaces, and compute 200 Laplace-Beltrami Operator
+Phase 1: Load Glasser parcellation, define bilateral audio/video source ROIs,
+build pycortex Subsurfaces, and compute Laplace-Beltrami Operator
 Eigenfunctions (LBOEs) per ROI hemisphere.
 
 Outputs (to CACHE_DIR):
-    sub_a1.pkl  — Subsurface object for bilateral A1 (LBOEs + vertex indices)
-    sub_v1.pkl  — Subsurface object for bilateral V1 (LBOEs + vertex indices)
+    sub_{AUDIO_ROI}.pkl  — Subsurface object for the audio source ROI
+    sub_{VIDEO_ROI}.pkl  — Subsurface object for the video source ROI
+
+To switch ROI pair: edit ROI_DEFS (Glasser label codes) and set AUDIO_ROI /
+VIDEO_ROI to the desired keys.  All downstream file names update automatically.
 
 Divergences from vicsompy
 -------------------------
@@ -28,11 +31,10 @@ Run
     conda activate vicsompy_av
     python 01_extract_geometry.py
 """
-
 # =============================================================================
 # CONFIG
 # =============================================================================
-
+import os
 DATA_BASE = "/home/amin/Research/Representation/Movie/data/Setareh"
 
 GIFTI_LEFT  = f"{DATA_BASE}/HCP Data/Q1-Q6_RelatedValidation210_LEFT.label.gii"
@@ -48,21 +50,31 @@ SPHERE_GIFTI_RIGHT = f"{DATA_BASE}/HCP_S1200_GroupAvg_v1/S1200.R.sphere.32k_fs_L
 PYCORTEX_FILESTORE = f"{DATA_BASE}/HCP_S1200_GroupAvg_v1"
 CX_SUB   = "hcp_999999_draw_NH"
 
-# Glasser (Q1-Q6) label key values
-LABEL_V1_LEFT  = 181   # L_V1_ROI
-LABEL_V1_RIGHT = 1     # R_V1_ROI
-LABEL_A1_LEFT  = 204   # L_A1_ROI
-LABEL_A1_RIGHT = 24    # R_A1_ROI
+# ── ROI definitions ───────────────────────────────────────────────────────────
+# Keys = ROI short names — used for all output file names (sub_<name>.pkl etc.)
+# Values = {"L": left_glasser_code, "R": right_glasser_code} from Q1-Q6 parcellation.
+# To switch ROI pair: update this dict and set AUDIO_ROI / VIDEO_ROI to the keys.
 
+ROI_DEFS = {
+    "A1": {"L": 204, "R": 24},   
+    "V1": {"L": 181, "R": 2}, 
+    "TA2": {"L": 287, "R": 107},   
+    "MST": {"L": 182, "R": 2},     
+    "A5": {"L": 305, "R": 125},   
+    "FFC": {"L": 198, "R": 18},}
+
+AUDIO_ROI = os.getenv("AUDIO_ROI")
+VIDEO_ROI = os.getenv("VIDEO_ROI")
 N_LBOE = 200           # eigenfunctions per hemisphere (matches vicsompy config)
 
-CACHE_DIR = "/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/subsurfaces"
+OUTPUT_DIR = f"/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/{AUDIO_ROI}_{VIDEO_ROI}"
+PREP_DIR   = f"{OUTPUT_DIR}/prep"
+CACHE_DIR  = f"{OUTPUT_DIR}/subsurfaces"
 
 # =============================================================================
 # IMPORTS
 # =============================================================================
 
-import os
 import sys
 import pickle
 import logging
@@ -72,7 +84,7 @@ import nibabel as nib
 
 # Set pycortex filestore BEFORE import
 os.environ["PYCORTEX_FILESTORE"] = PYCORTEX_FILESTORE
-
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 import cortex
 import cortex.database
 import cortex.polyutils
@@ -90,12 +102,17 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+
+
+
+
+
 # =============================================================================
 # STEP 1 — Load Glasser GIFTI and extract boolean ROI masks (32492 verts each)
 # =============================================================================
 
 def load_gifti_masks():
-    """Return four boolean vertex masks (shape 32492,) for L/R A1 and V1.
+    """Return four boolean vertex masks (shape 32492,) for L/R audio and video ROIs.
 
     The masks index into the 32k_fs_LR surface space, which matches
     both the pycortex surface (32492 verts/hem) and the MAT fMRI data.
@@ -112,16 +129,18 @@ def load_gifti_masks():
     log.info(f"  Right: {labels_R.shape[0]} vertices, "
              f"{len(np.unique(labels_R))} unique labels")
 
-    mask_a1_L = (labels_L == LABEL_A1_LEFT)
-    mask_a1_R = (labels_R == LABEL_A1_RIGHT)
-    mask_v1_L = (labels_L == LABEL_V1_LEFT)
-    mask_v1_R = (labels_R == LABEL_V1_RIGHT)
+    mask_audio_L = (labels_L == ROI_DEFS[AUDIO_ROI]["L"])
+    mask_audio_R = (labels_R == ROI_DEFS[AUDIO_ROI]["R"])
+    mask_video_L = (labels_L == ROI_DEFS[VIDEO_ROI]["L"])
+    mask_video_R = (labels_R == ROI_DEFS[VIDEO_ROI]["R"])
 
-    for tag, m in [("A1 Left", mask_a1_L), ("A1 Right", mask_a1_R),
-                   ("V1 Left", mask_v1_L), ("V1 Right", mask_v1_R)]:
+    for tag, m in [(f"{AUDIO_ROI.upper()} Left",  mask_audio_L),
+                   (f"{AUDIO_ROI.upper()} Right", mask_audio_R),
+                   (f"{VIDEO_ROI.upper()} Left",  mask_video_L),
+                   (f"{VIDEO_ROI.upper()} Right", mask_video_R)]:
         log.info(f"  {tag}: {m.sum()} vertices")
 
-    return mask_a1_L, mask_a1_R, mask_v1_L, mask_v1_R
+    return mask_audio_L, mask_audio_R, mask_video_L, mask_video_R
 
 
 # =============================================================================
@@ -235,22 +254,24 @@ def _save_subsurface(sub, cache_path):
 def main():
     log.info("=" * 60)
     log.info("Script 1 — Extract geometry & LBOEs")
+    log.info(f"  Audio ROI        : {AUDIO_ROI.upper()}")
+    log.info(f"  Video ROI        : {VIDEO_ROI.upper()}")
     log.info(f"  Pycortex subject : {CX_SUB}")
     log.info(f"  Surface type     : sphere (HCP GIFTI, vicsompy default)")
     log.info(f"  LBOEs per hem.   : {N_LBOE}")
     log.info("=" * 60)
 
-    mask_a1_L, mask_a1_R, mask_v1_L, mask_v1_R = load_gifti_masks()
+    mask_audio_L, mask_audio_R, mask_video_L, mask_video_R = load_gifti_masks()
 
-    log.info("\nBuilding A1 subsurface …")
-    sub_a1 = build_subsurface("a1", mask_a1_L, mask_a1_R)
+    log.info(f"\nBuilding {AUDIO_ROI.upper()} subsurface …")
+    sub_audio = build_subsurface(AUDIO_ROI, mask_audio_L, mask_audio_R)
 
-    log.info("\nBuilding V1 subsurface …")
-    sub_v1 = build_subsurface("v1", mask_v1_L, mask_v1_R)
+    log.info(f"\nBuilding {VIDEO_ROI.upper()} subsurface …")
+    sub_video = build_subsurface(VIDEO_ROI, mask_video_L, mask_video_R)
 
     log.info("\nDone. Cached subsurfaces:")
-    log.info(f"  {CACHE_DIR}/sub_a1.pkl")
-    log.info(f"  {CACHE_DIR}/sub_v1.pkl")
+    log.info(f"  {CACHE_DIR}/sub_{AUDIO_ROI}.pkl")
+    log.info(f"  {CACHE_DIR}/sub_{VIDEO_ROI}.pkl")
 
 
 if __name__ == "__main__":

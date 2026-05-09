@@ -12,57 +12,36 @@ X_train / Y_train, respecting the run_onsets from Script 2.
 Final evaluation is performed on the independent X_test / Y_test (4 × 82 = 328
 concatenated test TRs, never seen during fitting).
 
-This mirrors vicsompy's pipeline:
-    nm.prep_pipeline(run_durations=my_sub.run_onsets)   → LORO-CV on train
-    nm.fit(all_data)                                      → fit on training set
-    nm.test_xval(data_test[0], concatenated_test.T)       → eval on test set
-
 Variance decomposition
 ----------------------
-For two bands (audio = A1, video = V1):
+For two bands (audio = AUDIO_ROI, video = VIDEO_ROI):
     Y_hat_full  = pipeline.predict(X_test)              → full model
     Y_hat_split = pipeline.predict(X_test, split=True)  → per-band predictions
     R2_full  = r2_score(Y_test, Y_hat_full)             → (59412,)
     [R2_audio, R2_video] = r2_score_split(Y_test, Y_hat_split)
-    Shared_R2 = R2_audio + R2_video - R2_full           → audiovisual integration
+    Shared_R2 = R2_audio + R2_video - R2_full
 
-ColumnKernelizer slices (matches vicsompy's define_modality_indices()):
-    'audio' → slice(0, n_audio_cols)              — [L_A1 | R_A1] LBOEs
-    'video' → slice(n_audio_cols, X.shape[1])     — [L_V1 | R_V1] LBOEs
-    (n_audio_cols = 2*n_lboe_a1; may be < 400 when A1 ROI is smaller than 200 verts/hem)
-
-Divergences from vicsompy
---------------------------
-1. Test duration: vicsompy uses the last 103 TRs per run as test (hardcoded
-   test_duration=103). We use the actual repeated-clip duration of 82 TRs
-   (video5/9/14/18 from movie_timing.csv), concatenated across 4 runs → 328 TRs.
-   This exactly replicates vicsompy's nm.test_xval(data_test, concatenated_test.T).
-
-2. Outputs: we save R2_full, R2_audio, R2_video, and Shared_R2 as both .npy
-   arrays and .dscalar.nii CIFTI maps. vicsompy saves split scores as .npy
-   via saveout() and does not produce CIFTI maps directly in the fitting script.
-
-All himalaya solver parameters (solver, alphas, n_iter, batch sizes, backend)
-are identical to vicsompy's config.yml defaults.
+ColumnKernelizer slices:
+    'audio' → slice(0, n_audio_cols)              — L + R audio ROI LBOEs
+    'video' → slice(n_audio_cols, X.shape[1])     — L + R video ROI LBOEs
 
 Inputs (from Script 2):
     PREP_DIR/X_train.npy, Y_train.npy, X_test.npy, Y_test.npy, run_onsets.npy
 
 Outputs:
-    OUTPUT_DIR/R2_full.npy, R2_audio.npy, R2_video.npy, Shared_R2.npy
-    CIFTI_DIR/R2_full.dscalar.nii, R2_audio.dscalar.nii,
-              R2_video.dscalar.nii, Shared_R2.dscalar.nii
+    OUTPUT_DIR/R2_full.npy, R2_{AUDIO_ROI}.npy, R2_{VIDEO_ROI}.npy, Shared_R2.npy
+    CIFTI_DIR/R2_full.dscalar.nii, R2_{AUDIO_ROI}.dscalar.nii,
+              R2_{VIDEO_ROI}.dscalar.nii, Shared_R2.dscalar.nii
 
 Run
 ---
     conda activate vicsompy_av
     python 03_fit_banded_ridge.py
 """
-
 # =============================================================================
 # CONFIG
 # =============================================================================
-
+import os
 DATA_BASE = "/home/amin/Research/Representation/Movie/data/Setareh"
 
 TEMPLATE_CIFTI = (
@@ -70,8 +49,15 @@ TEMPLATE_CIFTI = (
     "S1200.curvature_MSMAll.32k_fs_LR.dscalar.nii"
 )
 
-PREP_DIR   = "/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/prep"
-OUTPUT_DIR = "/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual"
+# ── ROI selection ─────────────────────────────────────────────────────────────
+# Must match the ROI_DEFS / AUDIO_ROI / VIDEO_ROI set in 01_extract_geometry.py.
+# Keys drive output file names: R2_<AUDIO_ROI>.npy, R2_<VIDEO_ROI>.npy, etc.
+AUDIO_ROI = os.getenv("AUDIO_ROI")
+VIDEO_ROI = os.getenv("VIDEO_ROI")
+
+OUTPUT_DIR = f"/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/{AUDIO_ROI}_{VIDEO_ROI}"
+PREP_DIR   = f"{OUTPUT_DIR}/prep"
+CACHE_DIR  = f"{OUTPUT_DIR}/subsurfaces"
 CIFTI_DIR  = f"{OUTPUT_DIR}/cifti_maps"
 
 # himalaya model parameters — all identical to vicsompy config.yml
@@ -91,11 +77,9 @@ WITH_STD  = True   # vicsompy: with_std: True
 
 # N_LBOE is not hardcoded here — band sizes are read from band_sizes.npy
 # produced by Script 2 (which reads actual n_lboe from the cached Subsurfaces).
-
 # =============================================================================
 # IMPORTS
 # =============================================================================
-
 import os
 import logging
 
@@ -114,6 +98,10 @@ from sklearn.model_selection import check_cv
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+
+# =============================================================================
+# HELPER
+# =============================================================================
 # generate_leave_one_run_out is inlined here to avoid vicsompy.utils which has a
 # top-level `import pkg_resources` (setuptools) not available in vicsompy_av.
 # The function is copied verbatim from vicsompy/utils.py (originally from the
@@ -163,10 +151,6 @@ log = logging.getLogger(__name__)
 
 for d in [OUTPUT_DIR, CIFTI_DIR]:
     os.makedirs(d, exist_ok=True)
-
-# =============================================================================
-# HELPER
-# =============================================================================
 
 def be_to_npy(var, backend):
     """Convert a backend tensor (or list of tensors) to numpy."""
@@ -332,11 +316,11 @@ def fit_and_decompose(X_train, Y_train, X_test, Y_test, run_onsets,
     Shared_R2 = R2_audio + R2_video - R2_full                     # (59412,)
 
     log.info("\nVariance partitioning (test set) — means across vertices:")
-    log.info(f"  R2_full  : {np.nanmean(R2_full):.4f}  "
+    log.info(f"  R2_full        : {np.nanmean(R2_full):.4f}  "
              f"(fraction > 0.01: {np.mean(R2_full > 0.01):.1%})")
-    log.info(f"  R2_audio : {np.nanmean(R2_audio):.4f}")
-    log.info(f"  R2_video : {np.nanmean(R2_video):.4f}")
-    log.info(f"  Shared   : {np.nanmean(Shared_R2):.4f}")
+    log.info(f"  R2_{AUDIO_ROI:<6s}: {np.nanmean(R2_audio):.4f}")
+    log.info(f"  R2_{VIDEO_ROI:<6s}: {np.nanmean(R2_video):.4f}")
+    log.info(f"  Shared         : {np.nanmean(Shared_R2):.4f}")
 
     return R2_full, R2_audio, R2_video, Shared_R2
 
@@ -348,21 +332,16 @@ def fit_and_decompose(X_train, Y_train, X_test, Y_test, run_onsets,
 def save_results(R2_full, R2_audio, R2_video, Shared_R2):
     """Save the four variance maps as .npy and as CIFTI dscalar.nii.
 
-    CIFTI saving strategy (per user specification):
-        data_2d = arr.reshape(1, -1).astype(np.float32)   # (1, 59412)
-        cifti   = nib.Cifti2Image(data_2d,
-                                  header=template_img.header,
-                                  nifti_header=template_img.nifti_header)
-    The template header already encodes the correct BrainModelAxis for the
-    59 412-vertex grayordinate space; no additional header manipulation needed.
+    File names use the configured AUDIO_ROI / VIDEO_ROI keys so that outputs
+    from different ROI pairs don't overwrite each other.
     """
     template_img = nib.load(TEMPLATE_CIFTI)
 
     maps = {
-        "R2_full"  : R2_full,
-        "R2_audio" : R2_audio,
-        "R2_video" : R2_video,
-        "Shared_R2": Shared_R2,
+        "R2_full"              : R2_full,
+        f"R2_{AUDIO_ROI}"     : R2_audio,
+        f"R2_{VIDEO_ROI}"     : R2_video,
+        "Shared_R2"            : Shared_R2,
     }
 
     for name, arr in maps.items():

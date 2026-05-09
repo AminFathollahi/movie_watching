@@ -8,13 +8,13 @@ to build X_train / X_test, and extract the 59 k grayordinate target arrays
 Y_train / Y_test from the template CIFTI's BrainModelAxis.
 
 Inputs (from Script 1):
-    CACHE_DIR/sub_a1.pkl, sub_v1.pkl
+    CACHE_DIR/sub_{AUDIO_ROI}.pkl, sub_{VIDEO_ROI}.pkl
 
 Outputs (to PREP_DIR):
-    X_train.npy        (T_train, 2*n_lboe_a1 + 2*n_lboe_v1) — design matrix, training set
+    X_train.npy        (T_train, 2*n_lboe_audio + 2*n_lboe_video) — design matrix
     Y_train.npy        (T_train, 59412) — grayordinate BOLD, training set
-    X_test.npy         (328, 2*n_lboe_a1 + 2*n_lboe_v1)   — design matrix, test clips
-    Y_test.npy         (328, 59412)     — grayordinate BOLD, concatenated test clips
+    X_test.npy         (328, 2*n_lboe_audio + 2*n_lboe_video)    — design matrix
+    Y_test.npy         (328, 59412)     — grayordinate BOLD, test clips
     run_onsets.npy     (4,)             — TR indices where each training run starts
 
 Movie timing / train-test logic
@@ -41,19 +41,17 @@ Divergences from vicsompy (HcpSubject)
    exactly: z-score over the time axis for each run block independently.
 
 All other parameters (TR=1, design-matrix column ordering) are identical to vicsompy.
-n_LBOEs is capped per ROI: min(200, n_verts_L-2, n_verts_R-2), so A1 uses fewer
-eigenfunctions than V1 when the A1 Glasser patch has fewer than 202 vertices/hem.
+n_LBOEs is capped per ROI: min(200, n_verts_L-2, n_verts_R-2).
 
 Run
 ---
     conda activate vicsompy_av
     python 02_prep_hcp_timeseries.py
 """
-
 # =============================================================================
 # CONFIG
 # =============================================================================
-
+import os
 DATA_BASE = "/home/amin/Research/Representation/Movie/data/Setareh"
 
 MAT_LEFT  = f"{DATA_BASE}/HCP Data/notmean_left_Meanfile.mat"
@@ -66,23 +64,25 @@ TEMPLATE_CIFTI = (
     "S1200.curvature_MSMAll.32k_fs_LR.dscalar.nii"
 )
 
-CACHE_DIR = "/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/subsurfaces"
-PREP_DIR  = "/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/prep"
+# ── ROI selection ─────────────────────────────────────────────────────────────
+# Must match the ROI_DEFS / AUDIO_ROI / VIDEO_ROI set in 01_extract_geometry.py.
+# Keys drive sub_<name>.pkl filenames; Glasser codes are only used in script 01.
+AUDIO_ROI = os.getenv("AUDIO_ROI")
+VIDEO_ROI = os.getenv("VIDEO_ROI")
+
+OUTPUT_DIR = f"/home/amin/Research/Representation/Movie/outputs/vicsompy_audiovisual/{AUDIO_ROI}_{VIDEO_ROI}"
+PREP_DIR   = f"{OUTPUT_DIR}/prep"
+CACHE_DIR  = f"{OUTPUT_DIR}/subsurfaces"
 
 # Validation clips (last video of each run) — the repeated segments
 TEST_VIDEO_IDS = ["video5", "video9", "video14", "video18"]
 
 TR = 1.0   # seconds; matches vicsompy config (analysis: TR: 1.0)
-
-# N_LBOE is intentionally not hardcoded here — the actual count per ROI is read
-# from the n_lboe attribute of the cached Subsurface objects produced by Script 1.
-# (Small ROIs such as A1 may have fewer vertices than the 200-eigenfunction target.)
-
 # =============================================================================
 # IMPORTS
 # =============================================================================
 
-import os
+
 import pickle
 import logging
 
@@ -99,6 +99,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 os.makedirs(PREP_DIR, exist_ok=True)
+
+
+
 
 # =============================================================================
 # HELPER: load MAT file → (32492, T)
@@ -321,46 +324,40 @@ def get_grayordinate_indices(template_cifti_path):
 # STEP 4 — Project BOLD onto LBOEs → design matrix columns
 # =============================================================================
 
-def project_onto_lboes(left_data, right_data, sub_a1, sub_v1):
-    """Project BOLD timeseries for A1 and V1 onto the precomputed LBOEs.
+def project_onto_lboes(left_data, right_data, sub_audio, sub_video):
+    """Project BOLD timeseries for audio/video ROIs onto the precomputed LBOEs.
 
     Mirrors vicsompy's make_dm() logic:
         dm_mod_hem = data[subsurface_verts_hem, :].T  @  eigenvectors.real
                    = (T, n_roi_verts)  @  (n_roi_verts, n_lboe)
                    = (T, n_lboe)
 
-    Design matrix column order (matching vicsompy's modality ordering):
-        cols   0 .. 2*n_lboe_a1-1          : Left A1 | Right A1  (audio band)
-        cols   2*n_lboe_a1 .. end           : Left V1 | Right V1  (video band)
-
-    n_lboe_a1 and n_lboe_v1 may be < 200 when the ROI has fewer vertices than
-    the requested eigenfunction count (e.g. A1 with ~70 vertices per hemisphere).
+    Design matrix column order:
+        cols   0 .. 2*n_lboe_audio-1       : L audio ROI | R audio ROI
+        cols   2*n_lboe_audio .. end        : L video ROI | R video ROI
 
     Parameters
     ----------
     left_data  : (32492, T) — for this sample block
     right_data : (32492, T)
-    sub_a1, sub_v1 : loaded Subsurface objects (no pycortex Surface objs needed)
+    sub_audio, sub_video : loaded Subsurface objects
 
     Returns
     -------
-    X : (T, 2*n_lboe_a1 + 2*n_lboe_v1) float32
+    X : (T, 2*n_lboe_audio + 2*n_lboe_video) float32
     """
     # Combined surface data (64984, T) — right-hem verts are offset by 32492
-    # (Subsurface.generate() stores subsurface_verts_R with +32492 offset already)
     combined = np.vstack([left_data, right_data])   # (64984, T)
 
     def _proj(verts, eigvecs):
-        # verts   : 1D array of indices into combined rows
-        # eigvecs : (n_roi_verts, n_lboe) complex — take .real
         return combined[verts, :].T @ eigvecs.real  # (T, n_lboe)
 
-    dm_la1 = _proj(sub_a1.subsurface_verts_L, sub_a1.L_eigenvectors)
-    dm_ra1 = _proj(sub_a1.subsurface_verts_R, sub_a1.R_eigenvectors)
-    dm_lv1 = _proj(sub_v1.subsurface_verts_L, sub_v1.L_eigenvectors)
-    dm_rv1 = _proj(sub_v1.subsurface_verts_R, sub_v1.R_eigenvectors)
+    dm_l_audio = _proj(sub_audio.subsurface_verts_L, sub_audio.L_eigenvectors)
+    dm_r_audio = _proj(sub_audio.subsurface_verts_R, sub_audio.R_eigenvectors)
+    dm_l_video = _proj(sub_video.subsurface_verts_L, sub_video.L_eigenvectors)
+    dm_r_video = _proj(sub_video.subsurface_verts_R, sub_video.R_eigenvectors)
 
-    return np.hstack([dm_la1, dm_ra1, dm_lv1, dm_rv1]).astype(np.float32)
+    return np.hstack([dm_l_audio, dm_r_audio, dm_l_video, dm_r_video]).astype(np.float32)
 
 
 # =============================================================================
@@ -374,26 +371,26 @@ def main():
 
     # --- Load LBOEs from Script 1 ---
     log.info("\nLoading subsurfaces from Script 1 …")
-    for name in ["sub_a1", "sub_v1"]:
-        path = os.path.join(CACHE_DIR, f"{name}.pkl")
+    for roi in [AUDIO_ROI, VIDEO_ROI]:
+        path = os.path.join(CACHE_DIR, f"sub_{roi.lower()}.pkl")
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"Missing {path}. Run 01_extract_geometry.py first."
             )
 
-    with open(os.path.join(CACHE_DIR, "sub_a1.pkl"), "rb") as fh:
-        sub_a1 = pickle.load(fh)
-    with open(os.path.join(CACHE_DIR, "sub_v1.pkl"), "rb") as fh:
-        sub_v1 = pickle.load(fh)
+    with open(os.path.join(CACHE_DIR, f"sub_{AUDIO_ROI.lower()}.pkl"), "rb") as fh:
+        sub_audio = pickle.load(fh)
+    with open(os.path.join(CACHE_DIR, f"sub_{VIDEO_ROI.lower()}.pkl"), "rb") as fh:
+        sub_video = pickle.load(fh)
 
     # Backward-compat: old pickles may lack n_lboe attribute
-    for sub, tag in [(sub_a1, "a1"), (sub_v1, "v1")]:
+    for sub in [sub_audio, sub_video]:
         if not hasattr(sub, "n_lboe"):
             sub.n_lboe = sub.L_eigenvectors.shape[1]
-    log.info(f"  A1 — L eigenvectors: {sub_a1.L_eigenvectors.shape}, "
-             f"R eigenvectors: {sub_a1.R_eigenvectors.shape}  (n_lboe={sub_a1.n_lboe})")
-    log.info(f"  V1 — L eigenvectors: {sub_v1.L_eigenvectors.shape}, "
-             f"R eigenvectors: {sub_v1.R_eigenvectors.shape}  (n_lboe={sub_v1.n_lboe})")
+    log.info(f"  {AUDIO_ROI.upper()} — L eigenvectors: {sub_audio.L_eigenvectors.shape}, "
+             f"R eigenvectors: {sub_audio.R_eigenvectors.shape}  (n_lboe={sub_audio.n_lboe})")
+    log.info(f"  {VIDEO_ROI.upper()} — L eigenvectors: {sub_video.L_eigenvectors.shape}, "
+             f"R eigenvectors: {sub_video.R_eigenvectors.shape}  (n_lboe={sub_video.n_lboe})")
 
     # --- Load MAT data ---
     log.info("\nLoading fMRI MAT files …")
@@ -462,14 +459,14 @@ def main():
     # --- Design matrix: project BOLD onto LBOEs ---
     log.info("\nProjecting BOLD onto LBOEs …")
 
-    X_train = project_onto_lboes(L_train, R_train, sub_a1, sub_v1)
-    n_audio_cols = 2 * sub_a1.n_lboe
-    n_video_cols = 2 * sub_v1.n_lboe
+    X_train = project_onto_lboes(L_train, R_train, sub_audio, sub_video)
+    n_audio_cols = 2 * sub_audio.n_lboe
+    n_video_cols = 2 * sub_video.n_lboe
     log.info(f"  X_train: {X_train.shape}  "
-             f"(Audio cols 0-{n_audio_cols-1} [{n_audio_cols} cols], "
-             f"Video cols {n_audio_cols}-{n_audio_cols+n_video_cols-1} [{n_video_cols} cols])")
+             f"({AUDIO_ROI.upper()} cols 0-{n_audio_cols-1} [{n_audio_cols} cols], "
+             f"{VIDEO_ROI.upper()} cols {n_audio_cols}-{n_audio_cols+n_video_cols-1} [{n_video_cols} cols])")
 
-    X_test = project_onto_lboes(L_test_concat, R_test_concat, sub_a1, sub_v1)
+    X_test = project_onto_lboes(L_test_concat, R_test_concat, sub_audio, sub_video)
     log.info(f"  X_test : {X_test.shape}")
 
     # --- Save outputs ---

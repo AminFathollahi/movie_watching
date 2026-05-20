@@ -98,7 +98,7 @@ def parse_args():
                    help="Searchlight neighbourhood size (k nearest vertices).")
     p.add_argument("--bin-sec", type=float, required=True,
                    help="Temporal bin size in seconds.")
-    p.add_argument("--delay-sec", type=float, required=True,
+    p.add_argument("--delay-sec", type=float, default=5.0,
                    help="Hemodynamic delay in seconds (applied to fMRI).")
     p.add_argument("--hrf", action="store_true",
                    help="Convolve embeddings with SPM HRF instead of boxcar delay.")

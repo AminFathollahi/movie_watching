@@ -81,7 +81,7 @@ def parse_args():
                    help="Modality: v | a | av | all (all runs each modality separately).")
     p.add_argument("--bin-sec", type=float, required=True,
                    help="Temporal bin size in seconds.")
-    p.add_argument("--delay-sec", type=float, required=True,
+    p.add_argument("--delay-sec", type=float, default=5.0,
                    help="Hemodynamic delay in seconds (applied to X; ignored if --hrf).")
     p.add_argument("--hrf", action="store_true",
                    help="Convolve embeddings with SPM HRF instead of boxcar delay.")

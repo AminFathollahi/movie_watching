@@ -66,7 +66,10 @@ def preprocess_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
 
     For each video segment in timing_df, extracts the fMRI window
     [onset_sec + delay_sec, end_sec + delay_sec) from the full concatenated
-    CIFTI, then bins by averaging across bin_sec windows.
+    CIFTI. All included TRs across all segments are then z-scored together per
+    vertex, matching the normalization scope used for model embeddings in
+    process_model_embeddings (global, over included timepoints only). Finally,
+    each z-scored segment is binned by averaging within bin_sec windows.
 
     Args:
         fmri: (n_vertices, T_total) float32 — full concatenated run CIFTI
@@ -80,19 +83,37 @@ def preprocess_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
     """
     bin_trs = max(1, int(round(bin_sec / tr)))
     T_total = fmri.shape[1]
-    segments = []
 
+    # Collect trimmed raw segments (before z-scoring or binning)
+    raw_segs = []
     for _, row in timing_df.iterrows():
         start_tr = int(round((row["onset_sec"] + delay_sec) / tr))
         end_tr   = int(round((row["end_sec"]   + delay_sec) / tr))
         end_tr   = min(end_tr, T_total)
-        seg = fmri[:, start_tr:end_tr]          # (n_vertices, n_seg_trs)
+        seg = fmri[:, start_tr:end_tr]          # (n_vertices, T_seg)
         n_bins = seg.shape[1] // bin_trs
         if n_bins == 0:
             continue
-        seg = seg[:, :n_bins * bin_trs]
-        binned = seg.reshape(seg.shape[0], n_bins, bin_trs).mean(axis=2).T
+        raw_segs.append(seg[:, :n_bins * bin_trs].copy())
+
+    # Z-score per vertex over all included TRs so normalization is computed
+    # only on movie timepoints, comparable to how model features are normalized.
+    all_trs = np.concatenate(raw_segs, axis=1)  # (n_vertices, T_included)
+    mu = all_trs.mean(axis=1, keepdims=True)
+    sd = all_trs.std(axis=1, keepdims=True)
+    sd[sd == 0] = 1.0
+    all_trs = (all_trs - mu) / sd
+
+    # Bin each z-scored segment and concatenate
+    offset = 0
+    segments = []
+    for seg in raw_segs:
+        length = seg.shape[1]
+        z_seg = all_trs[:, offset: offset + length]
+        n_seg_bins = length // bin_trs
+        binned = z_seg.reshape(z_seg.shape[0], n_seg_bins, bin_trs).mean(axis=2).T
         segments.append(binned)
+        offset += length
 
     return np.concatenate(segments, axis=0).astype(np.float32)
 

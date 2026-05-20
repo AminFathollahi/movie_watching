@@ -40,15 +40,23 @@ TIMING_CSV="${DATA_BASE}/Data/movie_timing.csv"
 # A model/modality combo is silently skipped if its embedding file is absent.
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
 
-# CIFTI template (for output header)
-TEMPLATE_CIFTI="${HCP_DIR}/S1200.curvature_MSMAll.32k_fs_LR.dscalar.nii"
+# CIFTI template (for output header — must match the fMRI grayordinate space)
+# Use the preprocessed group-average dtseries; its BrainModelAxis defines the
+# 59k cortex structure (54216 LH + 54225 RH = 108441 grayordinates).
+TEMPLATE_CIFTI="${FMRI_CIFTI_AVG}"
 
-# Surface geometry (59k midthickness — for geodesic distances)
-LEFT_SURFACE_59K="${HCP_DIR}/S1200.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
-RIGHT_SURFACE_59K="${HCP_DIR}/S1200.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
+# Surface geometry (59k midthickness — correct for geodesic distances;
+# the fMRI CIFTI vertex indices are in the range [0, 59291])
+LEFT_SURFACE="${HCP_DIR}/S1200.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
+RIGHT_SURFACE="${HCP_DIR}/S1200.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
 
-# Glasser parcellation (59k dense-label CIFTI)
-GLASSER_DLABEL_59K="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
+# Sphere surfaces for resampling (used by downstream tools / wb_view)
+SPHERE_59K_LH="${HCP_DIR}/S1200.L.sphere.59k_fs_LR.surf.gii"
+SPHERE_59K_RH="${HCP_DIR}/S1200.R.sphere.59k_fs_LR.surf.gii"
+
+# Glasser parcellation (59k dense-label CIFTI — covers all 59k vertices
+# including medial wall; run_glasser.py maps to fMRI grayordinates by vertex index)
+GLASSER_DLABEL="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
 
 # Connectome Workbench
 WORKBENCH="/opt/workbench/bin_linux64/wb_command"
@@ -145,8 +153,8 @@ _run_avg_one_model() {
                 --delay-sec       "$DELAY_SEC" \
                 --method          "$METHOD" \
                 --tr              "$TR" \
-                --left-surface    "$LEFT_SURFACE_59K" \
-                --right-surface   "$RIGHT_SURFACE_59K" \
+                --left-surface    "$LEFT_SURFACE" \
+                --right-surface   "$RIGHT_SURFACE" \
                 --workbench       "$WORKBENCH" \
                 $(_hrf_flag) $(_normalize_flag) $(_blockdiag_flag)
         fi
@@ -165,7 +173,7 @@ _run_avg_one_model() {
                 --delay-sec       "$DELAY_SEC" \
                 --method          "$METHOD" \
                 --tr              "$TR" \
-                --glasser-dlabel  "$GLASSER_DLABEL_59K" \
+                --glasser-dlabel  "$GLASSER_DLABEL" \
                 $(_hrf_flag) $(_normalize_flag) $(_blockdiag_flag)
         fi
     done
@@ -321,7 +329,7 @@ run_persubject() {
             _run_one_subject {} \
             "$SCRIPT_DIR" "$CONDA_ENV" "$PREPROCESSED_DIR" "$OUTPUT_DIR" \
             "$TIMING_CSV" "$EMBEDDINGS_DIR" "$TEMPLATE_CIFTI" \
-            "$LEFT_SURFACE_59K" "$RIGHT_SURFACE_59K" "$GLASSER_DLABEL_59K" \
+            "$LEFT_SURFACE" "$RIGHT_SURFACE" "$GLASSER_DLABEL" \
             "$WORKBENCH" "$MODELS_STR" "$BIN_SEC" "$DELAY_SEC" "$TR" \
             "$K" "$METHOD" "$HRF" "$NORMALIZE" "$BLOCKDIAG" "$METHOD_ARG"
     else
@@ -331,7 +339,7 @@ run_persubject() {
             _run_one_subject "$SUB" \
                 "$SCRIPT_DIR" "$CONDA_ENV" "$PREPROCESSED_DIR" "$OUTPUT_DIR" \
                 "$TIMING_CSV" "$EMBEDDINGS_DIR" "$TEMPLATE_CIFTI" \
-                "$LEFT_SURFACE_59K" "$RIGHT_SURFACE_59K" "$GLASSER_DLABEL_59K" \
+                "$LEFT_SURFACE" "$RIGHT_SURFACE" "$GLASSER_DLABEL" \
                 "$WORKBENCH" "$MODELS_STR" "$BIN_SEC" "$DELAY_SEC" "$TR" \
                 "$K" "$METHOD" "$HRF" "$NORMALIZE" "$BLOCKDIAG" "$METHOD_ARG"
         done

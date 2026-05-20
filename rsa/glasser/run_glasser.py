@@ -102,29 +102,60 @@ def parse_args():
 # Glasser parcellation loading
 # =============================================================================
 
-def load_glasser_parcels(dlabel_path: str) -> dict:
-    """Extract Glasser parcel membership from a .dlabel.nii file.
+def load_glasser_parcels(dlabel_path: str, fmri_bm_axis) -> dict:
+    """Extract Glasser parcel membership mapped to fMRI grayordinate indices.
+
+    The Glasser 59k atlas covers all surface vertices including the medial wall,
+    while the fMRI CIFTI covers only non-medial-wall cortical vertices.  Parcels
+    are matched by (hemisphere, vertex_index) so returned indices directly address
+    columns of the fMRI time series array.
 
     Args:
-        dlabel_path: str — path to Glasser .dlabel.nii (59k or 32k)
+        dlabel_path:  str — path to Glasser .dlabel.nii (59k atlas)
+        fmri_bm_axis: CIFTI BrainModelAxis of the fMRI file
 
     Returns:
-        dict: {parcel_name: np.ndarray of grayordinate column indices}
-        Only parcels with at least one vertex are included.
-        Parcel index 0 (medial wall / unlabelled) is excluded.
+        dict: {parcel_name: (n,) int32 array of fMRI grayordinate column indices}
+        Only parcels with at least one vertex in the fMRI are included.
+        Parcel index 0 (medial wall / background) is excluded.
     """
     img = nib.load(dlabel_path)
-    label_data = img.get_fdata(dtype=np.float32).squeeze().astype(np.int32)  # (n_grayords,)
-    label_axis = img.header.get_axis(0)  # LabelAxis
+    label_data = img.get_fdata(dtype=np.float32).squeeze().astype(np.int32)
+    dlabel_bm  = img.header.get_axis(1)
+    label_axis = img.header.get_axis(0)
 
-    # Build parcel name → label key mapping
+    # (hemisphere_name, vertex_index) → parcel label key
+    vertex_label: dict = {}
+    for name, sl, struct in dlabel_bm.iter_structures():
+        if "CORTEX" not in name:
+            continue
+        for local_i, vidx in enumerate(struct.vertex):
+            vertex_label[(name, int(vidx))] = int(label_data[sl.start + local_i])
+
+    # (hemisphere_name, vertex_index) → fMRI grayordinate column position
+    vertex_fmri: dict = {}
+    for name, sl, struct in fmri_bm_axis.iter_structures():
+        if "CORTEX" not in name:
+            continue
+        for local_i, vidx in enumerate(struct.vertex):
+            vertex_fmri[(name, int(vidx))] = sl.start + local_i
+
+    # Accumulate fMRI column indices per parcel key
+    key_to_indices: dict = {}
+    for (hem, vidx), lbl in vertex_label.items():
+        if lbl == 0:
+            continue
+        fmri_pos = vertex_fmri.get((hem, vidx))
+        if fmri_pos is not None:
+            key_to_indices.setdefault(lbl, []).append(fmri_pos)
+
     parcels = {}
     for key, (name, _rgba) in label_axis.label[0].items():
         if key == 0:
-            continue  # skip medial wall / background
-        indices = np.where(label_data == key)[0]
-        if len(indices) > 0:
-            parcels[name] = indices
+            continue
+        indices = key_to_indices.get(key, [])
+        if indices:
+            parcels[name] = np.array(sorted(indices), dtype=np.int32)
 
     log.info(f"  Loaded {len(parcels)} Glasser parcels from {Path(dlabel_path).name}")
     return parcels
@@ -237,8 +268,9 @@ def main():
     model_rdm = compute_rdm(emb.astype(np.float64), method="correlation")
     log.info(f"  Model RDM: {model_rdm.shape}")
 
-    # Load Glasser parcels
-    parcels = load_glasser_parcels(args.glasser_dlabel)
+    # Load Glasser parcels (vertex-index mapping to fMRI grayordinates)
+    fmri_bm_axis = get_bm_axis(args.fmri_cifti)
+    parcels = load_glasser_parcels(args.glasser_dlabel, fmri_bm_axis)
 
     n_grayords = fmri_binned.shape[1]
     corr_map, pval_map = compute_parcel_rsa(

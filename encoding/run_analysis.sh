@@ -39,8 +39,9 @@ TIMING_CSV="${DATA_BASE}/Data/movie_timing.csv"
 # Any entry whose embedding file is absent is silently skipped.
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
 
-# CIFTI template (for output header)
-TEMPLATE_CIFTI="${HCP_DIR}/S1200.curvature_MSMAll.32k_fs_LR.dscalar.nii"
+# CIFTI template (for output header — must match the fMRI grayordinate space)
+# Use the preprocessed group-average dtseries (59k, 108441 cortical grayordinates).
+TEMPLATE_CIFTI="${FMRI_CIFTI_AVG}"
 
 # Output root
 OUTPUT_DIR="${OUTPUTS_BASE}/encoding"

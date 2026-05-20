@@ -1,0 +1,19 @@
+name: avtransformer
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy>=1.26
+  - pandas>=2.0
+  - tqdm>=4.66
+  - pip
+  - pip:
+    - torch>=2.1
+    - torchaudio>=2.1
+    - transformers>=4.40
+    - natsort>=8.4
+    - huggingface-hub>=0.20
+    - moviepy>=1.0
+    - soundfile>=0.12
+    - safetensors>=0.4

@@ -1,0 +1,25 @@
+name: cfmod
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy=1.26.2
+  - scipy>=1.11
+  - h5py>=3.9
+  - matplotlib=3.8.2
+  - scikit-learn=1.3.2
+  - nibabel>=5.1
+  - pyyaml>=6.0
+  - tqdm>=4.66
+  - pandas>=2.0
+  - parallel          # GNU parallel for batch subject processing
+  - pip
+  - pip:
+    - torch==2.1.1
+    - himalaya==0.3.5
+    - mne==1.9.0
+    - cifti==1.1
+    - pycortex
+    # vicsompy is NO LONGER a dependency — Subsurface is vendored in
+    # vendor/hedger_cf/subsurface.py (see ATTRIBUTION.md)

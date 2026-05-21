@@ -4,13 +4,17 @@
 # Master runner for ridge encoding model analyses.
 # Supports group-average and per-subject modes with GNU parallel.
 #
-# Usage:
-#   bash run_analysis.sh                    # group-avg
-#   bash run_analysis.sh avg               # group-avg (explicit)
-#   bash run_analysis.sh persubject        # per-subject, all subjects
-#   bash run_analysis.sh persubject 4      # per-subject, 4 parallel jobs
-#   bash run_analysis.sh persubject 8 100610  # resume from subject 100610
-#   bash run_analysis.sh all               # group-avg + per-subject
+# Usage (disk mode — requires pre-saved preprocessed CIFTIs):
+#   bash run_analysis.sh                       # group-avg
+#   bash run_analysis.sh avg                   # group-avg (explicit)
+#   bash run_analysis.sh persubject            # per-subject, all subjects
+#   bash run_analysis.sh persubject 4          # per-subject, 4 parallel jobs
+#   bash run_analysis.sh persubject 8 100610   # resume from subject 100610
+#   bash run_analysis.sh all                   # group-avg + per-subject
+#
+# Streaming mode (set STREAM=true below — no pre-saved CIFTIs required):
+#   Each subject is preprocessed on-the-fly from CIFTI_DIR. No preprocessed
+#   CIFTI is saved; only result maps are written. Use same usage as above.
 #
 # Prerequisites:
 #   conda activate analysis
@@ -26,9 +30,27 @@ DATA_BASE="/home/amin/Research/Representation/Movie/data/Setareh"
 HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
 OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
 
-# fMRI data
-FMRI_CIFTI_AVG="${OUTPUTS_BASE}/preprocessed/group_average_gsr_zscore_cortex_59k.dtseries.nii"
+# Raw 7T CIFTI files (used in streaming mode — preprocess on-the-fly)
+CIFTI_DIR="/media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI"
+
+# ── Streaming toggle ──────────────────────────────────────────────────────────
+# false → disk mode (read pre-saved preprocessed CIFTIs from PREPROCESSED_DIR)
+# true  → streaming mode (preprocess raw CIFTIs from CIFTI_DIR on-the-fly)
+STREAM=false
+
+# Preprocessing flags (used in streaming mode; ignored in disk mode)
+SG_FILTER=false   # Savitzky-Golay high-pass filter (--sg-filter / "")
+PSC=false         # Percent signal change normalization
+GSR=true          # Global signal regression (--gsr / --no-gsr)
+Z_SCORE=true      # Z-score per vertex (--z-score / --no-z-score)
+
+# fMRI data — filtered mode (preprocess_individual.py --timing-csv --delay-sec 5.0)
+# Used in disk mode. Filename encodes preprocessing and delay applied.
+DELAY_SEC=5.0
+DELAY_TAG="delay5s"
+FMRI_CIFTI_AVG="${OUTPUTS_BASE}/preprocessed/group_average_gsr_zscore_${DELAY_TAG}_cortex_59k.dtseries.nii"
 PREPROCESSED_DIR="${OUTPUTS_BASE}/preprocessed"
+FMRI_SUFFIX="gsr_zscore_${DELAY_TAG}"   # per-subject: ${SUB}_${FMRI_SUFFIX}_cortex_59k.dtseries.nii
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 
 # Timing
@@ -36,11 +58,9 @@ TIMING_CSV="${DATA_BASE}/Data/movie_timing.csv"
 
 # Embeddings root
 # Convention: {EMBEDDINGS_DIR}/{model_name}/{bin_sec}s/{model_name}_{modality}.npy
-# Any entry whose embedding file is absent is silently skipped.
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
 
-# CIFTI template (for output header — must match the fMRI grayordinate space)
-# Use the preprocessed group-average dtseries (59k, 108441 cortical grayordinates).
+# CIFTI template (59k grayordinate space)
 TEMPLATE_CIFTI="${FMRI_CIFTI_AVG}"
 
 # Output root
@@ -48,8 +68,7 @@ OUTPUT_DIR="${OUTPUTS_BASE}/encoding"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-BIN_SEC=2.0
-DELAY_SEC=5.0
+BIN_SEC=5.0
 HRF=false       # true → SPM HRF convolution; false → boxcar delay
 NORMALIZE=true  # per-run z-score normalization of embeddings
 
@@ -57,17 +76,12 @@ NORMALIZE=true  # per-run z-score normalization of embeddings
 ALPHA_MIN=-2
 ALPHA_MAX=9
 N_ALPHAS=23
-CHUNK_SIZE=2000    # vertices per batch (memory/speed tradeoff)
+CHUNK_SIZE=2000
 
 TEST_VIDEO_IDS="video5,video9,video14,video18"
 
 # ── Model registry ─────────────────────────────────────────────────────────
 # Format: "model_name:modalities"
-#   model_name  — must match the subdirectory under EMBEDDINGS_DIR
-#   modalities  — comma-separated list of embedding modality suffixes
-#
-# Embedding path: {EMBEDDINGS_DIR}/{model_name}/{BIN_SEC}s/{model_name}_{modality}.npy
-# Add a new model by appending a line; it runs whenever its embeddings exist.
 MODELS=(
     "pe-av-small-16-frame:v,a,av"
     "pe-av-base:v,a,av"
@@ -100,6 +114,10 @@ run_python() { conda run -n "$CONDA_ENV" python "$@"; }
 
 _hrf_flag()       { [ "$HRF"       = "true" ] && echo "--hrf"       || echo ""; }
 _normalize_flag() { [ "$NORMALIZE" = "true" ] && echo "--normalize" || echo ""; }
+_sg_filter_flag() { [ "$SG_FILTER" = "true" ] && echo "--sg-filter" || echo ""; }
+_psc_flag()       { [ "$PSC"       = "true" ] && echo "--psc"       || echo ""; }
+_gsr_flag()       { [ "$GSR"       = "true" ] && echo "--gsr"       || echo "--no-gsr"; }
+_zscore_flag()    { [ "$Z_SCORE"   = "true" ] && echo "--z-score"   || echo "--no-z-score"; }
 
 _emb_exists() {
     local MODEL_NAME="$1" MOD="$2"
@@ -124,8 +142,9 @@ run_avg() {
             log "  ${MODEL_NAME} / ${MOD}"
 
             run_python "${SCRIPT_DIR}/run_encoding.py" \
-                --fmri-cifti     "$FMRI_CIFTI_AVG" \
-                --timing-csv     "$TIMING_CSV" \
+                --preprocessed-dir "$PREPROCESSED_DIR" \
+                --fmri-suffix      "$FMRI_SUFFIX" \
+                --timing-csv       "$TIMING_CSV" \
                 --embeddings-dir "$EMBEDDINGS_DIR" \
                 --template-cifti "$TEMPLATE_CIFTI" \
                 --output-dir     "$OUTPUT_DIR" \
@@ -151,44 +170,69 @@ run_avg() {
 # PER-SUBJECT PIPELINE
 # =============================================================================
 
-# Worker function — exported for GNU parallel
+# Worker function — exported for GNU parallel.
+# Args: SUB SCRIPT_DIR CONDA_ENV PREPROCESSED_DIR FMRI_SUFFIX OUTPUT_DIR
+#       TIMING_CSV EMBEDDINGS_DIR TEMPLATE_CIFTI MODELS_STR
+#       BIN_SEC DELAY_SEC TR ALPHA_MIN ALPHA_MAX N_ALPHAS CHUNK_SIZE
+#       TEST_VIDEO_IDS HRF NORMALIZE
+#       STREAM CIFTI_DIR SG_FILTER PSC GSR Z_SCORE
 _run_one_subject() {
     local SUB="$1"
     local SCRIPT_DIR="$2"
     local CONDA_ENV="$3"
     local PREPROCESSED_DIR="$4"
-    local OUTPUT_DIR="$5"
-    local TIMING_CSV="$6"
-    local EMBEDDINGS_DIR="$7"
-    local TEMPLATE_CIFTI="$8"
-    local MODELS_STR="$9"       # semicolon-separated "model_name:modalities" entries
-    local BIN_SEC="${10}"
-    local DELAY_SEC="${11}"
-    local TR="${12}"
-    local ALPHA_MIN="${13}"
-    local ALPHA_MAX="${14}"
-    local N_ALPHAS="${15}"
-    local CHUNK_SIZE="${16}"
-    local TEST_VIDEO_IDS="${17}"
-    local HRF="${18}"
-    local NORMALIZE="${19}"
+    local FMRI_SUFFIX="$5"
+    local OUTPUT_DIR="$6"
+    local TIMING_CSV="$7"
+    local EMBEDDINGS_DIR="$8"
+    local TEMPLATE_CIFTI="$9"
+    local MODELS_STR="${10}"
+    local BIN_SEC="${11}"
+    local DELAY_SEC="${12}"
+    local TR="${13}"
+    local ALPHA_MIN="${14}"
+    local ALPHA_MAX="${15}"
+    local N_ALPHAS="${16}"
+    local CHUNK_SIZE="${17}"
+    local TEST_VIDEO_IDS="${18}"
+    local HRF="${19}"
+    local NORMALIZE="${20}"
+    local STREAM="${21}"
+    local CIFTI_DIR="${22}"
+    local SG_FILTER="${23}"
+    local PSC="${24}"
+    local GSR="${25}"
+    local Z_SCORE="${26}"
 
     local BIN_SEC_INT="${BIN_SEC%.*}"
     local LOG_DIR="${OUTPUT_DIR}/${SUB}"
     mkdir -p "$LOG_DIR"
     local LOG="${LOG_DIR}/pipeline.log"
 
-    local FMRI_PATH="${PREPROCESSED_DIR}/${SUB}_gsr_zscore_cortex_59k.dtseries.nii"
-    if [ ! -f "$FMRI_PATH" ]; then
-        echo "[$(date +%H:%M:%S)] ${SUB}: no preprocessed CIFTI — run preprocess_individual.py first" \
-            | tee -a "$LOG"
-        return 1
-    fi
-
     local HRF_FLAG="";  [ "$HRF"       = "true" ] && HRF_FLAG="--hrf"
     local NORM_FLAG=""; [ "$NORMALIZE" = "true" ] && NORM_FLAG="--normalize"
 
-    echo "[$(date +%H:%M:%S)] Starting ${SUB}" | tee -a "$LOG"
+    # Build fMRI input flags based on mode
+    local FMRI_FLAGS
+    if [ "$STREAM" = "true" ]; then
+        # Streaming: preprocess raw CIFTI on-the-fly
+        local SG_FLAG="";  [ "$SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
+        local PSC_FLAG=""; [ "$PSC"       = "true" ] && PSC_FLAG="--psc"
+        local GSR_FLAG="--gsr";     [ "$GSR"     = "false" ] && GSR_FLAG="--no-gsr"
+        local ZSC_FLAG="--z-score"; [ "$Z_SCORE" = "false" ] && ZSC_FLAG="--no-z-score"
+        FMRI_FLAGS="--raw-dir ${CIFTI_DIR} $SG_FLAG $PSC_FLAG $GSR_FLAG $ZSC_FLAG"
+    else
+        # Disk mode: require pre-saved preprocessed CIFTI
+        local FMRI_PATH="${PREPROCESSED_DIR}/${SUB}_${FMRI_SUFFIX}_cortex_59k.dtseries.nii"
+        if [ ! -f "$FMRI_PATH" ]; then
+            echo "[$(date +%H:%M:%S)] ${SUB}: no preprocessed CIFTI — run preprocess_individual.py first" \
+                | tee -a "$LOG"
+            return 1
+        fi
+        FMRI_FLAGS="--preprocessed-dir ${PREPROCESSED_DIR} --fmri-suffix ${FMRI_SUFFIX}"
+    fi
+
+    echo "[$(date +%H:%M:%S)] Starting ${SUB} (stream=${STREAM})" | tee -a "$LOG"
 
     IFS=';' read -ra MODEL_ENTRIES <<< "$MODELS_STR"
     for MODEL_ENTRY in "${MODEL_ENTRIES[@]}"; do
@@ -203,9 +247,10 @@ _run_one_subject() {
                 continue
             fi
 
+            # shellcheck disable=SC2086
             conda run -n "$CONDA_ENV" python \
                 "${SCRIPT_DIR}/run_encoding.py" \
-                --fmri-cifti     "$FMRI_PATH" \
+                $FMRI_FLAGS \
                 --timing-csv     "$TIMING_CSV" \
                 --embeddings-dir "$EMBEDDINGS_DIR" \
                 --template-cifti "$TEMPLATE_CIFTI" \
@@ -237,7 +282,9 @@ _run_one_subject() {
 export -f _run_one_subject
 
 run_persubject() {
-    log "=== Per-subject encoding (${BATCH_SIZE} parallel jobs, ${#MODELS[@]} models) ==="
+    local MODE_TAG
+    [ "$STREAM" = "true" ] && MODE_TAG="streaming" || MODE_TAG="disk"
+    log "=== Per-subject encoding (${MODE_TAG}, ${BATCH_SIZE} parallel jobs, ${#MODELS[@]} models) ==="
 
     local SUBJECTS
     SUBJECTS=$(cat "$SUBJECTS_LIST")
@@ -254,21 +301,23 @@ run_persubject() {
     if command -v parallel &>/dev/null; then
         echo "$SUBJECTS" | parallel --jobs "$BATCH_SIZE" --line-buffer \
             _run_one_subject {} \
-            "$SCRIPT_DIR" "$CONDA_ENV" "$PREPROCESSED_DIR" "$OUTPUT_DIR" \
+            "$SCRIPT_DIR" "$CONDA_ENV" "$PREPROCESSED_DIR" "$FMRI_SUFFIX" "$OUTPUT_DIR" \
             "$TIMING_CSV" "$EMBEDDINGS_DIR" "$TEMPLATE_CIFTI" \
             "$MODELS_STR" "$BIN_SEC" "$DELAY_SEC" "$TR" \
             "$ALPHA_MIN" "$ALPHA_MAX" "$N_ALPHAS" "$CHUNK_SIZE" \
-            "$TEST_VIDEO_IDS" "$HRF" "$NORMALIZE"
+            "$TEST_VIDEO_IDS" "$HRF" "$NORMALIZE" \
+            "$STREAM" "$CIFTI_DIR" "$SG_FILTER" "$PSC" "$GSR" "$Z_SCORE"
     else
         log "GNU parallel not found — running sequentially"
         log "  (install with: conda install -c conda-forge parallel)"
         for SUB in $SUBJECTS; do
             _run_one_subject "$SUB" \
-                "$SCRIPT_DIR" "$CONDA_ENV" "$PREPROCESSED_DIR" "$OUTPUT_DIR" \
+                "$SCRIPT_DIR" "$CONDA_ENV" "$PREPROCESSED_DIR" "$FMRI_SUFFIX" "$OUTPUT_DIR" \
                 "$TIMING_CSV" "$EMBEDDINGS_DIR" "$TEMPLATE_CIFTI" \
                 "$MODELS_STR" "$BIN_SEC" "$DELAY_SEC" "$TR" \
                 "$ALPHA_MIN" "$ALPHA_MAX" "$N_ALPHAS" "$CHUNK_SIZE" \
-                "$TEST_VIDEO_IDS" "$HRF" "$NORMALIZE"
+                "$TEST_VIDEO_IDS" "$HRF" "$NORMALIZE" \
+                "$STREAM" "$CIFTI_DIR" "$SG_FILTER" "$PSC" "$GSR" "$Z_SCORE"
         done
     fi
 

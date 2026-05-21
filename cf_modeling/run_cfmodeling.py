@@ -4,9 +4,9 @@ cf_modeling/run_cfmodeling.py
 Unified CF modeling pipeline (phases 02→04): prepare data, fit banded ridge,
 apply null correction.
 
-Combines scripts 02_prep_data.py, 03_fit_banded_ridge.py, and
-04_null_correct.py into one parallel-safe entry point.  Scripts 01
-(geometry extraction), 05 (integration maps), and 06 (summary) remain
+Covers data preparation, banded ridge fitting, and null correction in one
+parallel-safe entry point.  The geometry script (extract_geometry.py),
+integration maps (integration_maps.py), and summary (summary.py) remain
 separate because they have different I/O patterns.
 
 Input modes
@@ -31,7 +31,7 @@ Train / test split  [Hedger et al. 2025 / vicsompy convention]
 
 For group_average mode, CIFTI dscalar.nii maps are also written using
 --template-cifti.  For per_subject, only .npy files are written (CIFTIs
-are built by 05_integration_maps.py).
+are built by integration_maps.py).
 
 Skip logic: if R2_{ROI_A}_nc.npy and R2_{ROI_B}_nc.npy already exist for the
 subject / group, the run is skipped.
@@ -156,7 +156,7 @@ def load_subsurface(cache_dir: str, roi_name: str):
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Subsurface cache not found: {path}\n"
-            "Run 01_extract_geometry.py first.")
+            "Run extract_geometry.py first.")
     with open(path, "rb") as fh:
         sub = pickle.load(fh)
     if not hasattr(sub, "n_lboe"):

@@ -10,12 +10,12 @@
 #
 # DISK MODE (default, STREAM=false):
 #   Requires pre-saved preprocessed CIFTIs in FMRI_OUT_DIR.
-#   Runs scripts 02 → 03 → 04 sequentially per subject.
+#   Calls run_cfmodeling.py (phases 02→04) for each subject.
 #
 # STREAMING MODE (set STREAM=true below):
-#   Preprocesses raw CIFTIs on-the-fly (full-run mode per vicsompy convention).
-#   No preprocessed CIFTI or X/Y arrays are saved; only R2_nc maps are written.
-#   Uses run_subject_stream.py (combines 02+03+04 in one Python process).
+#   Preprocesses raw CIFTIs on-the-fly (full-run mode: SG→PSC→GSR→zscore).
+#   No preprocessed CIFTI is saved; only R2_nc maps are written.
+#   Also calls run_cfmodeling.py — streaming path handled inside that script.
 #   Set CIFTI_DIR to the raw 7T CIFTI directory and configure preprocessing flags.
 #
 # Usage
@@ -90,9 +90,9 @@ run_python() {
 # =============================================================================
 
 # Per-subject worker — called by GNU parallel.
-# Disk mode: runs scripts 02 → 03 → 04 for one subject.
-# Streaming mode: runs run_subject_stream.py (02+03+04 in one Python process,
-#                 no X/Y arrays or preprocessed CIFTI saved).
+# Both modes call run_cfmodeling.py (phases 02→04) for one subject.
+# Disk mode:      reads {FMRI_OUT_DIR}/{sub}_{FMRI_SUFFIX}_cortex_59k.dtseries.nii
+# Streaming mode: preprocesses raw CIFTI on-the-fly; no CIFTI saved.
 # Skips if R2_nc maps already exist.
 # Args: SUB SCRIPT_DIR CONDA_ENV OUTPUT_BASE ROI_A ROI_B
 #       FMRI_OUT_DIR FMRI_SUFFIX STREAM CIFTI_DIR SG_FILTER PSC GSR Z_SCORE
@@ -184,7 +184,7 @@ run_persubject_analysis() {
         log "[01] Subsurfaces cached — skipping"
     else
         log "[01] Building ${ROI_A} + ${ROI_B} subsurfaces + LBOEs (59k_fs_LR) …"
-        run_python "${SCRIPT_DIR}/01_extract_geometry.py" \
+        run_python "${SCRIPT_DIR}/extract_geometry.py" \
             --mode per_subject \
             --roi_a "$ROI_A" --roi_b "$ROI_B" \
             --hcp_dir "$HCP_DIR" \
@@ -213,7 +213,6 @@ run_persubject_analysis() {
         log "GNU parallel not found — running sequentially"
         log "(install: conda install -c conda-forge parallel)"
         for SUB in $SUBJECTS; do
-            _run_one_subject "$SUB" \
                 "$SCRIPT_DIR" "$CONDA_ENV" "$OUTPUT_BASE" \
                 "$ROI_A" "$ROI_B" "$FMRI_OUT_DIR" "$FMRI_SUFFIX" \
                 "$STREAM" "$CIFTI_DIR" "$SG_FILTER" "$PSC" "$GSR" "$Z_SCORE"
@@ -223,7 +222,7 @@ run_persubject_analysis() {
 
     # -- Step 05: aggregate + integration maps ---------------------------------
     log "[05] Aggregating subjects → integration maps …"
-    run_python "${SCRIPT_DIR}/05_integration_maps.py" \
+    run_python "${SCRIPT_DIR}/integration_maps.py" \
         --mode per_subject \
         --roi_a "$ROI_A" --roi_b "$ROI_B" \
         --output_base "$OUTPUT_BASE" \
@@ -232,7 +231,7 @@ run_persubject_analysis() {
 
     # -- Step 06: group statistics --------------------------------------------
     log "[06] Group statistics …"
-    run_python "${SCRIPT_DIR}/06_summary.py" \
+    run_python "${SCRIPT_DIR}/summary.py" \
         --mode per_subject \
         --roi_a "$ROI_A" --roi_b "$ROI_B" \
         --output_base "$OUTPUT_BASE" \
@@ -268,7 +267,7 @@ run_groupaverage_analysis() {
         log "[01] Subsurfaces cached — skipping"
     else
         log "[01] Building ${ROI_A} + ${ROI_B} subsurfaces + LBOEs (59k_fs_LR) …"
-        run_python "${SCRIPT_DIR}/01_extract_geometry.py" \
+        run_python "${SCRIPT_DIR}/extract_geometry.py" \
             $COMMON \
             --hcp_dir "$HCP_DIR" \
             --glasser_dlabel "$GLASSER_DLABEL"
@@ -286,13 +285,13 @@ run_groupaverage_analysis() {
     log "[02-04] Done"
 
     log "[05] Integration maps …"
-    run_python "${SCRIPT_DIR}/05_integration_maps.py" \
+    run_python "${SCRIPT_DIR}/integration_maps.py" \
         $COMMON \
         --template_cifti "$FMRI_GROUP_CIFTI"
     log "[05] Done"
 
     log "[06] RSA spatial overlap …"
-    run_python "${SCRIPT_DIR}/06_summary.py" \
+    run_python "${SCRIPT_DIR}/summary.py" \
         $COMMON \
         --template_cifti "$FMRI_GROUP_CIFTI" \
         --rsa_base "$RSA_BASE"

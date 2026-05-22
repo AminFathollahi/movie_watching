@@ -56,6 +56,24 @@ def save_cifti_map(data_1d: np.ndarray, template_path: str, output_path: str,
     nib.save(img, output_path)
 
 
+def save_cifti_multimap(data_2d: np.ndarray, map_names: list,
+                        template_path: str, output_path: str) -> None:
+    """Save multiple cortical maps as a multi-map CIFTI dscalar.nii.
+
+    Args:
+        data_2d: (n_maps, n_grayordinates) float32
+        map_names: list[str] — one label per map (shown in wb_view)
+        template_path: str — path to a reference CIFTI whose BrainModelAxis is reused
+        output_path: str — destination path
+    """
+    bm_axis = get_bm_axis(template_path)
+    scalar_axis = nib.cifti2.ScalarAxis(map_names)
+    header = nib.cifti2.Cifti2Header.from_axes((scalar_axis, bm_axis))
+    arr = data_2d.astype(np.float32)
+    img = nib.Cifti2Image(arr, header=header)
+    nib.save(img, output_path)
+
+
 def get_cortex_vertex_indices(bm_axis):
     """Return left and right cortical vertex index arrays from a BrainModelAxis.
 

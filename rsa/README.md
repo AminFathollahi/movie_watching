@@ -70,7 +70,43 @@ Any model whose embedding file is absent is silently skipped. Add a new model by
 
 `config_label` encodes analysis parameters, e.g. `k100_norm_delay5s_bin2s_spearman`.
 
+## Required Preprocessed fMRI
+
+This analysis requires fMRI that has already been filtered to movie timepoints,
+hemodynamic-delay-shifted, GSR-applied, and z-scored over included timepoints.
+Use `preprocess_individual.py` from the repo root:
+
+**Standard (fixed 5 s boxcar delay) — matches `DELAY_SEC=5` config:**
+```bash
+python preprocess_individual.py \
+    --raw-dir $CIFTI_DIR \
+    --out-dir $FMRI_OUT_DIR \
+    --subjects-list subjects.txt \
+    --timing-csv $TIMING_CSV \
+    --delay-sec 5.0 \
+    --gsr --z-score
+```
+Output: `{sub}_gsr_zscore_delay5s_cortex_59k.dtseries.nii`
+
+**HRF variant (`HRF=true`) — delay must be 0 so HRF convolution aligns correctly:**
+```bash
+python preprocess_individual.py \
+    --raw-dir $CIFTI_DIR \
+    --out-dir $FMRI_OUT_DIR \
+    --subjects-list subjects.txt \
+    --timing-csv $TIMING_CSV \
+    --delay-sec 0 \
+    --gsr --z-score
+```
+Output: `{sub}_gsr_zscore_delay0s_cortex_59k.dtseries.nii`
+
+The analysis scripts never re-apply delay or z-score — both are baked into the
+preprocessed CIFTI. `DELAY_SEC` in `run_analysis.sh` is used only to name outputs.
+
 ## Delay / HRF
 
-When `HRF=false` (default): fMRI extraction window is shifted by `DELAY_SEC`.  
-When `HRF=true`: embeddings are convolved with SPM HRF; fMRI window is not shifted.
+When `HRF=false` (default): delay was applied at preprocessing time (`--delay-sec 5.0`).
+The analysis scripts use the preprocessed CIFTI directly; `DELAY_SEC` only labels outputs.
+
+When `HRF=true`: fMRI was preprocessed with `--delay-sec 0`; model embeddings are
+convolved with SPM HRF inside the analysis script.

@@ -5,6 +5,15 @@ Shared utilities for ridge encoding models.
 
 All functions are stateless and accept explicit arguments — no hardcoded paths
 or parameters. Configure everything in run_analysis.sh and pass via CLI.
+
+fMRI preprocessing convention
+------------------------------
+The input CIFTI (output of preprocess_individual.py --timing-csv) is already:
+  - Filtered to movie timepoints with hemodynamic delay applied at preprocess time
+  - Z-scored per vertex over all included timepoints
+
+build_fmri_arrays() therefore only bins and splits into train/test — no delay
+shift and no z-scoring. Video positions are determined from cumsum(duration_sec).
 """
 
 import logging
@@ -42,26 +51,94 @@ def spm_hrf(tr: float, oversampling: int = 16) -> np.ndarray:
 
 
 # =============================================================================
-# Timing helpers
+# fMRI array builders
 # =============================================================================
 
-def compute_mat_indices(timing_df: pd.DataFrame) -> pd.DataFrame:
-    """Add mat_start and mat_end columns to a timing DataFrame.
+def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
+                         test_video_ids: list, bin_sec: float, tr: float) -> tuple:
+    """Bin and split a (n_vertices, T) fMRI array into train/test.
 
-    MAT files store video segments concatenated without inter-run gaps.
-    mat_start / mat_end are the cumulative TR indices into that concatenated array.
+    Core logic shared by build_fmri_arrays (disk path) and the streaming path
+    (where the caller provides the array directly from preprocess_subject_filtered).
 
     Args:
-        timing_df: pd.DataFrame with at minimum a duration_sec column
+        fmri: (n_vertices, T_included) float32 — pre-filtered fMRI data
+        timing_df: pd.DataFrame — with video_id, duration_sec, run_id columns
+        test_video_ids: list[str] — video IDs held out for testing
+        bin_sec: float — temporal bin size in seconds
+        tr: float — TR in seconds
 
     Returns:
-        pd.DataFrame — input df with mat_start and mat_end columns added
+        Y_train: (n_train_bins, n_vertices) float32
+        Y_test: (n_test_bins, n_vertices) float32
+        run_onsets: list[int] — training run onset bin indices for LORO-CV
     """
-    df = timing_df.copy()
-    cumsum = df["duration_sec"].cumsum()
-    df["mat_end"] = cumsum.astype(int)
-    df["mat_start"] = (cumsum - df["duration_sec"]).astype(int)
-    return df
+    bin_trs      = max(1, int(round(bin_sec / tr)))
+    train_segs   = []
+    test_segs    = []
+    run_onsets   = []
+    n_train_bins = 0
+    current_run  = None
+    offset_tr    = 0
+
+    for _, row in timing_df.iterrows():
+        vid_id    = str(row["video_id"])
+        run_id    = row["run_id"]
+        n_seg_trs = int(round(row["duration_sec"] / tr))
+
+        seg       = fmri[:, offset_tr: offset_tr + n_seg_trs]
+        offset_tr += n_seg_trs
+        n_bins    = seg.shape[1] // bin_trs
+        if n_bins == 0:
+            continue
+        binned = (seg[:, :n_bins * bin_trs]
+                  .reshape(fmri.shape[0], n_bins, bin_trs)
+                  .mean(axis=2).T)            # (n_bins, n_vertices)
+
+        if vid_id in test_video_ids:
+            test_segs.append(binned)
+        else:
+            if run_id != current_run:
+                run_onsets.append(n_train_bins)
+                current_run = run_id
+            train_segs.append(binned)
+            n_train_bins += n_bins
+
+    n_verts = fmri.shape[0]
+    Y_train = (np.concatenate(train_segs, axis=0).astype(np.float32) if train_segs
+               else np.empty((0, n_verts), dtype=np.float32))
+    Y_test  = (np.concatenate(test_segs,  axis=0).astype(np.float32) if test_segs
+               else np.empty((0, n_verts), dtype=np.float32))
+    return Y_train, Y_test, run_onsets
+
+
+def build_fmri_arrays(cifti_path: str, timing_df: pd.DataFrame,
+                       test_video_ids: list, bin_sec: float, tr: float) -> tuple:
+    """Load pre-filtered, pre-z-scored CIFTI and build train/test arrays.
+
+    The input CIFTI is the output of preprocess_individual.py in filtered mode:
+    all movie timepoints are present (delay already applied, z-scored over all
+    included TPs). This function bins each video segment and splits into
+    train/test by video_id.
+
+    Video k occupies TRs [offset_k, offset_k + n_trs_k) in the filtered CIFTI,
+    where offset_k = cumsum(duration_sec[:k]) / tr.
+
+    Args:
+        cifti_path: str — path to pre-filtered, pre-z-scored CIFTI dtseries
+        timing_df: pd.DataFrame — with video_id, duration_sec, run_id columns
+        test_video_ids: list[str] — video IDs held out for testing
+        bin_sec: float — temporal bin size in seconds
+        tr: float — TR in seconds
+
+    Returns:
+        Y_train: (n_train_bins, n_vertices) float32
+        Y_test: (n_test_bins, n_vertices) float32
+        run_onsets: list[int] — training run onset bin indices for LORO-CV
+    """
+    img  = nib.load(cifti_path)
+    fmri = img.get_fdata(dtype=np.float32).T  # (n_vertices, T_included)
+    return _bin_and_split_fmri(fmri, timing_df, test_video_ids, bin_sec, tr)
 
 
 # =============================================================================
@@ -86,99 +163,21 @@ def apply_hrf_to_segment(segment: np.ndarray, hrf_kernel: np.ndarray) -> np.ndar
     return out
 
 
-# =============================================================================
-# fMRI array builders
-# =============================================================================
-
-def build_fmri_arrays(cifti_path: str, timing_df: pd.DataFrame,
-                       test_video_ids: list, bin_sec: float,
-                       delay_sec: float, tr: float) -> tuple:
-    """Load a full-run CIFTI and build train/test fMRI arrays with hemodynamic delay.
-
-    For each video segment, extracts the fMRI window [onset_sec + delay_sec,
-    end_sec + delay_sec) from the full concatenated CIFTI, then bins.
-
-    Train: all videos not in test_video_ids, binned and z-scored per run.
-    Test: test_video_ids videos, binned (not z-scored).
-
-    Args:
-        cifti_path: str — path to preprocessed full-run CIFTI dtseries
-        timing_df: pd.DataFrame — with video_id, onset_sec, end_sec, duration_sec, run_id
-        test_video_ids: list[str] — video IDs held out for testing
-        bin_sec: float — temporal bin size in seconds
-        delay_sec: float — hemodynamic delay offset in seconds (0.0 when hrf=True)
-        tr: float — TR in seconds
-
-    Returns:
-        Y_train: (n_train_bins, n_vertices) float32
-        Y_test: (n_test_bins, n_vertices) float32
-        run_onsets: list[int] — training run onset indices for LORO-CV
-    """
-    img = nib.load(cifti_path)
-    fmri = img.get_fdata(dtype=np.float32).T  # (n_vertices, T_total)
-    T_total = fmri.shape[1]
-
-    bin_trs = max(1, int(round(bin_sec / tr)))
-    train_segments, test_segments = [], []
-    run_onsets = []
-    n_train_bins = 0
-    current_run = None
-
-    for _, row in timing_df.iterrows():
-        vid_id = str(row["video_id"])
-        run_id = row["run_id"]
-        start_tr = int(round((row["onset_sec"] + delay_sec) / tr))
-        end_tr   = int(round((row["end_sec"]   + delay_sec) / tr))
-        end_tr   = min(end_tr, T_total)
-
-        seg = fmri[:, start_tr:end_tr]          # (n_vertices, n_seg_trs)
-        n_bins = seg.shape[1] // bin_trs
-        if n_bins == 0:
-            continue
-        seg = seg[:, :n_bins * bin_trs]
-        binned = seg.reshape(seg.shape[0], n_bins, bin_trs).mean(axis=2).T  # (n_bins, n_vertices)
-
-        if vid_id in test_video_ids:
-            test_segments.append(binned)
-        else:
-            if run_id != current_run:
-                run_onsets.append(n_train_bins)
-                current_run = run_id
-            train_segments.append(binned)
-            n_train_bins += n_bins
-
-    Y_train_raw = np.concatenate(train_segments, axis=0)
-    Y_test = np.concatenate(test_segments, axis=0).astype(np.float32)
-
-    # Z-score training data per run
-    Y_train = np.zeros_like(Y_train_raw, dtype=np.float32)
-    run_boundaries = run_onsets + [n_train_bins]
-    for i in range(len(run_onsets)):
-        s, e = run_boundaries[i], run_boundaries[i + 1]
-        chunk = Y_train_raw[s:e]
-        mu = chunk.mean(axis=0, keepdims=True)
-        sd = chunk.std(axis=0, keepdims=True)
-        sd[sd == 0] = 1.0
-        Y_train[s:e] = ((chunk - mu) / sd).astype(np.float32)
-
-    return Y_train, Y_test, run_onsets
-
-
 def build_embedding_arrays(emb_path: str, timing_df: pd.DataFrame,
                             test_video_ids: list, bin_sec: float,
                             hrf: bool, normalize: bool) -> tuple:
     """Load and process model embeddings to produce train/test design matrices.
 
-    Embeddings are pre-computed at bin_sec resolution. Hemodynamic delay is
-    handled at fMRI extraction time (in build_fmri_arrays). When hrf=True,
-    embeddings are convolved with the SPM HRF kernel.
+    Embeddings are pre-computed at bin_sec resolution. The hemodynamic delay is
+    handled at fMRI preprocessing time. When hrf=True, the fMRI was preprocessed
+    with --delay-sec 0 and embeddings are convolved with the SPM HRF kernel.
 
     Args:
         emb_path: str — path to .npy embedding file, shape (n_total_bins, n_features)
         timing_df: pd.DataFrame — with video_id, duration_sec, run_id
         test_video_ids: list[str]
         bin_sec: float — temporal bin size in seconds
-        hrf: bool — convolve with SPM HRF
+        hrf: bool — convolve with SPM HRF (use when fMRI preprocessed with delay=0)
         normalize: bool — per-run z-score of training embeddings
 
     Returns:
@@ -188,9 +187,10 @@ def build_embedding_arrays(emb_path: str, timing_df: pd.DataFrame,
     embeddings = np.load(emb_path).astype(np.float64)
     hrf_kernel = spm_hrf(bin_sec) if hrf else None
 
-    train_segs, test_segs = [], []
-    seg_idx = 0
-    current_run = None
+    train_segs   = []
+    test_segs    = []
+    seg_idx      = 0
+    current_run  = None
     train_run_segs: list[list] = [[]]
 
     for _, row in timing_df.iterrows():
@@ -226,7 +226,7 @@ def build_embedding_arrays(emb_path: str, timing_df: pd.DataFrame,
         all_train.append(run_data)
 
     X_train = np.vstack(all_train).astype(np.float32)
-    X_test = np.vstack(test_segs).astype(np.float32)
+    X_test  = np.vstack(test_segs).astype(np.float32)
     return X_train, X_test
 
 
@@ -238,7 +238,7 @@ def generate_leave_one_run_out(n_samples: int, run_onsets: list,
                                 random_state=None, n_runs_out: int = 1):
     """Generate leave-one-run-out cross-validation splits.
 
-    Adapted from gallantlab/voxelwise_tutorials (Apache-2.0 License).
+    Adapted from gallantlab/voxelwise_tutorials (MIT License).
 
     Args:
         n_samples: int — total number of training samples
@@ -325,7 +325,6 @@ def run_encoding_model(X_train: np.ndarray, Y_train: np.ndarray,
     log.info("  Predicting on test set ...")
     Y_hat = model.predict(X_test)
 
-    # Compute Pearson r per vertex
     n_vertices = Y_test.shape[1]
     r_vals = np.zeros(n_vertices, dtype=np.float32)
     for start in range(0, n_vertices, chunk_size):
@@ -343,7 +342,7 @@ def run_encoding_model(X_train: np.ndarray, Y_train: np.ndarray,
 
 def save_cifti(data_1d: np.ndarray, template_path: str, output_path: str,
                map_name: str = "encoding_r") -> None:
-    """Save a 1-D cortical map as a CIFTI dscalar.nii.
+    """Save a 1-D cortical map as a CIFTI dscalar.nii (59k grayordinate space).
 
     Args:
         data_1d: (n_grayordinates,) float32

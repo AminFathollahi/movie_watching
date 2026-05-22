@@ -1,11 +1,16 @@
 """
 shared/ridge_utils.py
 =====================
-Shared ridge regression utilities: LORO-CV generator and himalaya pipeline builder.
+Shared ridge regression utilities for the CF modeling pipeline.
 
-generate_leave_one_run_out is adapted from the gallantlab/voxelwise_tutorials package
-(https://github.com/gallantlab/voxelwise_tutorials, MIT License).
+generate_leave_one_run_out is imported verbatim from vendor/hedger_cf/utils.py,
+which is itself taken verbatim from vicsompy/utils.py (Hedger et al. 2025, MIT License).
+vicsompy in turn borrowed the function from the gallantlab/voxelwise_tutorials package
+and documents this in its own docstring.
 """
+
+import os
+import sys
 
 import numpy as np
 from himalaya.backend import set_backend
@@ -13,50 +18,16 @@ from himalaya.kernel_ridge import ColumnKernelizer, Kernelizer, MultipleKernelRi
 from sklearn.model_selection import check_cv
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.utils.validation import check_random_state
 
-
-def generate_leave_one_run_out(n_samples, run_onsets, random_state=None, n_runs_out=1):
-    """Generate a leave-one-run-out split for cross-validation.
-
-    Adapted from gallantlab/voxelwise_tutorials (MIT License).
-    https://github.com/gallantlab/voxelwise_tutorials
-
-    Parameters
-    ----------
-    n_samples    : int — total samples in the training set
-    run_onsets   : array of int (n_runs,) — indices of run onsets
-    random_state : None | int | RandomState
-    n_runs_out   : int — runs to leave out per fold (default 1)
-
-    Yields
-    ------
-    train : array of int
-    val   : array of int
-    """
-    random_state = check_random_state(random_state)
-    n_runs = len(run_onsets)
-    all_val_runs = np.array(
-        [random_state.permutation(n_runs) for _ in range(n_runs_out)])
-    all_samples = np.arange(n_samples)
-    runs = np.split(all_samples, run_onsets[1:])
-    if any(len(run) == 0 for run in runs):
-        raise ValueError(
-            "Some runs have no samples. Check that run_onsets does not "
-            "include any repeated index, nor the last index.")
-    for val_runs in all_val_runs.T:
-        train = np.hstack(
-            [runs[jj] for jj in range(n_runs) if jj not in val_runs])
-        val = np.hstack(
-            [runs[jj] for jj in range(n_runs) if jj in val_runs])
-        yield train, val
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vendor.hedger_cf.utils import generate_leave_one_run_out  # noqa: F401  (re-exported)
 
 
 def build_pipeline(n_samples_train, run_onsets, band_sizes, roi_names,
                    backend_engine="torch", solver="random_search",
                    n_iter=20, alpha_min=1, alpha_max=20, alpha_vals=20,
-                   n_targets_batch=200, n_alphas_batch=10,
-                   n_targets_batch_refit=200, with_mean=True, with_std=True):
+                   n_targets_batch=400, n_alphas_batch=10,
+                   n_targets_batch_refit=400, with_mean=True, with_std=True):
     """Build the himalaya ColumnKernelizer → MultipleKernelRidgeCV pipeline.
 
     Replicates vicsompy's MssCf.prep_pipeline() sequence:

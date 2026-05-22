@@ -16,4 +16,4 @@ dependencies:
   - pip
   - pip:
     - scikit-learn>=1.3
-    - himalaya==0.3.5
+    - himalaya>=0.4.0  # 0.3.5 incompatible with numpy>=2.0 (numpy.core removed)

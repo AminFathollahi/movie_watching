@@ -85,29 +85,81 @@ def build_pipeline(n_samples_train, run_onsets, band_sizes, roi_names,
     return pipeline, backend
 
 
-def project_onto_lboes(data_118k, subsurfaces):
+def build_sphere_to_grayord_lut(bm_axis, n_verts_per_hem: int = 59292) -> np.ndarray:
+    """Map full-sphere bilateral vertex indices → CIFTI grayordinate positions.
+
+    The HCP 59k_fs_LR CIFTI stores only non-medial-wall vertices (59412 total
+    out of 2×59292=118584 full-sphere positions).  Subsurface vertex indices
+    (subsurface_verts_L/R from extract_geometry.py) are in full-sphere space;
+    this LUT translates them to grayordinate row positions so that the CIFTI
+    data array can be indexed correctly.
+
+    Parameters
+    ----------
+    bm_axis         : nibabel BrainModelAxis — cortex-only slice (from
+                      preprocess_individual.preprocess_subject or nib.load+get_axis)
+    n_verts_per_hem : int — vertices per hemisphere in the full sphere (59292 for
+                      HCP 59k_fs_LR)
+
+    Returns
+    -------
+    lut : (2 * n_verts_per_hem,) int32
+        lut[sphere_vertex_idx] = grayordinate_position, or -1 for medial wall.
+        Left hemisphere: indices 0..n_verts_per_hem-1
+        Right hemisphere: indices n_verts_per_hem..2*n_verts_per_hem-1
+    """
+    lut = np.full(2 * n_verts_per_hem, -1, dtype=np.int32)
+    pos = 0
+    for name, _, model in bm_axis.iter_structures():
+        n = len(model.vertex)
+        if "CORTEX_LEFT" in name:
+            lut[model.vertex] = np.arange(pos, pos + n, dtype=np.int32)
+        elif "CORTEX_RIGHT" in name:
+            lut[n_verts_per_hem + model.vertex] = np.arange(pos, pos + n, dtype=np.int32)
+        pos += n
+    return lut
+
+
+def project_onto_lboes(data, subsurfaces, lut=None):
     """Project BOLD surface data onto LBOEs for a list of Subsurface objects.
 
     Replicates vicsompy MssCf.make_roi_data() + make_eigs() + make_dm().
 
     Parameters
     ----------
-    data_118k  : (118584, T) — bilateral surface, L=0:59292, R=59292:118584
+    data       : array — surface data.
+                 • If lut is None   : (118584, T) full bilateral sphere
+                                      (L=0:59292, R=59292:118584).
+                 • If lut is given  : (n_grayord, T) CIFTI grayordinate data
+                                      (medial wall excluded, e.g. 59412 vertices).
     subsurfaces: list of Subsurface — each must have subsurface_verts_L/R,
-                 L_eigenvectors, R_eigenvectors
+                 L_eigenvectors, R_eigenvectors, n_lboe
+    lut        : (118584,) int32 — from build_sphere_to_grayord_lut(), or None.
+                 When provided, subsurface sphere indices are translated to
+                 grayordinate positions before indexing data.
 
     Returns
     -------
     dm         : (T, sum(2*n_lboe)) — LBOE design matrix
-    band_sizes : list of int — number of columns per ROI (2 * n_lboe each)
+    band_sizes : list of int — columns per ROI (2 * n_lboe each)
     """
     dms = []
     band_sizes = []
     for sub in subsurfaces:
-        vL = sub.subsurface_verts_L
-        vR = sub.subsurface_verts_R
-        dms.append(data_118k[vL, :].T @ sub.L_eigenvectors.real)   # (T, n_lboe)
-        dms.append(data_118k[vR, :].T @ sub.R_eigenvectors.real)   # (T, n_lboe)
+        if lut is not None:
+            vL = lut[sub.subsurface_verts_L]
+            vR = lut[sub.subsurface_verts_R]
+            if np.any(vL < 0) or np.any(vR < 0):
+                bad_L = int(np.sum(vL < 0))
+                bad_R = int(np.sum(vR < 0))
+                raise ValueError(
+                    f"ROI vertices in medial wall (not in CIFTI grayordinates): "
+                    f"L={bad_L}  R={bad_R}. Check ROI/surface alignment.")
+        else:
+            vL = sub.subsurface_verts_L
+            vR = sub.subsurface_verts_R
+        dms.append(data[vL, :].T @ sub.L_eigenvectors.real)   # (T, n_lboe)
+        dms.append(data[vR, :].T @ sub.R_eigenvectors.real)   # (T, n_lboe)
         band_sizes.append(sub.n_lboe * 2)
     return np.hstack(dms), band_sizes
 

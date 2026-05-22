@@ -210,8 +210,11 @@ def _run_disk(args):
     log.info(f"Encoding model: {args.model} / {args.modality} / {config}")
     log.info(f"  fMRI: {cifti}")
 
+    run_trs_path = str(Path(args.preprocessed_dir) /
+                       f"{args.subject}_{args.fmri_suffix}_run_trs.npy")
     Y_train, Y_test, run_onsets = build_fmri_arrays(
-        cifti, timing_df, test_ids, args.bin_sec, args.tr
+        cifti, run_trs_path, timing_df, test_ids,
+        args.bin_sec, args.tr, delay_sec=args.delay_sec,
     )
     log.info(f"  Y_train={Y_train.shape}  Y_test={Y_test.shape}  "
              f"run_onsets={run_onsets}")
@@ -227,7 +230,11 @@ def _run_disk(args):
 # =============================================================================
 
 def _run_streaming(args):
-    from preprocess_individual import preprocess_subject_filtered
+    # preprocess_subject is the correct name in preprocess_individual.py.
+    # It returns (n_cortex, T_total), bm_axis, run_trs — the full continuous
+    # signal (SG→PSC→GSR). _bin_and_split_fmri then uses onset_sec + run_trs
+    # to locate each clip and apply the haemodynamic delay.
+    from preprocess_individual import preprocess_subject
 
     timing_df  = pd.read_csv(args.timing_csv)
     test_ids   = [v.strip() for v in args.test_video_ids.split(",")]
@@ -244,16 +251,17 @@ def _run_streaming(args):
         return
 
     prep_args = types.SimpleNamespace(
-        sg_filter=args.sg_filter, psc=args.psc,
-        gsr=args.gsr, z_score=args.z_score,
+        sg_filter=args.sg_filter, psc=args.psc, gsr=args.gsr,
     )
-    log.info(f"[{sub}] Preprocessing raw CIFTI (delay={args.delay_sec}s) ...")
-    data, _bm_axis, _run_trs = preprocess_subject_filtered(
-        sub, raw_dir, timing_df, args.delay_sec, args.tr, prep_args
+    log.info(f"[{sub}] Preprocessing raw CIFTI "
+             f"(SG={args.sg_filter} PSC={args.psc} GSR={args.gsr}) ...")
+    data, _bm_axis, run_trs = preprocess_subject(
+        sub, raw_dir, tr=args.tr, args=prep_args
     )
 
     Y_train, Y_test, run_onsets = _bin_and_split_fmri(
-        data, timing_df, test_ids, args.bin_sec, args.tr
+        data, timing_df, test_ids, args.bin_sec, args.tr,
+        run_trs=run_trs, delay_sec=args.delay_sec,
     )
     del data
     log.info(f"[{sub}] Y_train={Y_train.shape}  Y_test={Y_test.shape}  "

@@ -3,6 +3,43 @@
 # ====================
 # Master runner for searchlight and Glasser parcel RSA analyses.
 # Supports group-average and per-subject modes with GNU parallel.
+#
+# Usage
+# -----
+#   bash rsa/run_analysis.sh [MODE] [METHOD] [BATCH_SIZE] [START_FROM]
+#
+#   MODE        avg          Group-average RSA only (default)
+#               persubject   Per-subject RSA → group stats
+#               groupstats   Re-run group stats on existing per-subject maps
+#               all          avg + persubject + groupstats
+#
+#   METHOD      all          Searchlight + Glasser parcel RSA (default)
+#               searchlight  Searchlight only
+#               glasser      Glasser parcellation only
+#
+#   BATCH_SIZE  N            Parallel jobs (default 8)
+#   START_FROM  SUBID        Resume from this subject ID
+#
+# Examples
+#   bash rsa/run_analysis.sh avg                      # group average, both methods
+#   bash rsa/run_analysis.sh persubject all           # all subjects, streaming
+#   bash rsa/run_analysis.sh persubject searchlight 4 100610  # 4 jobs, resume
+#   bash rsa/run_analysis.sh groupstats               # re-aggregate existing maps
+#
+# Streaming vs disk mode
+#   STREAM=true  (default) — raw 7T CIFTIs preprocessed on-the-fly (SG→PSC→GSR)
+#   STREAM=false           — reads pre-saved CIFTIs from PREPROCESSED_DIR
+#
+# Per-subject midthickness surfaces
+#   Uses {MIDTHICKNESS_DIR}/{sub}.L/R.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii
+#   if present, otherwise falls back to group-average midthickness.
+#
+# Resume / skip
+#   Re-running skips any subject/model whose output CIFTI already exists.
+#   Delete the output CIFTI to force a rerun for that subject.
+#
+# Silence GNU parallel citation notice (run once)
+#   parallel --citation
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -15,7 +52,7 @@ HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
 OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
 
 # Raw 7T CIFTI files (used in streaming mode — preprocess on-the-fly)
-CIFTI_DIR="/home/amin/Research/Representation/Movie/data/individual-59k"
+CIFTI_DIR="/media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI"
 
 # ── Streaming toggle ──────────────────────────────────────────────────────────
 STREAM=true
@@ -46,7 +83,7 @@ FMRI_CIFTI_AVG="${PREPROCESSED_DIR}/group_average_${FMRI_SUFFIX}_cortex_59k.dtse
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 
 # Timing
-TIMING_CSV="/home/amin/Research/Representation/Movie/data/HCP Data/movie_timing.csv"
+TIMING_CSV="/home/amin/Research/Representation/Movie/data/movie_timing.csv"
 
 # Embeddings root
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
@@ -190,66 +227,41 @@ run_avg() {
 # =============================================================================
 
 # Worker function — exported for GNU parallel.
+# All config is read from exported env vars (set by run_persubject before
+# calling parallel) so that paths with spaces are never mishandled by parallel's
+# argument tokenisation.  Only the subject ID is passed as a positional arg.
 _run_one_subject() {
     local SUB="$1"
-    local SCRIPT_DIR="$2"
-    local CONDA_ENV="$3"
-    local PREPROCESSED_DIR="$4"
-    local FMRI_SUFFIX="$5"
-    local OUTPUT_DIR="$6"
-    local TIMING_CSV="$7"
-    local EMBEDDINGS_DIR="$8"
-    local TEMPLATE_CIFTI="$9"
-    local LEFT_SURF_DEFAULT="${10}"
-    local RIGHT_SURF_DEFAULT="${11}"
-    local GLASSER_DLABEL="${12}"
-    local WORKBENCH="${13}"
-    local MODELS_STR="${14}"
-    local BIN_SEC="${15}"
-    local DELAY_SEC="${16}"
-    local TR="${17}"
-    local K="${18}"
-    local METHOD="${19}"
-    local HRF="${20}"
-    local METHOD_ARG="${21}"
-    local STREAM="${22}"
-    local CIFTI_DIR="${23}"
-    local SG_FILTER="${24}"
-    local PSC="${25}"
-    local GSR="${26}"
-    local MIDTHICKNESS_DIR="${27}"
 
-    local BIN_SEC_INT="${BIN_SEC%.*}"
-    local LOG_DIR="${OUTPUT_DIR}/${SUB}"
+    local BIN_SEC_INT="${_RSA_BIN_SEC%.*}"
+    local LOG_DIR="${_RSA_OUTPUT_DIR}/${SUB}"
     mkdir -p "$LOG_DIR"
     local LOG="${LOG_DIR}/pipeline.log"
 
-    local HRF_FLAG=""; [ "$HRF" = "true" ] && HRF_FLAG="--hrf"
+    local HRF_FLAG=""; [ "$_RSA_HRF" = "true" ] && HRF_FLAG="--hrf"
 
     # ── Resume: derive fmri_tag + config strings (mirrors Python naming) ──────
     local FMRI_TAG_PARTS=()
-    [ "$SG_FILTER" = "true" ] && FMRI_TAG_PARTS+=("sg")
-    [ "$PSC"       = "true" ] && FMRI_TAG_PARTS+=("psc")
-    [ "$GSR"       = "true" ] && FMRI_TAG_PARTS+=("gsr")
+    [ "$_RSA_SG_FILTER" = "true" ] && FMRI_TAG_PARTS+=("sg")
+    [ "$_RSA_PSC"       = "true" ] && FMRI_TAG_PARTS+=("psc")
+    [ "$_RSA_GSR"       = "true" ] && FMRI_TAG_PARTS+=("gsr")
     local FMRI_TAG_LOCAL
     if [ ${#FMRI_TAG_PARTS[@]} -eq 0 ]; then
         FMRI_TAG_LOCAL="raw"
     else
         FMRI_TAG_LOCAL=$(IFS=_; echo "${FMRI_TAG_PARTS[*]}")
     fi
-    # In disk mode the tag comes from the pre-built suffix, not the flag combo
-    [ "$STREAM" = "false" ] && FMRI_TAG_LOCAL="$FMRI_SUFFIX"
+    [ "$_RSA_STREAM" = "false" ] && FMRI_TAG_LOCAL="$_RSA_FMRI_SUFFIX"
 
-    local DELAY_INT="${DELAY_SEC%.*}"
-    # Config directory name (searchlight includes k; Glasser does not)
-    local SL_CONFIG="k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_${METHOD}"
-    local GL_CONFIG="delay${DELAY_INT}s_bin${BIN_SEC_INT}s_${METHOD}"
+    local DELAY_INT="${_RSA_DELAY_SEC%.*}"
+    local SL_CONFIG="k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_${_RSA_METHOD}"
+    local GL_CONFIG="delay${DELAY_INT}s_bin${BIN_SEC_INT}s_${_RSA_METHOD}"
 
-    # Per-subject midthickness surfaces (fall back to group-average if not found)
-    local LEFT_SURF="$LEFT_SURF_DEFAULT"
-    local RIGHT_SURF="$RIGHT_SURF_DEFAULT"
-    local SUB_L="${MIDTHICKNESS_DIR}/${SUB}.L.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
-    local SUB_R="${MIDTHICKNESS_DIR}/${SUB}.R.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
+    # ── Per-subject midthickness (fall back to group-average) ─────────────────
+    local LEFT_SURF="$_RSA_LEFT_SURFACE"
+    local RIGHT_SURF="$_RSA_RIGHT_SURFACE"
+    local SUB_L="${_RSA_MIDTHICKNESS_DIR}/${SUB}.L.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
+    local SUB_R="${_RSA_MIDTHICKNESS_DIR}/${SUB}.R.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
     if [ -f "$SUB_L" ] && [ -f "$SUB_R" ]; then
         LEFT_SURF="$SUB_L"
         RIGHT_SURF="$SUB_R"
@@ -258,91 +270,90 @@ _run_one_subject() {
             | tee -a "$LOG"
     fi
 
-    # Build fMRI input flags based on mode
+    # ── fMRI input flags ───────────────────────────────────────────────────────
     local FMRI_FLAGS
-    if [ "$STREAM" = "true" ]; then
-        local SG_FLAG="";  [ "$SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
-        local PSC_FLAG=""; [ "$PSC"       = "true" ] && PSC_FLAG="--psc"
-        local GSR_FLAG="--gsr";     [ "$GSR"     = "false" ] && GSR_FLAG="--no-gsr"
-        # No Z-score flag here, it's structurally enforced in rsa_utils.py
-        FMRI_FLAGS="--raw-dir ${CIFTI_DIR} $SG_FLAG $PSC_FLAG $GSR_FLAG"
+    if [ "$_RSA_STREAM" = "true" ]; then
+        local SG_FLAG="";  [ "$_RSA_SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
+        local PSC_FLAG=""; [ "$_RSA_PSC"       = "true" ] && PSC_FLAG="--psc"
+        local GSR_FLAG="--gsr"; [ "$_RSA_GSR" = "false" ] && GSR_FLAG="--no-gsr"
+        FMRI_FLAGS="--raw-dir ${_RSA_CIFTI_DIR} $SG_FLAG $PSC_FLAG $GSR_FLAG"
     else
-        local FMRI_PATH="${PREPROCESSED_DIR}/${SUB}_${FMRI_SUFFIX}_cortex_59k.dtseries.nii"
+        local FMRI_PATH="${_RSA_PREPROCESSED_DIR}/${SUB}_${_RSA_FMRI_SUFFIX}_cortex_59k.dtseries.nii"
         if [ ! -f "$FMRI_PATH" ]; then
             echo "[$(date +%H:%M:%S)] ${SUB}: no preprocessed CIFTI — run preprocess_individual.py first" \
                 | tee -a "$LOG"
             return 1
         fi
-        FMRI_FLAGS="--preprocessed-dir ${PREPROCESSED_DIR} --fmri-suffix ${FMRI_SUFFIX}"
+        FMRI_FLAGS="--preprocessed-dir ${_RSA_PREPROCESSED_DIR} --fmri-suffix ${_RSA_FMRI_SUFFIX}"
     fi
 
-    echo "[$(date +%H:%M:%S)] Starting ${SUB} (stream=${STREAM})" | tee -a "$LOG"
+    echo "[$(date +%H:%M:%S)] Starting ${SUB} (stream=${_RSA_STREAM})" | tee -a "$LOG"
 
-    IFS=';' read -ra MODEL_ENTRIES <<< "$MODELS_STR"
+    IFS=';' read -ra MODEL_ENTRIES <<< "$_RSA_MODELS_STR"
     for MODEL_ENTRY in "${MODEL_ENTRIES[@]}"; do
         IFS=':' read -r MODEL_NAME MODALITIES_ENTRY <<< "$MODEL_ENTRY"
         IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
 
         for MOD in "${MODS[@]}"; do
-            local EMB="${EMBEDDINGS_DIR}/${MODEL_NAME}/${BIN_SEC_INT}s/${MODEL_NAME}_${MOD}.npy"
+            local EMB="${_RSA_EMBEDDINGS_DIR}/${MODEL_NAME}/${BIN_SEC_INT}s/${MODEL_NAME}_${MOD}.npy"
             if [ ! -f "$EMB" ]; then
                 echo "[$(date +%H:%M:%S)] ${SUB}: SKIP ${MODEL_NAME}/${MOD} — no embedding" \
                     | tee -a "$LOG"
                 continue
             fi
 
-            if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; then
-                local SL_OUT="${OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${METHOD}_maps.dscalar.nii"
+            if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "searchlight" ]; then
+                local SL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_maps.dscalar.nii"
                 if [ -f "$SL_OUT" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: searchlight ${MODEL_NAME}/${MOD} already done — skipping" \
                         | tee -a "$LOG"
                 else
                     # shellcheck disable=SC2086
-                    conda run -n "$CONDA_ENV" python \
-                        "${SCRIPT_DIR}/run_searchlight.py" \
+                    conda run -n "$_RSA_CONDA_ENV" python \
+                        "${_RSA_SCRIPT_DIR}/run_searchlight.py" \
                         $FMRI_FLAGS \
-                        --timing-csv       "$TIMING_CSV" \
-                        --embeddings-dir   "$EMBEDDINGS_DIR" \
-                        --template-cifti   "$TEMPLATE_CIFTI" \
-                        --output-dir       "$OUTPUT_DIR" \
+                        --timing-csv       "$_RSA_TIMING_CSV" \
+                        --embeddings-dir   "$_RSA_EMBEDDINGS_DIR" \
+                        --template-cifti   "$_RSA_TEMPLATE_CIFTI" \
+                        --output-dir       "$_RSA_OUTPUT_DIR" \
                         --subject          "$SUB" \
                         --model            "$MODEL_NAME" \
                         --modality         "$MOD" \
-                        --k                "$K" \
-                        --bin-sec          "$BIN_SEC" \
-                        --delay-sec        "$DELAY_SEC" \
-                        --method           "$METHOD" \
-                        --tr               "$TR" \
+                        --k                "$_RSA_K" \
+                        --bin-sec          "$_RSA_BIN_SEC" \
+                        --delay-sec        "$_RSA_DELAY_SEC" \
+                        --method           "$_RSA_METHOD" \
+                        --tr               "$_RSA_TR" \
                         --left-surface     "$LEFT_SURF" \
                         --right-surface    "$RIGHT_SURF" \
-                        --workbench        "$WORKBENCH" \
+                        --workbench        "$_RSA_WORKBENCH" \
                         $HRF_FLAG \
                         >> "$LOG" 2>&1
                 fi
             fi
 
-            if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "glasser" ]; then
-                local GL_OUT="${OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${GL_CONFIG}/glasser_rsa_${FMRI_TAG_LOCAL}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${METHOD}_maps.dscalar.nii"
+            if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "glasser" ]; then
+                local GL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${GL_CONFIG}/glasser_rsa_${FMRI_TAG_LOCAL}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_maps.dscalar.nii"
                 if [ -f "$GL_OUT" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: glasser ${MODEL_NAME}/${MOD} already done — skipping" \
                         | tee -a "$LOG"
                 else
                     # shellcheck disable=SC2086
-                    conda run -n "$CONDA_ENV" python \
-                        "${SCRIPT_DIR}/run_glasser.py" \
+                    conda run -n "$_RSA_CONDA_ENV" python \
+                        "${_RSA_SCRIPT_DIR}/run_glasser.py" \
                         $FMRI_FLAGS \
-                        --timing-csv       "$TIMING_CSV" \
-                        --embeddings-dir   "$EMBEDDINGS_DIR" \
-                        --template-cifti   "$TEMPLATE_CIFTI" \
-                        --output-dir       "$OUTPUT_DIR" \
+                        --timing-csv       "$_RSA_TIMING_CSV" \
+                        --embeddings-dir   "$_RSA_EMBEDDINGS_DIR" \
+                        --template-cifti   "$_RSA_TEMPLATE_CIFTI" \
+                        --output-dir       "$_RSA_OUTPUT_DIR" \
                         --subject          "$SUB" \
                         --model            "$MODEL_NAME" \
                         --modality         "$MOD" \
-                        --bin-sec          "$BIN_SEC" \
-                        --delay-sec        "$DELAY_SEC" \
-                        --method           "$METHOD" \
-                        --tr               "$TR" \
-                        --glasser-dlabel   "$GLASSER_DLABEL" \
+                        --bin-sec          "$_RSA_BIN_SEC" \
+                        --delay-sec        "$_RSA_DELAY_SEC" \
+                        --method           "$_RSA_METHOD" \
+                        --tr               "$_RSA_TR" \
+                        --glasser-dlabel   "$_RSA_GLASSER_DLABEL" \
                         $HRF_FLAG \
                         >> "$LOG" 2>&1
                 fi
@@ -352,8 +363,7 @@ _run_one_subject() {
 
     local STATUS=$?
 
-    # Backup cleanup
-    local CACHE_DIR="${OUTPUT_DIR}/_geodesic_cache"
+    local CACHE_DIR="${_RSA_OUTPUT_DIR}/_geodesic_cache"
     rm -f "${CACHE_DIR}/${SUB}_left_geodesic.dconn.nii"
     rm -f "${CACHE_DIR}/${SUB}_right_geodesic.dconn.nii"
 
@@ -385,31 +395,46 @@ run_persubject() {
     N_TOTAL=$(echo "$SUBJECTS" | wc -l)
     log "  Processing ${N_TOTAL} subjects ..."
 
+    # Export all config as _RSA_-prefixed env vars so _run_one_subject reads
+    # them from the environment.  GNU parallel inherits exported vars, so no
+    # positional arg passing is needed — paths with spaces work correctly.
     local MODELS_STR
     MODELS_STR=$(IFS=';'; echo "${MODELS[*]}")
+    export _RSA_SCRIPT_DIR="$SCRIPT_DIR"
+    export _RSA_CONDA_ENV="$CONDA_ENV"
+    export _RSA_PREPROCESSED_DIR="$PREPROCESSED_DIR"
+    export _RSA_FMRI_SUFFIX="$FMRI_SUFFIX"
+    export _RSA_OUTPUT_DIR="$OUTPUT_DIR"
+    export _RSA_TIMING_CSV="$TIMING_CSV"
+    export _RSA_EMBEDDINGS_DIR="$EMBEDDINGS_DIR"
+    export _RSA_TEMPLATE_CIFTI="$TEMPLATE_CIFTI"
+    export _RSA_LEFT_SURFACE="$LEFT_SURFACE"
+    export _RSA_RIGHT_SURFACE="$RIGHT_SURFACE"
+    export _RSA_GLASSER_DLABEL="$GLASSER_DLABEL"
+    export _RSA_WORKBENCH="$WORKBENCH"
+    export _RSA_MODELS_STR="$MODELS_STR"
+    export _RSA_BIN_SEC="$BIN_SEC"
+    export _RSA_DELAY_SEC="$DELAY_SEC"
+    export _RSA_TR="$TR"
+    export _RSA_K="$K"
+    export _RSA_METHOD="$METHOD"
+    export _RSA_HRF="$HRF"
+    export _RSA_METHOD_ARG="$METHOD_ARG"
+    export _RSA_STREAM="$STREAM"
+    export _RSA_CIFTI_DIR="$CIFTI_DIR"
+    export _RSA_SG_FILTER="$SG_FILTER"
+    export _RSA_PSC="$PSC"
+    export _RSA_GSR="$GSR"
+    export _RSA_MIDTHICKNESS_DIR="$MIDTHICKNESS_DIR"
 
     if command -v parallel &>/dev/null; then
         echo "$SUBJECTS" | parallel --jobs "$BATCH_SIZE" --line-buffer \
-            _run_one_subject {} \
-            "$SCRIPT_DIR" "$CONDA_ENV" "$PREPROCESSED_DIR" "$FMRI_SUFFIX" "$OUTPUT_DIR" \
-            "$TIMING_CSV" "$EMBEDDINGS_DIR" "$TEMPLATE_CIFTI" \
-            "$LEFT_SURFACE" "$RIGHT_SURFACE" "$GLASSER_DLABEL" \
-            "$WORKBENCH" "$MODELS_STR" "$BIN_SEC" "$DELAY_SEC" "$TR" \
-            "$K" "$METHOD" "$HRF" "$METHOD_ARG" \
-            "$STREAM" "$CIFTI_DIR" "$SG_FILTER" "$PSC" "$GSR" \
-            "$MIDTHICKNESS_DIR"
+            _run_one_subject {}
     else
         log "GNU parallel not found — running sequentially"
         log "  (install with: conda install -c conda-forge parallel)"
         for SUB in $SUBJECTS; do
-            _run_one_subject "$SUB" \
-                "$SCRIPT_DIR" "$CONDA_ENV" "$PREPROCESSED_DIR" "$FMRI_SUFFIX" "$OUTPUT_DIR" \
-                "$TIMING_CSV" "$EMBEDDINGS_DIR" "$TEMPLATE_CIFTI" \
-                "$LEFT_SURFACE" "$RIGHT_SURFACE" "$GLASSER_DLABEL" \
-                "$WORKBENCH" "$MODELS_STR" "$BIN_SEC" "$DELAY_SEC" "$TR" \
-                "$K" "$METHOD" "$HRF" "$METHOD_ARG" \
-                "$STREAM" "$CIFTI_DIR" "$SG_FILTER" "$PSC" "$GSR" \
-                "$MIDTHICKNESS_DIR"
+            _run_one_subject "$SUB"
         done
     fi
 

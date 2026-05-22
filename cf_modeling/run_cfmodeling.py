@@ -79,7 +79,8 @@ from himalaya.scoring import r2_score, r2_score_split
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from shared.ridge_utils import project_onto_lboes, build_pipeline, fit_null_r2
+from shared.ridge_utils import (project_onto_lboes, build_pipeline, fit_null_r2,
+                                build_sphere_to_grayord_lut)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -216,9 +217,18 @@ def _save_cifti(arr: np.ndarray, name: str, template_cifti: str, cifti_dir: str)
 # =============================================================================
 
 def _run_pipeline(args, cortex_data: np.ndarray, run_trs: list,
-                  out_dir: str, cifti_dir: str | None,
+                  bm_axis, out_dir: str, cifti_dir: str | None,
                   subject_tag: str = ""):
-    """Run 02→04 pipeline on pre-loaded (n_cortex, T_total) data."""
+    """Run 02→04 pipeline on pre-loaded (n_grayord, T_total) data.
+
+    Parameters
+    ----------
+    cortex_data : (n_grayord, T_total) float32 — CIFTI grayordinate data (59412
+                  vertices for HCP 59k, medial wall excluded).
+    bm_axis     : nibabel BrainModelAxis — used to build a sphere→grayord LUT so
+                  that Subsurface vertex indices (full 59k sphere space) are mapped
+                  to the correct grayordinate rows before LBOE projection.
+    """
     prefix = f"[{subject_tag}] " if subject_tag else ""
 
     roi_root  = (f"{args.output_base}/{args.mode}/"
@@ -233,6 +243,13 @@ def _run_pipeline(args, cortex_data: np.ndarray, run_trs: list,
     log.info(f"{prefix}  [{args.roi_b}] L={sub_b.L_eigenvectors.shape}  "
              f"R={sub_b.R_eigenvectors.shape}")
 
+    # Build sphere-vertex → grayordinate-row LUT.
+    # Subsurface verts are in full 59k sphere space (L: 0..59291, R: 59292..118583).
+    # CIFTI data has only 59412 grayordinates (medial wall excluded).
+    # Without this LUT, indexing data[verts_L, :] retrieves the wrong rows.
+    log.info(f"{prefix}Building sphere→grayordinate LUT ...")
+    lut = build_sphere_to_grayord_lut(bm_axis)
+
     log.info(f"{prefix}Splitting train / test (n_test_trs={args.n_test_trs}) ...")
     train_data, test_data, run_onsets = split_train_test(
         cortex_data, run_trs, args.n_test_trs)
@@ -241,16 +258,20 @@ def _run_pipeline(args, cortex_data: np.ndarray, run_trs: list,
              f"run_onsets: {run_onsets}")
 
     log.info(f"{prefix}Projecting onto LBOEs ...")
-    X_train, band_sizes = project_onto_lboes(train_data, [sub_a, sub_b])
-    X_test,  _          = project_onto_lboes(test_data,  [sub_a, sub_b])
+    X_train, band_sizes = project_onto_lboes(train_data, [sub_a, sub_b], lut=lut)
+    X_test,  _          = project_onto_lboes(test_data,  [sub_a, sub_b], lut=lut)
     log.info(f"{prefix}  X_train={X_train.shape}  X_test={X_test.shape}")
     log.info(f"{prefix}  band_sizes: {args.roi_a}={band_sizes[0]}  "
              f"{args.roi_b}={band_sizes[1]}")
 
     Y_train     = train_data.T.astype(np.float32)
     Y_test      = test_data.T.astype(np.float32)
-    mean_a_test = test_data[sub_a.subsurface_verts, :].mean(axis=0).astype(np.float32)
-    mean_b_test = test_data[sub_b.subsurface_verts, :].mean(axis=0).astype(np.float32)
+    # Null model regressors: mean timecourse of each ROI on the test set.
+    # subsurface_verts are bilateral sphere indices → translate via lut.
+    lut_a = lut[sub_a.subsurface_verts]
+    lut_b = lut[sub_b.subsurface_verts]
+    mean_a_test = test_data[lut_a, :].mean(axis=0).astype(np.float32)
+    mean_b_test = test_data[lut_b, :].mean(axis=0).astype(np.float32)
     del train_data, test_data
 
     log.info(f"{prefix}Fitting banded ridge ...")
@@ -357,16 +378,17 @@ def _run_disk(args):
     log.info(f"  CIFTI: {os.path.basename(cifti)}")
     log.info("=" * 60)
 
-    img       = nib.load(cifti)
-    full_data = img.get_fdata(dtype=np.float32)   # (T, n_cortex)
-    cortex_data = full_data.T                      # (n_cortex, T)
+    img         = nib.load(cifti)
+    bm_axis     = img.header.get_axis(1)           # BrainModelAxis (for LUT)
+    full_data   = img.get_fdata(dtype=np.float32)  # (T, n_cortex)
+    cortex_data = full_data.T                      # (n_cortex=59412, T)
     del full_data
     log.info(f"  Loaded: {cortex_data.shape}")
 
     run_trs = np.load(trs).tolist()
     log.info(f"  run_trs: {run_trs}  (total: {sum(run_trs)} TRs)")
 
-    _run_pipeline(args, cortex_data, run_trs, out_dir, cifti_dir,
+    _run_pipeline(args, cortex_data, run_trs, bm_axis, out_dir, cifti_dir,
                   subject_tag=subject if args.mode == "per_subject" else "")
     log.info(f"[{subject}] Done.")
 
@@ -376,7 +398,9 @@ def _run_disk(args):
 # =============================================================================
 
 def _run_streaming(args):
-    from preprocess_individual import preprocess_subject_fullrun
+    # preprocess_subject is the correct name (preprocess_individual.py has
+    # no 'preprocess_subject_fullrun'); it returns (n_cortex, T), bm_axis, run_trs.
+    from preprocess_individual import preprocess_subject
 
     sub      = args.subject
     roi_root = f"{args.output_base}/per_subject/{args.roi_a}_{args.roi_b}"
@@ -394,17 +418,17 @@ def _run_streaming(args):
     log.info("=" * 60)
 
     prep_args = types.SimpleNamespace(
-        sg_filter=args.sg_filter, psc=args.psc,
-        gsr=args.gsr, z_score=args.z_score,
+        sg_filter=args.sg_filter, psc=args.psc, gsr=args.gsr,
     )
-    log.info(f"[{sub}] Preprocessing raw CIFTI ...")
-    cortex_data, _bm_axis, run_trs_arr = preprocess_subject_fullrun(
+    log.info(f"[{sub}] Preprocessing raw CIFTI (SG={args.sg_filter} PSC={args.psc} "
+             f"GSR={args.gsr}) ...")
+    cortex_data, bm_axis, run_trs_arr = preprocess_subject(
         sub, Path(args.raw_dir), tr=args.tr, args=prep_args
     )
     run_trs = run_trs_arr.tolist()
     log.info(f"[{sub}] Preprocessed: {cortex_data.shape}  run_trs: {run_trs}")
 
-    _run_pipeline(args, cortex_data, run_trs, out_dir, cifti_dir=None,
+    _run_pipeline(args, cortex_data, run_trs, bm_axis, out_dir, cifti_dir=None,
                   subject_tag=sub)
     del cortex_data
     log.info(f"[{sub}] Done.")

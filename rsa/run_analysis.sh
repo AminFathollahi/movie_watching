@@ -372,12 +372,17 @@ run_persubject() {
     log "=== Per-subject RSA (${MODE_TAG}, ${BATCH_SIZE} parallel jobs, ${#MODELS[@]} models) ==="
 
     local SUBJECTS
-    SUBJECTS=$(cat "$SUBJECTS_LIST")
+    # Strip full-line comments (^#), inline comments (#...), blank lines;
+    # take only the first field (subject ID) so inline notes don't become tokens.
+    SUBJECTS=$(grep -v '^\s*#' "$SUBJECTS_LIST" \
+               | sed 's/#.*//' \
+               | awk '{print $1}' \
+               | grep -v '^$')
     if [ -n "$START_FROM" ]; then
         SUBJECTS=$(echo "$SUBJECTS" | awk "/$START_FROM/{found=1} found{print}")
     fi
     local N_TOTAL
-    N_TOTAL=$(echo "$SUBJECTS" | wc -w)
+    N_TOTAL=$(echo "$SUBJECTS" | wc -l)
     log "  Processing ${N_TOTAL} subjects ..."
 
     local MODELS_STR

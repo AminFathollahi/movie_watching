@@ -159,6 +159,14 @@ def _compute_geodesic_dconn(surface_path: str, workbench: str,
     log.info(f"  dconn saved: {dconn_path.name}")
 
 
+def _dconn_is_complete(dconn_path: Path, min_size_gb: float = 1.0) -> bool:
+    """Return True if a dconn.nii file looks fully written (>= min_size_gb)."""
+    try:
+        return dconn_path.stat().st_size >= int(min_size_gb * 1024 ** 3)
+    except OSError:
+        return False
+
+
 def _extract_knn_from_dconn(dconn_path: Path, k: int,
                               chunk_size: int = _DCONN_CHUNK) -> np.ndarray:
     """Extract k-nearest neighbours from a dconn.nii file in row chunks."""
@@ -201,7 +209,16 @@ def get_neighbors(surface_path: str, workbench: str, subject: str,
         log.info(f"  k-NN cache hit: {npy_path.name}")
         return np.load(str(npy_path))
 
-    # Need to compute from (or load existing) dconn
+    # Need to compute from (or load existing) dconn.
+    # Guard against partially-written files left by a previous crashed run:
+    # if the dconn exists but is too small to be complete, delete and recompute.
+    if dconn_path.exists() and not _dconn_is_complete(dconn_path):
+        log.warning(
+            f"  dconn appears incomplete ({dconn_path.stat().st_size / 1e9:.2f} GB) "
+            f"— deleting and recomputing: {dconn_path.name}"
+        )
+        dconn_path.unlink()
+
     _compute_geodesic_dconn(surface_path, workbench, dconn_path)
     neighbors = _extract_knn_from_dconn(dconn_path, k)
     np.save(str(npy_path), neighbors)

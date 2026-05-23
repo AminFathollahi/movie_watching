@@ -307,6 +307,11 @@ _run_one_subject() {
 
     echo "[$(date +%H:%M:%S)] Starting ${SUB} (stream=${_RSA_STREAM})" | tee -a "$LOG"
 
+    # Track any conda run failure across all models/modalities.
+    # IMPORTANT: do NOT use `local STATUS=$?` after the loops — a false-condition
+    # `if` block with no `else` resets $? to 0 and would mask real failures.
+    local STATUS=0
+
     IFS=';' read -ra MODEL_ENTRIES <<< "$_RSA_MODELS_STR"
     for MODEL_ENTRY in "${MODEL_ENTRIES[@]}"; do
         IFS=':' read -r MODEL_NAME MODALITIES_ENTRY <<< "$MODEL_ENTRY"
@@ -346,7 +351,7 @@ _run_one_subject() {
                         --right-surface    "$RIGHT_SURF" \
                         --workbench        "$_RSA_WORKBENCH" \
                         $HRF_FLAG \
-                        >> "$LOG" 2>&1
+                        >> "$LOG" 2>&1 || STATUS=$?
                 fi
             fi
 
@@ -373,13 +378,11 @@ _run_one_subject() {
                         --tr               "$_RSA_TR" \
                         --glasser-dlabel   "$_RSA_GLASSER_DLABEL" \
                         $HRF_FLAG \
-                        >> "$LOG" 2>&1
+                        >> "$LOG" 2>&1 || STATUS=$?
                 fi
             fi
         done
     done
-
-    local STATUS=$?
 
     local CACHE_DIR="${_RSA_OUTPUT_DIR}/_geodesic_cache"
     rm -f "${CACHE_DIR}/${SUB}_left_geodesic.dconn.nii"

@@ -12,14 +12,14 @@ separate because they have different I/O patterns.
 Input modes
 -----------
 DISK MODE (--preprocessed-dir + --fmri-suffix):
-  Reads a pre-saved CIFTI (full-run mode: SG→PSC→GSR→zscore per run) and
-  the companion run_trs.npy from disk.  The files are expected at:
+  Reads a pre-saved CIFTI (full-run mode: SG→PSC→GSR per run, produced by
+  preprocess_individual.py) and the companion run_trs.npy from disk.
     {preprocessed_dir}/{subject}_{fmri_suffix}_cortex_59k.dtseries.nii
     {preprocessed_dir}/{subject}_{fmri_suffix}_run_trs.npy
 
 STREAMING MODE (--raw-dir):
-  Preprocesses the subject's raw 7T CIFTI on-the-fly (full-run mode:
-  SG→PSC→GSR→zscore per run).  No preprocessed CIFTI is saved.
+  Preprocesses the subject's raw 7T CIFTI on-the-fly (SG→PSC→GSR per run).
+  No preprocessed CIFTI is saved.
   Per-subject only — group_average requires pre-averaged data on disk.
 
 Both modes are parallel-safe: each call processes one (subject, ROI pair)
@@ -41,9 +41,9 @@ Usage (disk mode — group average):
       --mode group_average \\
       --roi-a A1 --roi-b V1 \\
       --preprocessed-dir /path/to/preprocessed \\
-      --fmri-suffix sg_psc_gsr_zscore \\
+      --fmri-suffix sg_psc_gsr \\
       --output-base /path/to/outputs/cf_modeling \\
-      --template-cifti /path/to/group_average_..._cortex_59k.dtseries.nii
+      --template-cifti /path/to/group_average_sg_psc_gsr_cortex_59k.dtseries.nii
 
 Usage (disk mode — per subject):
   python run_cfmodeling.py \\
@@ -51,7 +51,7 @@ Usage (disk mode — per subject):
       --roi-a A5 --roi-b FFC \\
       --subject 100610 \\
       --preprocessed-dir /path/to/preprocessed \\
-      --fmri-suffix sg_psc_gsr_zscore \\
+      --fmri-suffix sg_psc_gsr \\
       --output-base /path/to/outputs/cf_modeling
 
 Usage (streaming mode — per subject):
@@ -61,7 +61,7 @@ Usage (streaming mode — per subject):
       --subject 100610 \\
       --raw-dir /path/to/raw_ciftis \\
       --output-base /path/to/outputs/cf_modeling \\
-      [--sg-filter] [--psc] [--no-gsr] [--no-z-score]
+      [--sg-filter] [--psc] [--no-gsr]
 """
 
 import argparse
@@ -120,8 +120,9 @@ def parse_args():
                      help="[disk mode] Directory of pre-saved CIFTIs (full-run preprocessing). "
                           "Files: {dir}/{subject}_{fmri-suffix}_cortex_59k.dtseries.nii "
                           "and {dir}/{subject}_{fmri-suffix}_run_trs.npy")
-    inp.add_argument("--fmri-suffix", default="sg_psc_gsr_zscore", dest="fmri_suffix",
-                     help="[disk mode] Preprocessing suffix in the CIFTI filename.")
+    inp.add_argument("--fmri-suffix", default="sg_psc_gsr", dest="fmri_suffix",
+                     help="[disk mode] Preprocessing suffix in the CIFTI filename "
+                          "(must match preprocess_individual.py output, e.g. sg_psc_gsr).")
     inp.add_argument("--raw-dir", default=None, dest="raw_dir",
                      help="[streaming mode] Root directory of raw 7T CIFTI dtseries files. "
                           "Preprocesses on-the-fly; no CIFTI is saved.  "

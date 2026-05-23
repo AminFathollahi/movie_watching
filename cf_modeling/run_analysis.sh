@@ -53,8 +53,8 @@ Z_SCORE=true      # --z_score / --no-z_score
 FMRI_OUT_DIR="/home/amin/Research/Representation/Movie/outputs/preprocessed"
 
 # Preprocessing suffix (disk mode only — must match what preprocess_individual.py used)
-# Default: --sg-filter --psc --gsr --z-score  →  sg_psc_gsr_zscore
-FMRI_SUFFIX="sg_psc_gsr_zscore"
+# preprocess_individual.py suffix: SG→PSC→GSR → sg_psc_gsr  (no zscore step)
+FMRI_SUFFIX="sg_psc_gsr"
 
 # Derived paths — group-average CIFTI is used as template for CIFTI saving
 FMRI_GROUP_CIFTI="${FMRI_OUT_DIR}/group_average_${FMRI_SUFFIX}_cortex_59k.dtseries.nii"
@@ -213,6 +213,7 @@ run_persubject_analysis() {
         log "GNU parallel not found — running sequentially"
         log "(install: conda install -c conda-forge parallel)"
         for SUB in $SUBJECTS; do
+            _run_one_subject "$SUB" \
                 "$SCRIPT_DIR" "$CONDA_ENV" "$OUTPUT_BASE" \
                 "$ROI_A" "$ROI_B" "$FMRI_OUT_DIR" "$FMRI_SUFFIX" \
                 "$STREAM" "$CIFTI_DIR" "$SG_FILTER" "$PSC" "$GSR" "$Z_SCORE"

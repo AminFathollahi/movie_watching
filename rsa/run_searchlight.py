@@ -159,8 +159,15 @@ def _compute_geodesic_dconn(surface_path: str, workbench: str,
     log.info(f"  dconn saved: {dconn_path.name}")
 
 
-def _dconn_is_complete(dconn_path: Path, min_size_gb: float = 1.0) -> bool:
-    """Return True if a dconn.nii file looks fully written (>= min_size_gb)."""
+def _dconn_is_complete(dconn_path: Path, min_size_gb: float = 13.0) -> bool:
+    """Return True if a dconn.nii file looks fully written (>= min_size_gb).
+
+    For a 59k surface, the expected dconn size is ~14 GB
+    (59292 × 59292 × 4 bytes).  A threshold of 13 GB (≈93 % of expected)
+    reliably catches partial files written by a crashed wb_command.
+    The previous default of 1 GB was too permissive — a wb_command that ran
+    for ~6 min before being killed could already have written >1 GB.
+    """
     try:
         return dconn_path.stat().st_size >= int(min_size_gb * 1024 ** 3)
     except OSError:
@@ -200,18 +207,44 @@ def _extract_knn_from_dconn(dconn_path: Path, k: int,
 
 def get_neighbors(surface_path: str, workbench: str, subject: str,
                   hem: str, k: int, cache_dir: Path) -> np.ndarray:
-    """Return (n_surf_verts, k) int32 k-NN array, using a two-level cache."""
+    """Return (n_surf_verts, k) int32 k-NN array, using a two-level cache.
+
+    Cache lookup order
+    ------------------
+    1. Exact match  : ``{subject}_{hem}_neighbors_k{k}.npy``  → load directly.
+    2. k_max derivation : any ``_neighbors_k{k_max}.npy`` with k_max > k exists
+       → slice ``[:, :k]``, save as exact-match file, return.  This means a
+       single ``precompute_neighbors.py`` run at k=150 covers all k ≤ 150.
+    3. Geodesic fallback : compute dconn → extract k-NN → save → delete dconn.
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     npy_path   = cache_dir / f"{subject}_{hem}_neighbors_k{k}.npy"
     dconn_path = cache_dir / f"{subject}_{hem}_geodesic.dconn.nii"
 
+    # ── Level 1: exact k cache ─────────────────────────────────────────────────
     if npy_path.exists():
         log.info(f"  k-NN cache hit: {npy_path.name}")
         return np.load(str(npy_path))
 
-    # Need to compute from (or load existing) dconn.
-    # Guard against partially-written files left by a previous crashed run:
-    # if the dconn exists but is too small to be complete, delete and recompute.
+    # ── Level 2: derive from a larger-k cache (avoids rerunning wb_command) ────
+    k_max_val, k_max_path = 0, None
+    for candidate in cache_dir.glob(f"{subject}_{hem}_neighbors_k*.npy"):
+        try:
+            k_cand = int(candidate.stem.rsplit("_k", 1)[-1])
+        except ValueError:
+            continue
+        if k_cand > k and k_cand > k_max_val:
+            k_max_val, k_max_path = k_cand, candidate
+
+    if k_max_path is not None:
+        log.info(f"  Deriving k={k} from k={k_max_val} cache: {k_max_path.name}")
+        neighbors = np.ascontiguousarray(np.load(str(k_max_path))[:, :k])
+        np.save(str(npy_path), neighbors)
+        log.info(f"  k-NN saved (derived): {npy_path.name}")
+        return neighbors
+
+    # ── Level 3: geodesic fallback ─────────────────────────────────────────────
+    # Guard against partially-written dconn left by a previous crashed run.
     if dconn_path.exists() and not _dconn_is_complete(dconn_path):
         log.warning(
             f"  dconn appears incomplete ({dconn_path.stat().st_size / 1e9:.2f} GB) "

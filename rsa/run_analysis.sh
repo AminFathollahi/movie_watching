@@ -9,6 +9,10 @@
 #   bash rsa/run_analysis.sh [MODE] [METHOD] [BATCH_SIZE] [START_FROM]
 #
 #   MODE        avg          Group-average RSA only (default)
+#               neighbors    Pre-compute geodesic k-NN caches for all subjects.
+#                            Run this BEFORE persubject to front-load the
+#                            ~80 min/hemisphere wb_command step.  Cached .npy
+#                            files are reused by any future k ≤ K run too.
 #               persubject   Per-subject RSA → group stats
 #               groupstats   Re-run group stats on existing per-subject maps
 #               all          avg + persubject + groupstats
@@ -16,15 +20,38 @@
 #   METHOD      all          Searchlight + Glasser parcel RSA (default)
 #               searchlight  Searchlight only
 #               glasser      Glasser parcellation only
+#               (ignored for 'neighbors' mode)
 #
-#   BATCH_SIZE  N            Parallel jobs (default 8)
+#   BATCH_SIZE  N            Parallel subjects (default 4)
+#                            neighbors mode: each subject spawns 2 wb_command
+#                            calls (L+R, sequential) — set to nproc/4 so each
+#                            wb_command gets ~4 cores.
+#                            persubject mode: N_JOBS_PER_SUBJECT = nproc/N
+#                            searchlight threads per subject.
 #   START_FROM  SUBID        Resume from this subject ID
 #
-# Examples
-#   bash rsa/run_analysis.sh avg                      # group average, both methods
-#   bash rsa/run_analysis.sh persubject all           # all subjects, streaming
-#   bash rsa/run_analysis.sh persubject searchlight 4 100610  # 4 jobs, resume
-#   bash rsa/run_analysis.sh groupstats               # re-aggregate existing maps
+# Recommended workflow
+#   # 1. Pre-build all k=150 neighbour caches (run once; ~1.5 days at B=4)
+#   bash rsa/run_analysis.sh neighbors all 4
+#
+#   # 2. Per-subject searchlight (all cache-hits → predictable ~100 min/subject)
+#   bash rsa/run_analysis.sh persubject searchlight 4
+#
+#   # 3. Re-run group stats after adding subjects
+#   bash rsa/run_analysis.sh groupstats
+#
+#   # Other
+#   bash rsa/run_analysis.sh avg                           # group average only
+#   bash rsa/run_analysis.sh persubject searchlight 4 100610  # resume from sub
+#
+# Performance notes
+#   With 32 cores and per-vertex sequential time ~0.5 s (k=150, Spearman):
+#     BATCH=1  n_jobs=32 → ~28 min/subject  (lowest per-subject latency)
+#     BATCH=4  n_jobs=8  → ~55 min/subject  (4× throughput, balanced)
+#     BATCH=8  n_jobs=4  → ~92 min/subject  (8× throughput, highest total CPUs)
+#   Total wall time (~170 subjects) ≈ 65-80 hours at any batch size.
+#   k' < K: if k=150 .npy files exist, k'=100 (or any k'<150) is derived
+#   instantly from the k=150 cache (no wb_command rerun needed).
 #
 # Streaming vs disk mode
 #   STREAM=true  (default) — raw 7T CIFTIs preprocessed on-the-fly (SG→PSC→GSR)
@@ -35,8 +62,9 @@
 #   if present, otherwise falls back to group-average midthickness.
 #
 # Resume / skip
-#   Re-running skips any subject/model whose output CIFTI already exists.
-#   Delete the output CIFTI to force a rerun for that subject.
+#   neighbors  : skips subjects whose both hemisphere .npy files exist.
+#   persubject : skips any subject/model whose output CIFTI already exists.
+#   Delete the output CIFTI (or .npy) to force a rerun.
 #
 # Silence GNU parallel citation notice (run once)
 #   parallel --citation
@@ -131,7 +159,14 @@ MODELS=(
 
 # ── Parallelisation ─────────────────────────────────────────────────────────
 CONDA_ENV="analysis"
-DEFAULT_BATCH_SIZE=8
+# Default batch size for persubject searchlight.
+# With 32 cores: B=4 → n_jobs=8/subject → ~55 min/subject, 4 parallel.
+# Change with the 3rd CLI argument: bash run_analysis.sh persubject all 8
+DEFAULT_BATCH_SIZE=4
+# Default batch size for the neighbors precompute.
+# wb_command geodesic is the bottleneck; set to nproc/4 so each command
+# gets ~4 cores.  Override with the 3rd CLI arg when running neighbors mode.
+DEFAULT_NEIGHBORS_BATCH_SIZE=8
 # =============================================================================
 
 MODE=${1:-avg}
@@ -141,10 +176,16 @@ START_FROM=${4:-""}
 
 BIN_SEC_INT="${BIN_SEC%.*}"
 
-# Joblib n_jobs per subject: divide available CPUs by parallel batch size so that
-# total threads = BATCH_SIZE × N_JOBS_PER_SUBJECT ≈ nproc (avoids oversubscription).
-# Each subject's searchlight uses N_JOBS_PER_SUBJECT parallel threads.
 N_CPUS=$(nproc 2>/dev/null || echo 8)
+
+# For 'neighbors' mode the batch size should default higher (wb_command is the
+# bottleneck, not Python threads), so we rebind BATCH_SIZE here when needed.
+if [ "$MODE" = "neighbors" ] && [ -z "${3:-}" ]; then
+    BATCH_SIZE=$DEFAULT_NEIGHBORS_BATCH_SIZE
+fi
+
+# Joblib n_jobs per subject (searchlight only): divide available CPUs by
+# parallel batch size so total threads ≈ nproc.
 N_JOBS_PER_SUBJECT=$(( N_CPUS / BATCH_SIZE ))
 [ "$N_JOBS_PER_SUBJECT" -lt 1 ] && N_JOBS_PER_SUBJECT=1
 
@@ -397,6 +438,115 @@ _run_one_subject() {
 }
 export -f _run_one_subject
 
+# =============================================================================
+# NEIGHBOURS PRE-COMPUTE PIPELINE
+# =============================================================================
+
+# Worker — exported for GNU parallel.
+# Computes geodesic k-NN .npy caches for one subject (both hemispheres).
+# Skips subjects whose both hemisphere files already exist.
+_run_one_neighbors() {
+    local SUB="$1"
+
+    local CACHE_DIR="${_RSA_OUTPUT_DIR}/_geodesic_cache"
+    local NPY_L="${CACHE_DIR}/${SUB}_left_neighbors_k${_RSA_K}.npy"
+    local NPY_R="${CACHE_DIR}/${SUB}_right_neighbors_k${_RSA_K}.npy"
+
+    # Resume: skip if both hemispheres already cached
+    if [ -f "$NPY_L" ] && [ -f "$NPY_R" ]; then
+        echo "[$(date +%H:%M:%S)] ${SUB}: k-NN k=${_RSA_K} already cached — skipping"
+        return 0
+    fi
+
+    local LOG_DIR="${_RSA_OUTPUT_DIR}/${SUB}"
+    mkdir -p "$LOG_DIR"
+    local LOG="${LOG_DIR}/neighbors.log"
+
+    # Per-subject midthickness (fall back to group-average)
+    local LEFT_SURF="$_RSA_LEFT_SURFACE"
+    local RIGHT_SURF="$_RSA_RIGHT_SURFACE"
+    local SUB_L="${_RSA_MIDTHICKNESS_DIR}/${SUB}.L.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
+    local SUB_R="${_RSA_MIDTHICKNESS_DIR}/${SUB}.R.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
+    if [ -f "$SUB_L" ] && [ -f "$SUB_R" ]; then
+        LEFT_SURF="$SUB_L"
+        RIGHT_SURF="$SUB_R"
+    else
+        echo "[$(date +%H:%M:%S)] ${SUB}: no per-subject midthickness — using group-average surface" \
+            | tee -a "$LOG"
+    fi
+
+    echo "[$(date +%H:%M:%S)] ${SUB}: computing k=${_RSA_K} neighbor cache ..." | tee -a "$LOG"
+
+    local STATUS=0
+    conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
+        "${_RSA_SCRIPT_DIR}/precompute_neighbors.py" \
+        --subject       "$SUB" \
+        --left-surface  "$LEFT_SURF" \
+        --right-surface "$RIGHT_SURF" \
+        --workbench     "$_RSA_WORKBENCH" \
+        --cache-dir     "$CACHE_DIR" \
+        --k             "$_RSA_K" \
+        >> "$LOG" 2>&1 || STATUS=$?
+
+    if [ $STATUS -eq 0 ]; then
+        echo "[$(date +%H:%M:%S)] ${SUB}: neighbors DONE" | tee -a "$LOG"
+    else
+        echo "[$(date +%H:%M:%S)] ${SUB}: neighbors FAILED (exit $STATUS)" | tee -a "$LOG"
+        return $STATUS
+    fi
+}
+export -f _run_one_neighbors
+
+run_precompute_neighbors() {
+    log "=== Pre-compute k=${K} neighbors (${BATCH_SIZE} parallel subjects) ==="
+    log "  Each subject: wb_command geodesic (~70 min/hem) + k-NN extraction (~10 min/hem)"
+    log "  Subjects with cached .npy files are skipped automatically."
+
+    local SUBJECTS
+    SUBJECTS=$(grep -v '^\s*#' "$SUBJECTS_LIST" \
+               | sed 's/#.*//' \
+               | awk '{print $1}' \
+               | grep -v '^$')
+    if [ -n "$START_FROM" ]; then
+        SUBJECTS=$(echo "$SUBJECTS" | awk "/$START_FROM/{found=1} found{print}")
+    fi
+    local N_TOTAL
+    N_TOTAL=$(echo "$SUBJECTS" | wc -l)
+    log "  ${N_TOTAL} subjects (BATCH_SIZE=${BATCH_SIZE})"
+
+    # Count already-cached
+    local CACHE_DIR="${OUTPUT_DIR}/_geodesic_cache"
+    local N_CACHED=0
+    for SUB in $SUBJECTS; do
+        [ -f "${CACHE_DIR}/${SUB}_left_neighbors_k${K}.npy" ] && \
+        [ -f "${CACHE_DIR}/${SUB}_right_neighbors_k${K}.npy" ] && \
+        N_CACHED=$(( N_CACHED + 1 ))
+    done
+    log "  ${N_CACHED} subjects already cached; $((N_TOTAL - N_CACHED)) to compute"
+
+    # Export env vars for the worker
+    export _RSA_SCRIPT_DIR="$SCRIPT_DIR"
+    export _RSA_CONDA_ENV="$CONDA_ENV"
+    export _RSA_OUTPUT_DIR="$OUTPUT_DIR"
+    export _RSA_LEFT_SURFACE="$LEFT_SURFACE"
+    export _RSA_RIGHT_SURFACE="$RIGHT_SURFACE"
+    export _RSA_WORKBENCH="$WORKBENCH"
+    export _RSA_K="$K"
+    export _RSA_MIDTHICKNESS_DIR="$MIDTHICKNESS_DIR"
+
+    if command -v parallel &>/dev/null; then
+        echo "$SUBJECTS" | parallel --jobs "$BATCH_SIZE" --line-buffer \
+            _run_one_neighbors {}
+    else
+        log "GNU parallel not found — running sequentially"
+        for SUB in $SUBJECTS; do
+            _run_one_neighbors "$SUB"
+        done
+    fi
+
+    log "=== Neighbor precompute complete ==="
+}
+
 run_persubject() {
     local MODE_TAG
     [ "$STREAM" = "true" ] && MODE_TAG="streaming" || MODE_TAG="disk"
@@ -504,11 +654,12 @@ run_group_stats() {
 # =============================================================================
 case "$MODE" in
     avg)        run_avg ;;
+    neighbors)  run_precompute_neighbors ;;
     persubject) run_persubject; run_group_stats ;;
     groupstats) run_group_stats ;;
     all)        run_avg; run_persubject; run_group_stats ;;
     *)
-        echo "Unknown mode: $MODE. Use: avg | persubject | groupstats | all" >&2; exit 1 ;;
+        echo "Unknown mode: $MODE. Use: avg | neighbors | persubject | groupstats | all" >&2; exit 1 ;;
 esac
 
 log "All RSA analyses complete."

@@ -1,12 +1,12 @@
 # Encoding — Ridge Encoding Models
 
-Fits ridge regression models (himalaya RidgeCV, SVD solver) predicting cortical fMRI responses from model embeddings. Alpha is selected per vertex via leave-one-run-out cross-validation.
+Fits ridge regression models (himalaya RidgeCV, SVD solver) predicting cortical fMRI responses from model embeddings. Alpha is selected independently per vertex via leave-one-run-out cross-validation on the training set.
 
 ## Structure
 
 ```
 encoding/
-├── run_analysis.sh          # master runner (all config lives here)
+├── run_analysis.sh          # master runner — all config lives here
 ├── environment.yml          # conda env: analysis
 ├── run_encoding.py          # per-model/modality encoding script
 └── shared/
@@ -17,10 +17,12 @@ encoding/
 
 ```bash
 conda activate analysis
-bash run_analysis.sh                       # group-average, all models
-bash run_analysis.sh persubject            # per-subject (GNU parallel)
-bash run_analysis.sh persubject 4          # 4 parallel jobs
-bash run_analysis.sh persubject 8 100610   # resume from subject 100610
+cd movie_watching   # run from repo root
+
+bash encoding/run_analysis.sh                       # group-average, all models
+bash encoding/run_analysis.sh persubject            # per-subject (GNU parallel)
+bash encoding/run_analysis.sh persubject 4          # 4 parallel jobs
+bash encoding/run_analysis.sh persubject 8 100610   # resume from subject 100610
 ```
 
 ## Configuration
@@ -29,69 +31,65 @@ All parameters are set in `run_analysis.sh`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `BIN_SEC` | 5.0 | Temporal bin size (seconds) |
-| `DELAY_SEC` | 5.0 | Hemodynamic delay for fMRI window shift |
-| `HRF` | false | Convolve embeddings with SPM HRF instead |
-| `NORMALIZE` | true | Z-score embeddings per run |
+| `BIN_SEC` | 2.0 | Temporal bin size (seconds) |
+| `DELAY_SEC` | 5.0 | Hemodynamic delay applied at analysis time |
+| `HRF` | `false` | Convolve embeddings with SPM HRF instead of boxcar delay |
+| `NORMALIZE` | `false` | Per-run z-score normalization of embeddings |
 | `ALPHA_MIN` | -2 | Log10 of minimum ridge alpha |
 | `ALPHA_MAX` | 9 | Log10 of maximum ridge alpha |
-| `N_ALPHAS` | 23 | Number of alpha values |
-| `CHUNK_SIZE` | 2000 | Vertices per batch |
-| `TEST_VIDEO_IDS` | video5,9,14,18 | Held-out test videos |
-| `MODELS` | (array) | Model registry — add new models here |
+| `N_ALPHAS` | 23 | Number of alpha values on log scale |
+| `CHUNK_SIZE` | 2000 | Vertices per batch for Pearson r computation |
+| `TEST_VIDEO_IDS` | `video5,video9,video14,video18` | Held-out test videos |
+| `MODELS` | (array) | Model registry |
 
 ## Train / Test Split
 
-- **Test**: `video5`, `video9`, `video14`, `video18` (last video of each run)
-- **Train**: remaining 14 videos; z-scored per run; LORO-CV for alpha selection
-- **Metric**: Pearson r on test set per vertex
+- **Test**: `video5`, `video9`, `video14`, `video18` (last video of each run, 82 TRs each)
+- **Train**: remaining 14 videos
+- **Z-scoring**: per run on training time bins; same mean/std applied to test bins from the same run to prevent data leakage
+- **Alpha selection**: leave-one-run-out CV on training data (himalaya `PredefinedSplit`)
+- **Metric**: Pearson r on held-out test set per vertex
+
+## Input Modes
+
+### Disk mode (default, `--preprocessed-dir`)
+
+Reads pre-saved full-run CIFTIs produced by `preprocess_individual.py`:
+
+```bash
+python preprocess_individual.py \
+    --raw-dir /path/to/raw_ciftis \
+    --out-dir /path/to/preprocessed \
+    --subjects-list subjects.txt \
+    --sg-filter --psc --gsr \
+    --save-individual
+```
+
+Output per subject:
+- `{sub}_sg_psc_gsr_cortex_59k.dtseries.nii` — concatenated full-run CIFTI (4 runs)
+- `{sub}_sg_psc_gsr_run_trs.npy` — TRs per run (needed for timing alignment)
+
+Set `FMRI_SUFFIX="sg_psc_gsr"` in `run_analysis.sh` to match.
+
+### Streaming mode (`--raw-dir`)
+
+Preprocesses raw 7T CIFTIs on-the-fly via `preprocess_individual.preprocess_subject()`. No CIFTI is saved to disk.
+
+## fMRI Preprocessing Convention
+
+`preprocess_individual.py` applies per-run signal cleaning (SG→PSC→GSR) and concatenates all 4 runs into a single continuous CIFTI. **No timing filtering happens at preprocessing time.**
+
+At analysis time, `run_encoding.py` loads `movie_timing.csv`, computes within-run onset TRs from global `onset_sec`, applies hemodynamic delay (`--delay-sec`), bins to `BIN_SEC` resolution, z-scores per run, and splits into train/test by video ID.
+
+When `HRF=true`: set `--delay-sec 0` (no boxcar shift); embeddings are convolved with the SPM HRF inside `run_encoding.py`.
 
 ## Outputs
 
 ```
 {OUTPUT_DIR}/{subject}/{model}/{config_label}/
-    encoding_r_{v,a,av}.dscalar.nii    # Pearson r map per modality
+    encoding_r_v.dscalar.nii     # Pearson r map — visual modality
+    encoding_r_a.dscalar.nii     # Pearson r map — auditory modality
+    encoding_r_av.dscalar.nii    # Pearson r map — audiovisual modality
 ```
 
-`config_label` encodes parameters, e.g. `delay5s_norm_bin2s`.
-
-## Required Preprocessed fMRI
-
-This analysis requires fMRI that has already been filtered to movie timepoints,
-hemodynamic-delay-shifted, GSR-applied, and z-scored over included timepoints.
-Use `preprocess_individual.py` from the repo root:
-
-**Standard (fixed 5 s boxcar delay) — matches `DELAY_SEC=5` config:**
-```bash
-python preprocess_individual.py \
-    --raw-dir $CIFTI_DIR \
-    --out-dir $FMRI_OUT_DIR \
-    --subjects-list subjects.txt \
-    --timing-csv $TIMING_CSV \
-    --delay-sec 5.0 \
-    --gsr --z-score
-```
-Output: `{sub}_gsr_zscore_delay5s_cortex_59k.dtseries.nii`
-
-**HRF variant (`HRF=true`) — delay must be 0 so HRF convolution aligns correctly:**
-```bash
-python preprocess_individual.py \
-    --raw-dir $CIFTI_DIR \
-    --out-dir $FMRI_OUT_DIR \
-    --subjects-list subjects.txt \
-    --timing-csv $TIMING_CSV \
-    --delay-sec 0 \
-    --gsr --z-score
-```
-Output: `{sub}_gsr_zscore_delay0s_cortex_59k.dtseries.nii`
-
-The analysis scripts never re-apply delay or z-score — both are baked into the
-preprocessed CIFTI. `DELAY_SEC` in `run_analysis.sh` is used only to name outputs.
-
-## Delay / HRF
-
-When `HRF=false` (default): delay was applied at preprocessing time (`--delay-sec 5.0`).
-The analysis scripts use the preprocessed CIFTI directly; `DELAY_SEC` only labels outputs.
-
-When `HRF=true`: fMRI was preprocessed with `--delay-sec 0`; model embeddings are
-convolved with SPM HRF inside the analysis script.
+`config_label` encodes parameters: `delay{D}s_nonorm_bin{B}s` or `hrf_norm_bin{B}s`.

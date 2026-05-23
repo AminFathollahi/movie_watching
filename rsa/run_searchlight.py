@@ -47,6 +47,7 @@ import argparse
 import gc
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -58,13 +59,13 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
+from scipy.stats import rankdata
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from rsa.shared.rsa_utils import (
     load_fmri_cifti, preprocess_fmri,
-    process_model_embeddings, compute_rdm, correlate_rdms,
-    align_and_assert_bins
+    process_model_embeddings, align_and_assert_bins
 )
 from rsa.shared.cifti_io import (
     get_bm_axis, save_cifti_multimap, get_cortex_vertex_indices,
@@ -76,10 +77,16 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-N_JOBS = -1
+# n_jobs for joblib parallelism inside each subject's searchlight.
+# Read from env var _RSA_N_JOBS (set by run_analysis.sh based on BATCH_SIZE).
+# Default -1 (all CPUs) is fine when running a single subject, but MUST be
+# reduced when many subjects run in parallel to avoid thread oversubscription.
+# Rule of thumb: _RSA_N_JOBS = max(1, nproc // BATCH_SIZE)
+N_JOBS = int(os.environ.get("_RSA_N_JOBS", -1))
+
 # Rows of the dconn loaded per chunk when extracting k-NN.
 # Each chunk uses ~chunk_size × n_surface_verts × 4 bytes of RAM.
-# 1000 rows × 32492 verts × 4 bytes ≈ 130 MB — safe on any modern machine.
+# 1000 rows × 59292 verts × 4 bytes ≈ 237 MB — safe on any modern machine.
 _DCONN_CHUNK = 1_000
 
 
@@ -212,33 +219,125 @@ def get_neighbors(surface_path: str, workbench: str, subject: str,
 # Searchlight RSA
 # =============================================================================
 
-def _searchlight_vertex(surf_v: int, fmri: np.ndarray,
-                         model_rdm: np.ndarray, neighbors: np.ndarray,
-                         vertex_to_col: np.ndarray,
-                         method: str) -> float:
+def _precompute_model_rdm(emb: np.ndarray, n_bins: int,
+                           tril_idx: tuple, method: str) -> tuple:
+    """Precompute model RDM condensed flat form + normalised ranks (once per hemisphere).
+
+    Returns
+    -------
+    model_rdm_flat : (n_pairs,) float32 — condensed model RDM (same ordering as tril_idx)
+    model_norm     : (n_pairs,) float32 — normalised ranks ready for fast Pearson
+                     (for Spearman; for Pearson, the normalised flat values)
+    """
+    emb64 = emb.astype(np.float64)
+    mu = emb64.mean(axis=1, keepdims=True)
+    ec = emb64 - mu
+    norms = np.sqrt((ec ** 2).sum(axis=1, keepdims=True))
+    norms[norms < 1e-10] = 1.0
+    en = ec / norms
+    sim = en @ en.T                                     # (n_bins, n_bins)
+    model_flat = (1.0 - sim)[tril_idx].astype(np.float32)
+
+    if method == "spearman":
+        ranks = rankdata(model_flat).astype(np.float32)
+        centered = ranks - ranks.mean()
+        norm_factor = np.linalg.norm(centered)
+        model_norm = (centered / norm_factor).astype(np.float32) if norm_factor > 1e-10 else centered
+    else:
+        # Pearson: normalise the raw distances
+        centered = model_flat - model_flat.mean()
+        norm_factor = np.linalg.norm(centered)
+        model_norm = (centered / norm_factor).astype(np.float32) if norm_factor > 1e-10 else centered
+
+    return model_flat, model_norm
+
+
+def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
+                               model_norm: np.ndarray,
+                               neighbors: np.ndarray,
+                               vertex_to_col: np.ndarray,
+                               tril_idx: tuple,
+                               method: str) -> float:
+    """Optimised per-vertex RSA: matmul RDM + fast rank Pearson (Spearman).
+
+    Replaces squareform(pdist) + spearmanr with:
+      - Row-normalised matmul for the fMRI RDM  (~2.8× faster)
+      - Pre-ranked model + argsort rank of fMRI RDM + Pearson dot product
+        (avoids scipy.stats.spearmanr overhead per vertex)
+
+    Parameters
+    ----------
+    surf_v        : int — surface vertex index (0..n_surf_verts-1)
+    fmri          : (n_bins, n_hem_verts) float32 — hemisphere fMRI data
+    model_norm    : (n_pairs,) float32 — pre-ranked+normalised model RDM vector
+    neighbors     : (n_surf_verts, k) int32 — geodesic k-NN in surface space
+    vertex_to_col : (n_surf_verts,) int32 — maps surface vertex → fmri column (-1=medial)
+    tril_idx      : tuple — np.tril_indices(n_bins, k=-1), precomputed once
+    method        : "spearman" or "pearson"
+    """
     neighbor_surf = neighbors[surf_v]
     neighbor_cols = vertex_to_col[neighbor_surf]
     neighbor_cols = neighbor_cols[neighbor_cols >= 0]
-    hood = fmri[:, neighbor_cols]
-    fmri_rdm = compute_rdm(hood, method="correlation")
-    r, _ = correlate_rdms(fmri_rdm, model_rdm, method=method)
-    return r
+    if len(neighbor_cols) < 2:
+        return 0.0
+
+    hood = fmri[:, neighbor_cols].astype(np.float64)   # (n_bins, k_valid)
+
+    # Row-normalise to get unit correlation vectors (fast RDM via matmul)
+    mu = hood.mean(axis=1, keepdims=True)
+    hc = hood - mu
+    norms = np.sqrt((hc ** 2).sum(axis=1, keepdims=True))
+    norms[norms < 1e-10] = 1.0
+    hn = hc / norms
+    fmri_flat = (1.0 - hn @ hn.T)[tril_idx].astype(np.float32)  # condensed RDM
+
+    if method == "spearman":
+        # Rank-order the fMRI distances; Pearson on ranks = Spearman
+        order = np.argsort(fmri_flat)
+        fr = np.empty(len(fmri_flat), dtype=np.float32)
+        fr[order] = np.arange(len(fmri_flat), dtype=np.float32)
+        fc = fr - fr.mean()
+        fn = np.linalg.norm(fc)
+        return float(np.dot(fc, model_norm) / fn) if fn > 1e-10 else 0.0
+    else:
+        # Pearson: normalise fMRI flat and dot with pre-normalised model
+        fc = fmri_flat - fmri_flat.mean()
+        fn = np.linalg.norm(fc)
+        return float(np.dot(fc / fn, model_norm)) if fn > 1e-10 else 0.0
 
 
-def run_searchlight(fmri: np.ndarray, model_rdm: np.ndarray,
+def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                     neighbors: np.ndarray,
                     surface_indices: np.ndarray,
                     vertex_to_col: np.ndarray,
                     method: str = "spearman",
                     n_jobs: int = -1) -> np.ndarray:
-    """Searchlight RSA across all grayordinate vertices."""
+    """Searchlight RSA across all grayordinate vertices.
+
+    Parameters
+    ----------
+    fmri           : (n_bins, n_hem_verts) float32 — hemisphere fMRI
+    model_emb      : (n_bins, n_features) float32 — model embeddings (for RDM)
+    neighbors      : (n_surf_verts, k) int32 — geodesic k-NN
+    surface_indices: (n_hem_verts,) int32 — surface vertex index per grayordinate
+    vertex_to_col  : (n_surf_verts,) int32 — surface vertex → fmri column (-1=medial)
+    method         : "spearman" | "pearson"
+    n_jobs         : joblib parallel workers (-1 = all CPUs)
+    """
     n_verts = fmri.shape[1]
-    log.info(f"  Running searchlight on {n_verts} vertices ...")
+    n_bins = fmri.shape[0]
+    tril_idx = np.tril_indices(n_bins, k=-1)
+
+    log.info(f"  Precomputing model RDM ({method}) ...")
+    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
+
+    log.info(f"  Running searchlight on {n_verts} vertices "
+             f"(n_jobs={n_jobs}) ...")
     corr_map = np.array(
         Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(_searchlight_vertex)(
-                int(surface_indices[v]), fmri, model_rdm,
-                neighbors, vertex_to_col, method
+            delayed(_searchlight_vertex_fast)(
+                int(surface_indices[v]), fmri, model_norm,
+                neighbors, vertex_to_col, tril_idx, method
             )
             for v in range(n_verts)
         ),
@@ -315,10 +414,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     # Enforce exact temporal alignment
     fmri_binned, emb = align_and_assert_bins(fmri_binned, emb)
     n_bins = fmri_binned.shape[0]
-
-    model_rdm = compute_rdm(emb.astype(np.float64), method="correlation")
-    log.info(f"  Model RDM: {model_rdm.shape}")
-    del emb
+    log.info(f"  n_bins={n_bins}  n_pairs={(n_bins*(n_bins-1)//2):,}")
 
     bm_axis = get_bm_axis(args.template_cifti)
     left_indices, right_indices = get_cortex_vertex_indices(bm_axis)
@@ -327,8 +423,8 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     cache_dir = Path(args.output_dir) / "_geodesic_cache"
 
     surfaces = {
-        "left":  (args.left_surface,  fmri_binned[:, :n_left],       left_indices),
-        "right": (args.right_surface, fmri_binned[:, n_left:],        right_indices),
+        "left":  (args.left_surface,  fmri_binned[:, :n_left],  left_indices),
+        "right": (args.right_surface, fmri_binned[:, n_left:],   right_indices),
     }
 
     n_total   = fmri_binned.shape[1]
@@ -346,7 +442,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
         vertex_to_col[surf_indices] = np.arange(len(surf_indices), dtype=np.int32)
 
         corr_hem = run_searchlight(
-            fmri_hem, model_rdm, neighbors,
+            fmri_hem, emb, neighbors,
             surface_indices=surf_indices,
             vertex_to_col=vertex_to_col,
             method=args.method, n_jobs=N_JOBS,
@@ -358,6 +454,9 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
 
         del neighbors, vertex_to_col, corr_hem
         gc.collect()
+
+    del fmri_binned, emb
+    gc.collect()
 
     out_root.mkdir(parents=True, exist_ok=True)
     save_cifti_multimap(

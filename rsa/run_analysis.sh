@@ -141,6 +141,13 @@ START_FROM=${4:-""}
 
 BIN_SEC_INT="${BIN_SEC%.*}"
 
+# Joblib n_jobs per subject: divide available CPUs by parallel batch size so that
+# total threads = BATCH_SIZE × N_JOBS_PER_SUBJECT ≈ nproc (avoids oversubscription).
+# Each subject's searchlight uses N_JOBS_PER_SUBJECT parallel threads.
+N_CPUS=$(nproc 2>/dev/null || echo 8)
+N_JOBS_PER_SUBJECT=$(( N_CPUS / BATCH_SIZE ))
+[ "$N_JOBS_PER_SUBJECT" -lt 1 ] && N_JOBS_PER_SUBJECT=1
+
 # =============================================================================
 # HELPERS
 # =============================================================================
@@ -379,7 +386,7 @@ export -f _run_one_subject
 run_persubject() {
     local MODE_TAG
     [ "$STREAM" = "true" ] && MODE_TAG="streaming" || MODE_TAG="disk"
-    log "=== Per-subject RSA (${MODE_TAG}, ${BATCH_SIZE} parallel jobs, ${#MODELS[@]} models) ==="
+    log "=== Per-subject RSA (${MODE_TAG}, ${BATCH_SIZE} parallel jobs, ${N_JOBS_PER_SUBJECT} searchlight threads/subject, ${#MODELS[@]} models) ==="
 
     local SUBJECTS
     # Strip full-line comments (^#), inline comments (#...), blank lines;
@@ -426,6 +433,7 @@ run_persubject() {
     export _RSA_PSC="$PSC"
     export _RSA_GSR="$GSR"
     export _RSA_MIDTHICKNESS_DIR="$MIDTHICKNESS_DIR"
+    export _RSA_N_JOBS="$N_JOBS_PER_SUBJECT"
 
     if command -v parallel &>/dev/null; then
         echo "$SUBJECTS" | parallel --jobs "$BATCH_SIZE" --line-buffer \

@@ -258,12 +258,12 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
                                vertex_to_col: np.ndarray,
                                tril_idx: tuple,
                                method: str) -> float:
-    """Optimised per-vertex RSA: matmul RDM + fast rank Pearson (Spearman).
+    """Optimised per-vertex RSA: float64 matmul RDM + Spearman via argsort.
 
     Replaces squareform(pdist) + spearmanr with:
-      - Row-normalised matmul for the fMRI RDM  (~2.8× faster)
-      - Pre-ranked model + argsort rank of fMRI RDM + Pearson dot product
-        (avoids scipy.stats.spearmanr overhead per vertex)
+      - float64 row-normalised matmul for the fMRI RDM (full precision, no artificial ties)
+      - Pre-ranked model (scipy.rankdata, tie-safe) + argsort rank of fMRI RDM
+      - Pearson dot product on ranks (= Spearman)
 
     Parameters
     ----------
@@ -281,7 +281,7 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
     if len(neighbor_cols) < 2:
         return 0.0
 
-    hood = fmri[:, neighbor_cols].astype(np.float64)   # (n_bins, k_valid)
+    hood = fmri[:, neighbor_cols].astype(np.float64)   # float64: full precision, no artificial ties
 
     # Row-normalise to get unit correlation vectors (fast RDM via matmul)
     mu = hood.mean(axis=1, keepdims=True)

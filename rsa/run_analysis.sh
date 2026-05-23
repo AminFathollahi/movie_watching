@@ -148,6 +148,17 @@ N_CPUS=$(nproc 2>/dev/null || echo 8)
 N_JOBS_PER_SUBJECT=$(( N_CPUS / BATCH_SIZE ))
 [ "$N_JOBS_PER_SUBJECT" -lt 1 ] && N_JOBS_PER_SUBJECT=1
 
+# Limit BLAS (OpenBLAS / MKL / BLIS) to 1 thread per process.
+# Without this, each of the N_JOBS joblib threads may spawn its own BLAS thread pool
+# for numpy matmul, resulting in BATCH_SIZE × N_JOBS × BLAS_threads >> nproc threads
+# competing for the same cores (load averages 150+ instead of ~32).
+# The per-vertex matmul shapes are too small for BLAS parallelism to help anyway.
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export BLIS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 # =============================================================================
 # HELPERS
 # =============================================================================
@@ -316,7 +327,7 @@ _run_one_subject() {
                         | tee -a "$LOG"
                 else
                     # shellcheck disable=SC2086
-                    conda run -n "$_RSA_CONDA_ENV" python \
+                    conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
                         "${_RSA_SCRIPT_DIR}/run_searchlight.py" \
                         $FMRI_FLAGS \
                         --timing-csv       "$_RSA_TIMING_CSV" \
@@ -346,7 +357,7 @@ _run_one_subject() {
                         | tee -a "$LOG"
                 else
                     # shellcheck disable=SC2086
-                    conda run -n "$_RSA_CONDA_ENV" python \
+                    conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
                         "${_RSA_SCRIPT_DIR}/run_glasser.py" \
                         $FMRI_FLAGS \
                         --timing-csv       "$_RSA_TIMING_CSV" \

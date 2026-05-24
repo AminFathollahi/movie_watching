@@ -235,7 +235,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     """Run Glasser RSA on pre-loaded continuous fMRI data."""
     bin_sec_int   = int(args.bin_sec)
     delay_tag     = f"delay{int(args.delay_sec)}s"
-    maps_out      = out_root / f"glasser_rsa_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_maps.dscalar.nii"
+    maps_out      = out_root / f"glasser_rsa_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_glasser.dscalar.nii"
     report_out    = out_root / "ranked_report.csv"
     map_name      = f"glasser_{args.method}_rho"
     combined_path = Path(args.combined_output) if args.combined_output else None
@@ -282,13 +282,13 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     )
 
     out_root.mkdir(parents=True, exist_ok=True)
-    save_cifti_multimap(
-        corr_map.reshape(1, -1),
-        [f"{args.method}_rho"],
-        args.template_cifti,
-        str(maps_out),
-    )
-    log.info(f"  Saved: {maps_out.name}")
+    # save_cifti_multimap(
+    #     corr_map.reshape(1, -1),
+    #     [f"{args.method}_rho"],
+    #     args.template_cifti,
+    #     str(maps_out),
+    # )
+    # log.info(f"  Saved: {maps_out.name}")
 
     # ── Merge into combined output ────────────────────────────────────────────
     if combined_path is not None:
@@ -356,7 +356,7 @@ def _run_streaming(args):
 
     bin_sec_int = int(args.bin_sec)
     delay_tag   = f"delay{int(args.delay_sec)}s"
-    maps_out    = out_root / f"glasser_rsa_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_maps.dscalar.nii"
+    maps_out    = out_root / f"glasser_rsa_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_glasser.dscalar.nii"
     report_out  = out_root / "ranked_report.csv"
     
     if maps_out.exists() and report_out.exists():

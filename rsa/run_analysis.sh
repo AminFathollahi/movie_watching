@@ -305,7 +305,8 @@ _run_avg_one_model() {
 
         # Combined dscalar accumulating searchlight + Glasser maps for this
         # config; per-k path keeps separate k runs from overwriting each other.
-        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}/${SL_CONFIG}/rsa_${FMRI_SUFFIX}.dscalar.nii"
+        # Combined dscalar in the parent directory with the full name
+        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${METHOD}_maps.dscalar.nii"
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; then
             run_python "${SCRIPT_DIR}/run_searchlight.py" \
@@ -448,10 +449,11 @@ _run_one_subject() {
 
             # Combined dscalar accumulating searchlight + Glasser maps for this
             # subject/model/config; per-k path keeps separate k runs distinct.
-            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${SL_CONFIG}/rsa_${FMRI_TAG_LOCAL}.dscalar.nii"
-
+            # Combined dscalar in the parent directory with the full name
+            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_maps.dscalar.nii"
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "searchlight" ]; then
-                local SL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_maps.dscalar.nii"
+                # Update SL_OUT to include _searchlight
+                local SL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_searchlight.dscalar.nii"
                 # Skip only when both the individual file and the combined file
                 # exist; the individual file alone implies the combined output
                 # still needs updating.
@@ -486,7 +488,8 @@ _run_one_subject() {
             fi
 
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "glasser" ]; then
-                local GL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${GL_CONFIG}/glasser_rsa_${FMRI_TAG_LOCAL}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_maps.dscalar.nii"
+                # Combined dscalar in the parent directory with the full name
+                local GL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${GL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_glasser.dscalar.nii"
                 local GL_REPORT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${GL_CONFIG}/ranked_report.csv"
                 if [ -f "$GL_OUT" ] && [ -f "$GL_REPORT" ] && [ -f "$COMBINED_OUT" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: Glasser ${MODEL_NAME}/${MOD} already complete; skipping" \

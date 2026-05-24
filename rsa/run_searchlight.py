@@ -487,7 +487,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
 
     bin_sec_int  = int(args.bin_sec)
     delay_tag    = f"delay{int(args.delay_sec)}s"
-    maps_out     = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_maps.dscalar.nii"
+    maps_out     = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_searchlight.dscalar.nii"
     map_name     = f"searchlight_{args.method}_rho"
     combined_path = Path(args.combined_output) if args.combined_output else None
 
@@ -663,7 +663,7 @@ def _run_streaming(args):
     bin_sec_int = int(args.bin_sec)
     
     # CHANGE THIS LINE TO MATCH:
-    maps_out    = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_maps.dscalar.nii"
+    maps_out    = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_searchlight.dscalar.nii"
 
     if maps_out.exists():
         log.info(f"[{sub}] Output already exists — skipping")

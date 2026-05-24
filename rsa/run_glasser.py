@@ -48,7 +48,10 @@ from rsa.shared.rsa_utils import (
     process_model_embeddings, compute_rdm, correlate_rdms,
     align_and_assert_bins
 )
-from rsa.shared.cifti_io import get_bm_axis, save_cifti_multimap
+from rsa.shared.cifti_io import (
+    get_bm_axis, save_cifti_multimap,
+    get_combined_map_names, merge_into_combined,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,6 +107,10 @@ def parse_args():
                    help="RDM correlation method.")
     p.add_argument("--tr", type=float, required=True,
                    help="TR in seconds.")
+    p.add_argument("--combined-output", default=None, dest="combined_output",
+                   help="Path to a combined .dscalar.nii shared with run_searchlight.py. "
+                        "This script adds/replaces the 'glasser_{method}_rho' map. "
+                        "The individual output file is still saved alongside.")
 
     # Streaming preprocessing flags
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
@@ -226,13 +233,26 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
                   timing_df: pd.DataFrame, config: str, out_root: Path,
                   fmri_tag: str):
     """Run Glasser RSA on pre-loaded continuous fMRI data."""
-    bin_sec_int = int(args.bin_sec)
-    delay_tag   = f"delay{int(args.delay_sec)}s"
-    maps_out    = out_root / f"glasser_rsa_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_maps.dscalar.nii"
-    report_out  = out_root / "ranked_report.csv"
-    
+    bin_sec_int   = int(args.bin_sec)
+    delay_tag     = f"delay{int(args.delay_sec)}s"
+    maps_out      = out_root / f"glasser_rsa_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_maps.dscalar.nii"
+    report_out    = out_root / "ranked_report.csv"
+    map_name      = f"glasser_{args.method}_rho"
+    combined_path = Path(args.combined_output) if args.combined_output else None
+
+    # ── Skip / fast-merge logic ───────────────────────────────────────────────
     if maps_out.exists() and report_out.exists():
-        log.info(f"Outputs already exist — skipping: {out_root}")
+        if combined_path is None:
+            log.info(f"Outputs already exist — skipping: {out_root}")
+            return
+        if map_name in get_combined_map_names(combined_path):
+            log.info(f"Outputs already exist and combined up to date — skipping: {out_root}")
+            return
+        # Individual done, combined missing this map → merge without recomputing
+        log.info(f"  Individual map exists; merging '{map_name}' into combined ...")
+        corr_map = nib.load(str(maps_out)).get_fdata(dtype=np.float32).squeeze()
+        combined_path.parent.mkdir(parents=True, exist_ok=True)
+        merge_into_combined(corr_map, map_name, combined_path, args.template_cifti)
         return
 
     fmri_binned = preprocess_fmri(
@@ -269,6 +289,11 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
         str(maps_out),
     )
     log.info(f"  Saved: {maps_out.name}")
+
+    # ── Merge into combined output ────────────────────────────────────────────
+    if combined_path is not None:
+        combined_path.parent.mkdir(parents=True, exist_ok=True)
+        merge_into_combined(corr_map, map_name, combined_path, args.template_cifti)
 
     rows = []
     for name, indices in parcels.items():

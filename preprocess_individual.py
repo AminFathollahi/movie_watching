@@ -340,13 +340,35 @@ def main():
     n_ok = n_fail = 0
     t_wall = time.time()
 
+    # ── Resume: pre-scan how many subjects are already complete ───────────────
+    if args.save_individual and not args.dry_run:
+        already_done = [
+            s for s in subjects
+            if (out_dir / f"{s}_{suffix}_cortex_59k.dtseries.nii").exists()
+            and (out_dir / f"{s}_{suffix}_run_trs.npy").exists()
+        ]
+        partial = [
+            s for s in subjects
+            if s not in already_done
+            and (
+                (out_dir / f"{s}_{suffix}_cortex_59k.dtseries.nii").exists()
+                or (out_dir / f"{s}_{suffix}_run_trs.npy").exists()
+            )
+        ]
+        n_todo = len(subjects) - len(already_done)
+        print(f"Resume scan: {len(already_done)}/{len(subjects)} already complete "
+              f"→ {n_todo} to process.")
+        if partial:
+            print(f"  {len(partial)} partially-written subject(s) will be re-processed "
+                  f"(incomplete pair): {partial}")
+        n_ok += len(already_done)
+
     for idx, sub in enumerate(subjects, 1):
         if args.save_individual and not args.dry_run:
             cifti_out = out_dir / f"{sub}_{suffix}_cortex_59k.dtseries.nii"
             trs_out   = out_dir / f"{sub}_{suffix}_run_trs.npy"
             if cifti_out.exists() and trs_out.exists():
-                print(f"[{idx:03d}/{len(subjects):03d}] {sub} — skipping (exists)")
-                n_ok += 1
+                # Already complete — silent skip (counted in pre-scan summary above)
                 continue
 
         t_sub = time.time()

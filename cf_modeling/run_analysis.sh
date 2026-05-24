@@ -1,164 +1,267 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # cf_modeling/run_analysis.sh
-# ===========================
-# Master runner for CF modeling (group_average and per_subject).
-#
-# Prerequisites
-# -------------
-#   1. conda activate cfmod
-#   2. GNU parallel: conda install -c conda-forge parallel
-#
-# DISK MODE (default, STREAM=false):
-#   Requires pre-saved preprocessed CIFTIs in FMRI_OUT_DIR.
-#   Calls run_cfmodeling.py (phases 02→04) for each subject.
-#
-# STREAMING MODE (set STREAM=true below):
-#   Preprocesses raw CIFTIs on-the-fly (full-run mode: SG→PSC→GSR→zscore).
-#   No preprocessed CIFTI is saved; only R2_nc maps are written.
-#   Also calls run_cfmodeling.py — streaming path handled inside that script.
-#   Set CIFTI_DIR to the raw 7T CIFTI directory and configure preprocessing flags.
+# ============================
+# Master runner for CF (cortical field) modeling analyses.
+# Supports group-average and per-subject modes with GNU parallel.
 #
 # Usage
 # -----
-#   bash run_analysis.sh                        # all analyses (both modes)
-#   bash run_analysis.sh persubject             # per-subject pipeline only
-#   bash run_analysis.sh groupaverage           # group-average pipeline only
-#   bash run_analysis.sh persubject 8           # override parallel batch size
-#   bash run_analysis.sh persubject 8 100610    # resume from subject ID
+#   bash cf_modeling/run_analysis.sh [MODE] [BATCH_SIZE] [START_FROM]
+#
+#   MODE        preprocess   Preprocess all 175 subjects from SUBJECTS_LIST:
+#                            per-subject CIFTIs → PREPROCESSED_INDIV_DIR
+#                            group-average CIFTI → PREPROCESSED_DIR
+#                            Respects SG_FILTER/PSC/GSR flags and resumes.
+#               avg          Group-average CF modeling for all ROI pairs
+#               persubject   Per-subject CF modeling → group stats
+#               all          avg + persubject  (default)
+#
+#   BATCH_SIZE  N            Parallel subjects per ROI pair (default 8)
+#   START_FROM  SUBID        Resume per-subject from this subject ID
+#
+# Recommended workflow
+#   # 0. Preprocess all 175 subjects (skip if using streaming mode)
+#   bash cf_modeling/run_analysis.sh preprocess
+#
+#   # 1. Group-average CF modeling
+#   bash cf_modeling/run_analysis.sh avg
+#
+#   # 2. Per-subject CF modeling
+#   bash cf_modeling/run_analysis.sh persubject 8
+#
+# Disk mode (default, STREAM=false)
+#   Reads pre-saved preprocessed CIFTIs from PREPROCESSED_INDIV_DIR.
+#   Run 'preprocess' mode first.
+#
+# Streaming mode (STREAM=true)
+#   Preprocesses raw 7T CIFTIs on-the-fly; no CIFTI is saved.
+#   Set CIFTI_DIR below and configure SG_FILTER/PSC/GSR/Z_SCORE.
+#
+# Excluded subjects
+#   Subjects without individual midthickness surfaces are listed in
+#   data/excluded.txt and have been removed from data/subjects.txt.
+#   175 subjects remain.
+#
+# Resume / skip
+#   persubject: skips any subject whose R2_nc maps already exist.
+#   Delete the output .npy files to force a rerun.
+#
+# Silence GNU parallel citation notice (run once)
+#   parallel --citation
 
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # =============================================================================
-# PATHS  — edit these for your system
+# CONFIG — all paths and analysis parameters defined here
 # =============================================================================
-DATA_BASE="/home/amin/Research/Representation/Movie/data/Setareh"
+DATA_BASE="/home/amin/Research/Representation/Movie/data"
 HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
+OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
 
-# Raw 7T CIFTI files (used for streaming mode and subject discovery)
+# Raw 7T CIFTI files (used in streaming mode — preprocess on-the-fly)
 CIFTI_DIR="/media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI"
 
 # ── Streaming toggle ──────────────────────────────────────────────────────────
-# false → disk mode: reads pre-saved preprocessed CIFTIs from FMRI_OUT_DIR
-# true  → streaming mode: preprocesses raw CIFTIs on-the-fly, no CIFTI saved
+# false → disk mode (read pre-saved preprocessed CIFTIs from PREPROCESSED_INDIV_DIR)
+# true  → streaming mode (preprocess raw CIFTIs from CIFTI_DIR on-the-fly)
 STREAM=false
 
-# Preprocessing flags (streaming mode only; ignored in disk mode)
-# These must match the full-run preprocessing convention (SG→PSC→GSR→zscore per run)
-SG_FILTER=true    # --sg_filter / "" (Savitzky-Golay high-pass)
-PSC=true          # --psc / ""       (percent signal change)
-GSR=true          # --gsr / --no-gsr
-Z_SCORE=true      # --z_score / --no-z_score
+# Preprocessing flags
+SG_FILTER=true    # Savitzky-Golay high-pass filter
+PSC=true          # Percent signal change normalization
+GSR=true          # Global signal regression
+Z_SCORE=true      # Z-score per vertex (applied inside run_cfmodeling.py; not by preprocess_individual.py)
 
-# Preprocessed CIFTI directory (disk mode only — output of preprocess_individual.py)
-FMRI_OUT_DIR="/home/amin/Research/Representation/Movie/outputs/preprocessed"
+# Automatically build PREPROCESSING_FLAG from SG_FILTER/PSC/GSR
+# (Z_SCORE is NOT included — it is applied inside the Python analysis script)
+PREP_PARTS=()
+[ "$SG_FILTER" = "true" ] && PREP_PARTS+=("sg")
+[ "$PSC"       = "true" ] && PREP_PARTS+=("psc")
+[ "$GSR"       = "true" ] && PREP_PARTS+=("gsr")
 
-# Preprocessing suffix (disk mode only — must match what preprocess_individual.py used)
-# preprocess_individual.py suffix: SG→PSC→GSR → sg_psc_gsr  (no zscore step)
-FMRI_SUFFIX="sg_psc_gsr"
+if [ ${#PREP_PARTS[@]} -eq 0 ]; then
+    PREPROCESSING_FLAG="raw"
+else
+    PREPROCESSING_FLAG=$(IFS=_; echo "${PREP_PARTS[*]}")
+fi
 
-# Derived paths — group-average CIFTI is used as template for CIFTI saving
-FMRI_GROUP_CIFTI="${FMRI_OUT_DIR}/group_average_${FMRI_SUFFIX}_cortex_59k.dtseries.nii"
+# fMRI data paths
+FMRI_SUFFIX="${PREPROCESSING_FLAG}"
+# Group-average preprocessed CIFTI (output of preprocess_individual.py --save-average)
+PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/${PREPROCESSING_FLAG}"
+# Per-subject preprocessed CIFTIs (output of preprocess_individual.py --save-individual)
+# File pattern: {PREPROCESSED_INDIV_DIR}/{sub}_{PREPROCESSING_FLAG}_cortex_59k.dtseries.nii
+PREPROCESSED_INDIV_DIR="${DATA_BASE}/preprocessed/${PREPROCESSING_FLAG}"
 
-# Glasser HCP-MMP1 59k_fs_LR dlabel (both modes use same parcellation)
+# Group-average CIFTI — used as fMRI input and CIFTI template for group-average mode
+FMRI_GROUP_CIFTI="${PREPROCESSED_DIR}/group_average_${PREPROCESSING_FLAG}_cortex_59k.dtseries.nii"
+
+# Single authoritative subject list — 175 subjects with full 7T fMRI + midthickness.
+# All pipeline stages (preprocess / cf_modeling) must read from here.
+SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
+
+# Timing
+TIMING_CSV="${DATA_BASE}/movie_timing.csv"
+
+# Glasser HCP-MMP1 59k_fs_LR dlabel (used by extract_geometry.py)
 GLASSER_DLABEL="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
 
-OUTPUT_BASE="/home/amin/Research/Representation/Movie/outputs/cf_modeling"
-RSA_BASE="/home/amin/Research/Representation/Movie/outputs/searchlight_rsa_output"
+# Output and RSA roots
+OUTPUT_BASE="${OUTPUTS_BASE}/cf_modeling"
+RSA_BASE="${OUTPUTS_BASE}/rsa"
 
+# ── Parallelisation ─────────────────────────────────────────────────────────
 CONDA_ENV="cfmod"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_BATCH_SIZE=8    # 8 jobs × 2 BLAS threads ≈ 1 job per physical core
 
+# ── Analysis ROI pairs ───────────────────────────────────────────────────────
+# Format: "ROI_A:ROI_B"
+# Per-subject pairs (computationally expensive; parallelised across subjects)
+PERSUBJECT_PAIRS=(
+    "A5:FFC"
+    "V1:3b"
+    "TA2:MST"
+)
+# Group-average pairs
+AVG_PAIRS=(
+    "A1:V1"
+    "A5:FFC"
+    "3b:V1"
+)
 # =============================================================================
-# CLI
-# =============================================================================
-MODE=${1:-"all"}               # all | persubject | groupaverage
+
+MODE=${1:-all}
 BATCH_SIZE=${2:-$DEFAULT_BATCH_SIZE}
-START_FROM=${3:-""}            # resume from this subject ID (per-subject only)
+START_FROM=${3:-""}
+
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export BLIS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 # =============================================================================
 # HELPERS
 # =============================================================================
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
-run_python() {
-    conda run -n "$CONDA_ENV" python "$@"
+run_python() { conda run -n "$CONDA_ENV" python "$@"; }
+
+# =============================================================================
+# PREPROCESSING PIPELINE
+# =============================================================================
+run_preprocess() {
+    log "=== Preprocessing n=$(grep -cv '^\s*#' "$SUBJECTS_LIST") subjects → ${PREPROCESSED_INDIV_DIR} ==="
+    log "  Flags: SG_FILTER=${SG_FILTER}  PSC=${PSC}  GSR=${GSR}  (${PREPROCESSING_FLAG})"
+    log "  Note: Z_SCORE is applied inside run_cfmodeling.py, not during preprocessing"
+    log "  Subjects: ${SUBJECTS_LIST}"
+    log "  Raw CIFTI dir: ${CIFTI_DIR}"
+
+    local SG_FLAG="" PSC_FLAG="" GSR_FLAG="--no-gsr"
+    [ "$SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
+    [ "$PSC"       = "true" ] && PSC_FLAG="--psc"
+    [ "$GSR"       = "true" ] && GSR_FLAG="--gsr"
+
+    run_python "${SCRIPT_DIR}/../preprocess_individual.py" \
+        --raw-dir        "$CIFTI_DIR" \
+        --out-dir        "$PREPROCESSED_INDIV_DIR" \
+        --subjects-list  "$SUBJECTS_LIST" \
+        --tr             1.0 \
+        $SG_FLAG $PSC_FLAG $GSR_FLAG \
+        --save-individual \
+        --save-average
+
+    # Move group average to PREPROCESSED_DIR so disk-mode avg CF modeling finds it
+    local GA_SRC="${PREPROCESSED_INDIV_DIR}/group_average_${PREPROCESSING_FLAG}_cortex_59k.dtseries.nii"
+    local GA_TRS_SRC="${PREPROCESSED_INDIV_DIR}/group_average_${PREPROCESSING_FLAG}_run_trs.npy"
+    if [ -f "$GA_SRC" ]; then
+        mkdir -p "$PREPROCESSED_DIR"
+        mv -f "$GA_SRC"     "${PREPROCESSED_DIR}/group_average_${PREPROCESSING_FLAG}_cortex_59k.dtseries.nii"
+        [ -f "$GA_TRS_SRC" ] && \
+        mv -f "$GA_TRS_SRC" "${PREPROCESSED_DIR}/group_average_${PREPROCESSING_FLAG}_run_trs.npy"
+        log "  Group average moved → ${PREPROCESSED_DIR}"
+    fi
+
+    log "=== Preprocessing complete ==="
 }
 
 # =============================================================================
 # PER-SUBJECT PIPELINE
 # =============================================================================
 
-# Per-subject worker — called by GNU parallel.
-# Both modes call run_cfmodeling.py (phases 02→04) for one subject.
-# Disk mode:      reads {FMRI_OUT_DIR}/{sub}_{FMRI_SUFFIX}_cortex_59k.dtseries.nii
-# Streaming mode: preprocesses raw CIFTI on-the-fly; no CIFTI saved.
-# Skips if R2_nc maps already exist.
-# Args: SUB SCRIPT_DIR CONDA_ENV OUTPUT_BASE ROI_A ROI_B
-#       FMRI_OUT_DIR FMRI_SUFFIX STREAM CIFTI_DIR SG_FILTER PSC GSR Z_SCORE
+# Worker function — exported for GNU parallel.
+# ROI_A and ROI_B are positional (they vary per ROI-pair call).
+# All other config is read from exported _CF_-prefixed env vars.
+#
+# Args: SUB ROI_A ROI_B
 _run_one_subject() {
     local SUB="$1"
-    local SCRIPT_DIR="$2"
-    local CONDA_ENV="$3"
-    local OUTPUT_BASE="$4"
-    local ROI_A="$5"
-    local ROI_B="$6"
-    local FMRI_OUT_DIR="$7"
-    local FMRI_SUFFIX="$8"
-    local STREAM="${9}"
-    local CIFTI_DIR="${10}"
-    local SG_FILTER="${11}"
-    local PSC="${12}"
-    local GSR="${13}"
-    local Z_SCORE="${14}"
+    local ROI_A="$2"
+    local ROI_B="$3"
 
-    local OUT_DIR="${OUTPUT_BASE}/per_subject/${ROI_A}_${ROI_B}/subjects/${SUB}"
+    local OUT_DIR="${_CF_OUTPUT_BASE}/per_subject/${ROI_A}_${ROI_B}/subjects/${SUB}"
     mkdir -p "$OUT_DIR"
     local LOG="${OUT_DIR}/pipeline.log"
 
     # Skip if null-corrected R² maps already exist
     if [ -f "${OUT_DIR}/R2_${ROI_A}_nc.npy" ] && \
        [ -f "${OUT_DIR}/R2_${ROI_B}_nc.npy" ]; then
-        echo "[$(date +%H:%M:%S)] ${SUB} already done — skipping"
+        echo "[$(date +%H:%M:%S)] ${SUB} ${ROI_A}×${ROI_B}: already done — skipping"
         return 0
     fi
 
-    echo "[$(date +%H:%M:%S)] Starting ${SUB} (stream=${STREAM})" | tee -a "$LOG"
+    echo "[$(date +%H:%M:%S)] Starting ${SUB} ${ROI_A}×${ROI_B} (stream=${_CF_STREAM})" \
+        | tee -a "$LOG"
 
-    if [ "$STREAM" = "true" ]; then
-        # Streaming: preprocess raw CIFTI on-the-fly, no preprocessed CIFTI saved
-        local SG_FLAG="";  [ "$SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
-        local PSC_FLAG=""; [ "$PSC"       = "true" ] && PSC_FLAG="--psc"
-        local GSR_FLAG="--gsr";    [ "$GSR"     = "false" ] && GSR_FLAG="--no-gsr"
-        local ZSC_FLAG="--z-score"; [ "$Z_SCORE" = "false" ] && ZSC_FLAG="--no-z-score"
+    local STATUS=0
+    if [ "$_CF_STREAM" = "true" ]; then
+        local SG_FLAG="";   [ "$_CF_SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
+        local PSC_FLAG="";  [ "$_CF_PSC"       = "true" ] && PSC_FLAG="--psc"
+        local GSR_FLAG="--gsr";     [ "$_CF_GSR"     = "false" ] && GSR_FLAG="--no-gsr"
+        local ZSC_FLAG="--z-score"; [ "$_CF_Z_SCORE" = "false" ] && ZSC_FLAG="--no-z-score"
 
         # shellcheck disable=SC2086
-        conda run -n "$CONDA_ENV" python "${SCRIPT_DIR}/run_cfmodeling.py" \
-            --mode per_subject \
-            --roi-a "$ROI_A" --roi-b "$ROI_B" \
-            --subject "$SUB" \
-            --raw-dir "$CIFTI_DIR" \
-            --output-base "$OUTPUT_BASE" \
-            $SG_FLAG $PSC_FLAG $GSR_FLAG $ZSC_FLAG >> "$LOG" 2>&1 \
-            || { echo "[$(date +%H:%M:%S)] ${SUB} FAILED (streaming)" | tee -a "$LOG"; return 1; }
+        conda run --no-capture-output -n "$_CF_CONDA_ENV" python \
+            "${_CF_SCRIPT_DIR}/run_cfmodeling.py" \
+            --mode       per_subject \
+            --roi-a      "$ROI_A" \
+            --roi-b      "$ROI_B" \
+            --subject    "$SUB" \
+            --raw-dir    "$_CF_CIFTI_DIR" \
+            --output-base "$_CF_OUTPUT_BASE" \
+            $SG_FLAG $PSC_FLAG $GSR_FLAG $ZSC_FLAG \
+            >> "$LOG" 2>&1 || STATUS=$?
     else
-        # Disk mode: read pre-saved preprocessed CIFTI
-        conda run -n "$CONDA_ENV" python "${SCRIPT_DIR}/run_cfmodeling.py" \
-            --mode per_subject \
-            --roi-a "$ROI_A" --roi-b "$ROI_B" \
-            --subject "$SUB" \
-            --preprocessed-dir "$FMRI_OUT_DIR" \
-            --fmri-suffix "$FMRI_SUFFIX" \
-            --output-base "$OUTPUT_BASE" >> "$LOG" 2>&1 \
-            || { echo "[$(date +%H:%M:%S)] ${SUB} FAILED" | tee -a "$LOG"; return 1; }
+        local FMRI_PATH="${_CF_PREPROCESSED_INDIV_DIR}/${SUB}_${_CF_FMRI_SUFFIX}_cortex_59k.dtseries.nii"
+        if [ ! -f "$FMRI_PATH" ]; then
+            echo "[$(date +%H:%M:%S)] ${SUB}: no preprocessed CIFTI — run preprocess mode first" \
+                | tee -a "$LOG"
+            return 1
+        fi
+
+        conda run --no-capture-output -n "$_CF_CONDA_ENV" python \
+            "${_CF_SCRIPT_DIR}/run_cfmodeling.py" \
+            --mode             per_subject \
+            --roi-a            "$ROI_A" \
+            --roi-b            "$ROI_B" \
+            --subject          "$SUB" \
+            --preprocessed-dir "$_CF_PREPROCESSED_INDIV_DIR" \
+            --fmri-suffix      "$_CF_FMRI_SUFFIX" \
+            --output-base      "$_CF_OUTPUT_BASE" \
+            >> "$LOG" 2>&1 || STATUS=$?
     fi
 
-    echo "[$(date +%H:%M:%S)] ${SUB} DONE" | tee -a "$LOG"
+    if [ $STATUS -eq 0 ]; then
+        echo "[$(date +%H:%M:%S)] ${SUB} ${ROI_A}×${ROI_B} DONE" | tee -a "$LOG"
+    else
+        echo "[$(date +%H:%M:%S)] ${SUB} ${ROI_A}×${ROI_B} FAILED (exit $STATUS)" | tee -a "$LOG"
+        return $STATUS
+    fi
 }
 export -f _run_one_subject
 
-
-run_persubject_analysis() {
+run_persubject_pair() {
     local ROI_A="$1"
     local ROI_B="$2"
     local OUT="${OUTPUT_BASE}/per_subject/${ROI_A}_${ROI_B}"
@@ -167,176 +270,184 @@ run_persubject_analysis() {
     [ "$STREAM" = "true" ] && MODE_TAG="streaming" || MODE_TAG="disk"
     log "======================================================"
     log "  Per-subject: ${ROI_A} × ${ROI_B}  [${MODE_TAG}]"
-    if [ "$STREAM" = "true" ]; then
-        log "  Raw CIFTI: ${CIFTI_DIR}"
-    else
-        log "  FMRI: ${FMRI_OUT_DIR} (suffix: ${FMRI_SUFFIX})"
-    fi
-    log "  Output: ${OUT}"
+    log "  Subjects: ${SUBJECTS_LIST}"
+    log "  Output:   ${OUT}"
     log "  Parallel: ${BATCH_SIZE} jobs"
     log "======================================================"
 
-    # -- Step 01: geometry + LBOEs (one-time, cached) -------------------------
+    # ── Step 01: geometry + LBOEs (one-time, cached) ─────────────────────────
     local SUB_A_PKL="${OUT}/subsurfaces/sub_$(echo "$ROI_A" | tr '[:upper:]' '[:lower:]').pkl"
     local SUB_B_PKL="${OUT}/subsurfaces/sub_$(echo "$ROI_B" | tr '[:upper:]' '[:lower:]').pkl"
 
     if [ -f "$SUB_A_PKL" ] && [ -f "$SUB_B_PKL" ]; then
         log "[01] Subsurfaces cached — skipping"
     else
-        log "[01] Building ${ROI_A} + ${ROI_B} subsurfaces + LBOEs (59k_fs_LR) …"
+        log "[01] Building ${ROI_A} + ${ROI_B} subsurfaces + LBOEs (59k_fs_LR) ..."
         run_python "${SCRIPT_DIR}/extract_geometry.py" \
-            --mode per_subject \
-            --roi_a "$ROI_A" --roi_b "$ROI_B" \
-            --hcp_dir "$HCP_DIR" \
+            --mode         per_subject \
+            --roi_a        "$ROI_A" \
+            --roi_b        "$ROI_B" \
+            --hcp_dir      "$HCP_DIR" \
             --glasser_dlabel "$GLASSER_DLABEL" \
-            --output_base "$OUTPUT_BASE"
+            --output_base  "$OUTPUT_BASE"
         log "[01] Done"
     fi
 
-    # -- Steps 02-04: per-subject in parallel ----------------------------------
+    # ── Steps 02-04: per-subject in parallel ──────────────────────────────────
     local SUBJECTS
-    SUBJECTS=$(ls "$CIFTI_DIR"/ | grep "MOVIE1" | sed 's/_.*//' | sort -u)
+    SUBJECTS=$(grep -v '^\s*#' "$SUBJECTS_LIST" \
+               | sed 's/#.*//' \
+               | awk '{print $1}' \
+               | grep -v '^$')
     if [ -n "$START_FROM" ]; then
         SUBJECTS=$(echo "$SUBJECTS" | awk "/$START_FROM/{found=1} found{print}")
     fi
     local N_TOTAL
-    N_TOTAL=$(echo "$SUBJECTS" | wc -w)
-    log "[02-04] Processing ${N_TOTAL} subjects (${BATCH_SIZE} in parallel, ${MODE_TAG}) …"
+    N_TOTAL=$(echo "$SUBJECTS" | wc -l)
+    log "[02-04] Processing ${N_TOTAL} subjects from ${SUBJECTS_LIST} (${BATCH_SIZE} parallel, ${MODE_TAG}) ..."
+
+    export _CF_SCRIPT_DIR="$SCRIPT_DIR"
+    export _CF_CONDA_ENV="$CONDA_ENV"
+    export _CF_OUTPUT_BASE="$OUTPUT_BASE"
+    export _CF_PREPROCESSED_INDIV_DIR="$PREPROCESSED_INDIV_DIR"
+    export _CF_FMRI_SUFFIX="$FMRI_SUFFIX"
+    export _CF_STREAM="$STREAM"
+    export _CF_CIFTI_DIR="$CIFTI_DIR"
+    export _CF_SG_FILTER="$SG_FILTER"
+    export _CF_PSC="$PSC"
+    export _CF_GSR="$GSR"
+    export _CF_Z_SCORE="$Z_SCORE"
 
     if command -v parallel &>/dev/null; then
         echo "$SUBJECTS" | parallel --jobs "$BATCH_SIZE" --line-buffer \
-            _run_one_subject {} \
-            "$SCRIPT_DIR" "$CONDA_ENV" "$OUTPUT_BASE" \
-            "$ROI_A" "$ROI_B" "$FMRI_OUT_DIR" "$FMRI_SUFFIX" \
-            "$STREAM" "$CIFTI_DIR" "$SG_FILTER" "$PSC" "$GSR" "$Z_SCORE"
+            _run_one_subject {} "$ROI_A" "$ROI_B"
     else
         log "GNU parallel not found — running sequentially"
-        log "(install: conda install -c conda-forge parallel)"
+        log "  (install with: conda install -c conda-forge parallel)"
         for SUB in $SUBJECTS; do
-            _run_one_subject "$SUB" \
-                "$SCRIPT_DIR" "$CONDA_ENV" "$OUTPUT_BASE" \
-                "$ROI_A" "$ROI_B" "$FMRI_OUT_DIR" "$FMRI_SUFFIX" \
-                "$STREAM" "$CIFTI_DIR" "$SG_FILTER" "$PSC" "$GSR" "$Z_SCORE"
+            _run_one_subject "$SUB" "$ROI_A" "$ROI_B"
         done
     fi
     log "[02-04] All subjects done"
 
-    # -- Step 05: aggregate + integration maps ---------------------------------
-    log "[05] Aggregating subjects → integration maps …"
+    # ── Step 05: aggregate + integration maps ────────────────────────────────
+    log "[05] Aggregating subjects → integration maps ..."
     run_python "${SCRIPT_DIR}/integration_maps.py" \
-        --mode per_subject \
-        --roi_a "$ROI_A" --roi_b "$ROI_B" \
-        --output_base "$OUTPUT_BASE" \
+        --mode          per_subject \
+        --roi_a         "$ROI_A" \
+        --roi_b         "$ROI_B" \
+        --output_base   "$OUTPUT_BASE" \
         --template_cifti "$FMRI_GROUP_CIFTI"
     log "[05] Done"
 
-    # -- Step 06: group statistics --------------------------------------------
-    log "[06] Group statistics …"
+    # ── Step 06: group statistics ─────────────────────────────────────────────
+    log "[06] Group statistics ..."
     run_python "${SCRIPT_DIR}/summary.py" \
-        --mode per_subject \
-        --roi_a "$ROI_A" --roi_b "$ROI_B" \
-        --output_base "$OUTPUT_BASE" \
+        --mode          per_subject \
+        --roi_a         "$ROI_A" \
+        --roi_b         "$ROI_B" \
+        --output_base   "$OUTPUT_BASE" \
         --template_cifti "$FMRI_GROUP_CIFTI"
     log "[06] Done"
 
     log "Per-subject ${ROI_A}×${ROI_B} complete → ${OUT}"
 }
 
+run_persubject() {
+    log "=== Per-subject CF modeling (${#PERSUBJECT_PAIRS[@]} ROI pairs) ==="
+    for PAIR in "${PERSUBJECT_PAIRS[@]}"; do
+        IFS=':' read -r ROI_A ROI_B <<< "$PAIR"
+        run_persubject_pair "$ROI_A" "$ROI_B"
+    done
+    log "=== Per-subject CF modeling complete ==="
+}
 
 # =============================================================================
 # GROUP-AVERAGE PIPELINE
 # =============================================================================
-
-run_groupaverage_analysis() {
+run_avg_pair() {
     local ROI_A="$1"
     local ROI_B="$2"
     local OUT="${OUTPUT_BASE}/group_average/${ROI_A}_${ROI_B}"
 
     log "======================================================"
     log "  Group-average: ${ROI_A} × ${ROI_B}"
-    log "  FMRI: ${FMRI_GROUP_CIFTI}"
+    log "  fMRI: ${FMRI_GROUP_CIFTI}"
     log "  Output: ${OUT}"
     log "======================================================"
 
-    local COMMON="--mode group_average --roi_a $ROI_A --roi_b $ROI_B --output_base $OUTPUT_BASE"
-
-    # -- Step 01: geometry + LBOEs (one-time, cached) -------------------------
+    # ── Step 01: geometry + LBOEs (one-time, cached) ─────────────────────────
     local SUB_A_PKL="${OUT}/subsurfaces/sub_$(echo "$ROI_A" | tr '[:upper:]' '[:lower:]').pkl"
     local SUB_B_PKL="${OUT}/subsurfaces/sub_$(echo "$ROI_B" | tr '[:upper:]' '[:lower:]').pkl"
 
     if [ -f "$SUB_A_PKL" ] && [ -f "$SUB_B_PKL" ]; then
         log "[01] Subsurfaces cached — skipping"
     else
-        log "[01] Building ${ROI_A} + ${ROI_B} subsurfaces + LBOEs (59k_fs_LR) …"
+        log "[01] Building ${ROI_A} + ${ROI_B} subsurfaces + LBOEs (59k_fs_LR) ..."
         run_python "${SCRIPT_DIR}/extract_geometry.py" \
-            $COMMON \
-            --hcp_dir "$HCP_DIR" \
-            --glasser_dlabel "$GLASSER_DLABEL"
+            --mode          group_average \
+            --roi_a         "$ROI_A" \
+            --roi_b         "$ROI_B" \
+            --hcp_dir       "$HCP_DIR" \
+            --glasser_dlabel "$GLASSER_DLABEL" \
+            --output_base   "$OUTPUT_BASE"
         log "[01] Done"
     fi
 
-    log "[02-04] Prepare data, fit banded ridge, null-correct …"
+    log "[02-04] Prepare data, fit banded ridge, null-correct ..."
     run_python "${SCRIPT_DIR}/run_cfmodeling.py" \
-        --mode group_average \
-        --roi-a "$ROI_A" --roi-b "$ROI_B" \
-        --output-base "$OUTPUT_BASE" \
-        --preprocessed-dir "$FMRI_OUT_DIR" \
-        --fmri-suffix "$FMRI_SUFFIX" \
-        --template-cifti "$FMRI_GROUP_CIFTI"
+        --mode             group_average \
+        --roi-a            "$ROI_A" \
+        --roi-b            "$ROI_B" \
+        --output-base      "$OUTPUT_BASE" \
+        --preprocessed-dir "$PREPROCESSED_DIR" \
+        --fmri-suffix      "$FMRI_SUFFIX" \
+        --template-cifti   "$FMRI_GROUP_CIFTI"
     log "[02-04] Done"
 
-    log "[05] Integration maps …"
+    log "[05] Integration maps ..."
     run_python "${SCRIPT_DIR}/integration_maps.py" \
-        $COMMON \
+        --mode          group_average \
+        --roi_a         "$ROI_A" \
+        --roi_b         "$ROI_B" \
+        --output_base   "$OUTPUT_BASE" \
         --template_cifti "$FMRI_GROUP_CIFTI"
     log "[05] Done"
 
-    log "[06] RSA spatial overlap …"
+    log "[06] RSA spatial overlap ..."
     run_python "${SCRIPT_DIR}/summary.py" \
-        $COMMON \
+        --mode          group_average \
+        --roi_a         "$ROI_A" \
+        --roi_b         "$ROI_B" \
+        --output_base   "$OUTPUT_BASE" \
         --template_cifti "$FMRI_GROUP_CIFTI" \
-        --rsa_base "$RSA_BASE"
+        --rsa_base      "$RSA_BASE"
     log "[06] Done"
 
     log "Group-average ${ROI_A}×${ROI_B} complete → ${OUT}"
 }
 
-
-# =============================================================================
-# ANALYSIS DEFINITIONS  — add ROI pairs here
-# =============================================================================
-
-run_all_persubject() {
-    run_persubject_analysis "A5"  "FFC"
-    run_persubject_analysis "V1"  "3b"
-    run_persubject_analysis "TA2" "MST"
+run_avg() {
+    log "=== Group-average CF modeling (${#AVG_PAIRS[@]} ROI pairs) ==="
+    for PAIR in "${AVG_PAIRS[@]}"; do
+        IFS=':' read -r ROI_A ROI_B <<< "$PAIR"
+        run_avg_pair "$ROI_A" "$ROI_B"
+    done
+    log "=== Group-average CF modeling complete ==="
 }
-
-run_all_groupaverage() {
-    run_groupaverage_analysis "A1" "V1"
-    run_groupaverage_analysis "A5" "FFC"
-    run_groupaverage_analysis "3b" "V1"
-}
-
 
 # =============================================================================
 # DISPATCH
 # =============================================================================
 case "$MODE" in
-    persubject)
-        run_all_persubject
-        ;;
-    groupaverage)
-        run_all_groupaverage
-        ;;
-    all)
-        run_all_persubject
-        run_all_groupaverage
-        ;;
+    preprocess)              run_preprocess ;;
+    avg|groupaverage)        run_avg ;;
+    persubject)              run_persubject ;;
+    all)                     run_avg; run_persubject ;;
     *)
-        echo "Unknown mode: $MODE. Use: all | persubject | groupaverage" >&2
-        exit 1
-        ;;
+        echo "Unknown mode: $MODE" >&2
+        echo "Use: preprocess | avg | persubject | all" >&2
+        exit 1 ;;
 esac
 
-log "All analyses complete."
+log "All CF modeling analyses complete."

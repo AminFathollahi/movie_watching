@@ -1,49 +1,108 @@
 #!/bin/bash
+# make_average.sh
+# ================
+# Build group-average midthickness and inflated surfaces from the 175 subjects
+# listed in data/subjects.txt.
+#
+# Uses ONLY subjects in subjects.txt — never globs the full directory — so stray
+# surface files (e.g., 995174 which is present in midthickness_1.6/ but absent
+# from subjects.txt) are excluded automatically.
+#
+# Usage
+# -----
+#   bash make_average.sh
+#
+# Output
+# ------
+#   GroupAverage_59k/CohortAvg.{L,R}.midthickness_MSMAll.59k_fs_LR.surf.gii
+#   GroupAverage_59k/CohortAvg.{L,R}.inflated_MSMAll.59k_fs_LR.surf.gii
+#
+# After running, build the geodesic k-NN cache for the new group-average surface:
+#   bash rsa/run_analysis.sh neighbors_avg
 
-# Define directories (Updated to match your actual capitalizations)
-MID_DIR="/home/amin/Research/Representation/Movie/data/midthickness_1.6"
-INF_DIR="/home/amin/Research/Representation/Movie/data/Inflated_1.6"
-OUT_DIR="/home/amin/Research/Representation/Movie/data/GroupAverage_59k"
+set -euo pipefail
 
-# Create output directory if it doesn't exist
-mkdir -p "$OUT_DIR"
+# =============================================================================
+# CONFIG
+# =============================================================================
+DATA_BASE="/home/amin/Research/Representation/Movie/data"
 
-# Function to compute average for a specific hemisphere and surface type
-average_surfaces() {
-    local hemi=$1
-    local surf_type=$2
-    local data_dir=$3
-    local out_file="$OUT_DIR/CohortAvg.${hemi}.${surf_type}_MSMAll.59k_fs_LR.surf.gii"
+# Authoritative subject list (n=175; excludes subjects without midthickness)
+SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 
-    echo "Building average for ${hemi} ${surf_type}..."
+MID_DIR="${DATA_BASE}/midthickness_1.6"
+INF_DIR="${DATA_BASE}/Inflated_1.6"
+OUT_DIR="${DATA_BASE}/GroupAverage_59k"
 
-    # Fixed wildcard: Removed the extra dot between hemisphere and surface type
-    local surf_args=""
-    for file in "$data_dir"/*."$hemi"."$surf_type"*.surf.gii; do
-        if [ -f "$file" ]; then
-            surf_args="$surf_args -surf $file"
-        fi
-    done
+WORKBENCH="${WORKBENCH:-/opt/workbench/bin_linux64/wb_command}"
 
-    # Check if we found files
-    if [ -z "$surf_args" ]; then
-        echo "No files found for $hemi $surf_type in $data_dir"
-        return
-    fi
+# =============================================================================
+# HELPERS
+# =============================================================================
+log() { echo "[$(date +%H:%M:%S)] $*"; }
 
-    # Execute the surface average command
-    wb_command -surface-average "$out_file" $surf_args
-    
-    echo "Saved to $out_file"
+# Load subject IDs from subjects.txt (skip blank lines and # comments)
+load_subjects() {
+    grep -v '^\s*#' "$SUBJECTS_LIST" | sed 's/#.*//' | awk '{print $1}' | grep -v '^$'
 }
 
-# Run the averaging for Left and Right hemispheres for Midthickness
-# (Make sure your midthickness folder is actually lowercase 'm')
+# =============================================================================
+# average_surfaces HEMI SURF_TYPE DATA_DIR
+#   HEMI      : L or R
+#   SURF_TYPE : midthickness | inflated
+#   DATA_DIR  : directory containing per-subject .surf.gii files
+# =============================================================================
+average_surfaces() {
+    local hemi="$1"
+    local surf_type="$2"
+    local data_dir="$3"
+    local out_file="${OUT_DIR}/CohortAvg.${hemi}.${surf_type}_MSMAll.59k_fs_LR.surf.gii"
+
+    log "Building ${hemi} ${surf_type} average from subjects in ${SUBJECTS_LIST} ..."
+
+    local surf_args=""
+    local n_found=0
+    local missing=()
+
+    while IFS= read -r sub; do
+        # Pattern: {sub}.{L|R}.{surf_type}_1.6mm_MSMAll.59k_fs_LR.surf.gii
+        local f="${data_dir}/${sub}.${hemi}.${surf_type}_1.6mm_MSMAll.59k_fs_LR.surf.gii"
+        if [ -f "$f" ]; then
+            surf_args="${surf_args} -surf ${f}"
+            n_found=$(( n_found + 1 ))
+        else
+            missing+=("$sub")
+        fi
+    done < <(load_subjects)
+
+    if [ "$n_found" -eq 0 ]; then
+        log "ERROR: no ${hemi} ${surf_type} files found — check MID_DIR / INF_DIR paths"
+        return 1
+    fi
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        log "WARNING: ${#missing[@]} subject(s) missing ${hemi} ${surf_type}: ${missing[*]}"
+    fi
+
+    log "  Averaging ${n_found} surfaces → ${out_file}"
+    # shellcheck disable=SC2086
+    "$WORKBENCH" -surface-average "$out_file" $surf_args
+    log "  Saved: ${out_file}"
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+mkdir -p "$OUT_DIR"
+
+N_SUBS=$(load_subjects | wc -l)
+log "=== Group-average surfaces — ${N_SUBS} subjects from ${SUBJECTS_LIST} ==="
+
 average_surfaces "L" "midthickness" "$MID_DIR"
 average_surfaces "R" "midthickness" "$MID_DIR"
 
-# Run the averaging for Left and Right hemispheres for Inflated
 average_surfaces "L" "inflated" "$INF_DIR"
 average_surfaces "R" "inflated" "$INF_DIR"
 
-echo "All group averages generated successfully."
+log "=== All group averages generated → ${OUT_DIR} ==="
+log "Next step: bash rsa/run_analysis.sh neighbors_avg"

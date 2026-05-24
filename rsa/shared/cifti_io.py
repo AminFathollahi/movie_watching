@@ -74,6 +74,68 @@ def save_cifti_multimap(data_2d: np.ndarray, map_names: list,
     nib.save(img, output_path)
 
 
+def get_combined_map_names(combined_path) -> list:
+    """Return the scalar map names in an existing combined CIFTI dscalar.
+
+    Returns an empty list if the file does not exist or cannot be read.
+    Safe to call before the combined file has been created.
+    """
+    try:
+        img = nib.load(str(combined_path))
+        ax = img.header.get_axis(0)
+        return [ax.name[i] for i in range(img.shape[0])]
+    except Exception:
+        return []
+
+
+def merge_into_combined(new_map: np.ndarray, map_name: str,
+                         combined_path, template_cifti: str) -> None:
+    """Add or overwrite one scalar map in a combined CIFTI dscalar file.
+
+    If *combined_path* does not exist a new file is created.
+    If it already contains *map_name* that map is replaced in-place.
+    Otherwise the new map is appended.
+
+    Parameters
+    ----------
+    new_map        : (n_grayords,) float32
+    map_name       : label shown in wb_view
+    combined_path  : destination .dscalar.nii (Path or str)
+    template_cifti : any CIFTI whose BrainModelAxis is used when creating
+                     a new combined file from scratch
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    combined_path = str(combined_path)
+    existing = get_combined_map_names(combined_path)
+
+    if existing:
+        img = nib.load(combined_path)
+        data = img.get_fdata(dtype=np.float32)          # (n_maps, n_verts)
+        if map_name in existing:
+            log.info(f"  Replacing map '{map_name}' in {combined_path}")
+            data[existing.index(map_name)] = new_map.astype(np.float32)
+            names = existing
+        else:
+            log.info(f"  Appending map '{map_name}' to {combined_path} "
+                     f"(existing: {existing})")
+            data  = np.vstack([data, new_map.reshape(1, -1).astype(np.float32)])
+            names = existing + [map_name]
+        bm_axis     = img.header.get_axis(1)
+        scalar_axis = nib.cifti2.ScalarAxis(names)
+        header      = nib.cifti2.Cifti2Header.from_axes((scalar_axis, bm_axis))
+        nib.save(nib.Cifti2Image(data, header=header), combined_path)
+    else:
+        log.info(f"  Creating combined file '{map_name}': {combined_path}")
+        save_cifti_multimap(
+            new_map.reshape(1, -1).astype(np.float32),
+            [map_name], template_cifti, combined_path,
+        )
+
+    log.info(f"  Combined saved: {combined_path}  maps={get_combined_map_names(combined_path)}")
+
+
 def get_cortex_vertex_indices(bm_axis):
     """Return left and right cortical vertex index arrays from a BrainModelAxis.
 

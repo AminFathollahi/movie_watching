@@ -49,6 +49,7 @@ import json
 import logging
 import math
 import os
+import re
 import subprocess
 import sys
 import types
@@ -69,6 +70,7 @@ from rsa.shared.rsa_utils import (
 )
 from rsa.shared.cifti_io import (
     get_bm_axis, save_cifti_multimap, get_cortex_vertex_indices,
+    get_combined_map_names, merge_into_combined,
 )
 
 logging.basicConfig(
@@ -130,6 +132,16 @@ def parse_args():
                    help="Convolve embeddings with SPM HRF.")
     p.add_argument("--method", required=True, choices=["spearman", "pearson"])
     p.add_argument("--tr", type=float, required=True)
+    p.add_argument("--combined-output", default=None, dest="combined_output",
+                   help="Path to a combined .dscalar.nii that accumulates maps from "
+                        "both searchlight and Glasser runs. This script adds/replaces "
+                        "the 'searchlight_{method}_rho' map. The individual output "
+                        "file is still saved alongside.")
+    p.add_argument("--geodesic-cache-dir", default=None, dest="geodesic_cache_dir",
+                   help="Shared directory for geodesic k-NN .npy caches (preprocessing-"
+                        "agnostic). Defaults to {output_dir}/_geodesic_cache if not set. "
+                        "All analysis variants should point here so the k_max derivation "
+                        "logic works across preprocessing configs.")
 
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
     prep.add_argument("--sg-filter", default=False, action="store_true")
@@ -205,17 +217,45 @@ def _extract_knn_from_dconn(dconn_path: Path, k: int,
     return neighbors
 
 
+def _parse_k_from_npy(path: Path) -> int:
+    """Extract the k value encoded in a cache filename.
+
+    Expected pattern: ``{anything}_neighbors_k{K}.npy``
+    Returns -1 if the pattern is not found (file is not a valid cache).
+    """
+    m = re.search(r"_neighbors_k(\d+)$", path.stem)
+    return int(m.group(1)) if m else -1
+
+
 def get_neighbors(surface_path: str, workbench: str, subject: str,
                   hem: str, k: int, cache_dir: Path) -> np.ndarray:
-    """Return (n_surf_verts, k) int32 k-NN array, using a two-level cache.
+    """Return (n_surf_verts, k) int32 k-NN array, using a three-level cache.
+
+    Cache filename convention
+    ------------------------
+    All cache files follow: ``{subject}_{hem}_neighbors_k{K}.npy``
+    The K value in the filename is the number of neighbours stored in that
+    file.  Any file with K_file >= k can serve a request for k neighbours.
 
     Cache lookup order
     ------------------
-    1. Exact match  : ``{subject}_{hem}_neighbors_k{k}.npy``  → load directly.
-    2. k_max derivation : any ``_neighbors_k{k_max}.npy`` with k_max > k exists
-       → slice ``[:, :k]``, save as exact-match file, return.  This means a
-       single ``precompute_neighbors.py`` run at k=150 covers all k ≤ 150.
-    3. Geodesic fallback : compute dconn → extract k-NN → save → delete dconn.
+    Level 1 — exact match
+        ``{subject}_{hem}_neighbors_k{k}.npy`` exists → load directly.
+
+    Level 2 — k_max derivation (k_file > k)
+        One or more ``_neighbors_k{K_file}.npy`` files exist with K_file > k.
+        Use the *smallest* such K_file (minimum memory load), slice to k
+        columns, save the result as the exact-match file, return.
+        A single precompute run at k=150 therefore covers all k ≤ 150
+        for both group_average and per-subject without re-running wb_command.
+
+    Level 3 — geodesic fallback (no usable cache)
+        No file with K_file >= k exists.  Run wb_command to compute the full
+        all-to-all geodesic distance matrix, extract k-NN, save as
+        ``{subject}_{hem}_neighbors_k{k}.npy``, delete the 14 GB dconn
+        (per-subject only; group_average dconn is kept for future k values).
+
+    This logic applies identically to group_average and individual subjects.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     npy_path   = cache_dir / f"{subject}_{hem}_neighbors_k{k}.npy"
@@ -223,27 +263,37 @@ def get_neighbors(surface_path: str, workbench: str, subject: str,
 
     # ── Level 1: exact k cache ─────────────────────────────────────────────────
     if npy_path.exists():
-        log.info(f"  k-NN cache hit: {npy_path.name}")
+        log.info(f"  [L1] k-NN cache hit (exact k={k}): {npy_path.name}")
         return np.load(str(npy_path))
 
-    # ── Level 2: derive from a larger-k cache (avoids rerunning wb_command) ────
-    k_max_val, k_max_path = 0, None
+    # ── Level 2: derive from smallest available k_max > k ─────────────────────
+    # Scan for all valid cache files for this subject+hemisphere, keep only
+    # those with K_file > k, pick the smallest (minimum data to load/slice).
+    best_kmax, best_path = None, None
     for candidate in cache_dir.glob(f"{subject}_{hem}_neighbors_k*.npy"):
-        try:
-            k_cand = int(candidate.stem.rsplit("_k", 1)[-1])
-        except ValueError:
-            continue
-        if k_cand > k and k_cand > k_max_val:
-            k_max_val, k_max_path = k_cand, candidate
+        k_file = _parse_k_from_npy(candidate)
+        if k_file < 0:
+            continue                          # filename doesn't match convention
+        if k_file > k:
+            if best_kmax is None or k_file < best_kmax:
+                best_kmax, best_path = k_file, candidate
 
-    if k_max_path is not None:
-        log.info(f"  Deriving k={k} from k={k_max_val} cache: {k_max_path.name}")
-        neighbors = np.ascontiguousarray(np.load(str(k_max_path))[:, :k])
+    if best_path is not None:
+        log.info(
+            f"  [L2] Deriving k={k} from k={best_kmax} cache "
+            f"(smallest available ≥ k): {best_path.name}"
+        )
+        neighbors = np.ascontiguousarray(np.load(str(best_path))[:, :k])
         np.save(str(npy_path), neighbors)
-        log.info(f"  k-NN saved (derived): {npy_path.name}")
+        log.info(f"  [L2] Saved derived cache: {npy_path.name}")
         return neighbors
 
-    # ── Level 3: geodesic fallback ─────────────────────────────────────────────
+    # ── Level 3: no usable cache — compute from geodesic distances ────────────
+    log.info(
+        f"  [L3] No cache with K_file >= {k} found for {subject}/{hem}. "
+        f"Running wb_command geodesic → {npy_path.name}"
+    )
+
     # Guard against partially-written dconn left by a previous crashed run.
     if dconn_path.exists() and not _dconn_is_complete(dconn_path):
         log.warning(
@@ -255,12 +305,13 @@ def get_neighbors(surface_path: str, workbench: str, subject: str,
     _compute_geodesic_dconn(surface_path, workbench, dconn_path)
     neighbors = _extract_knn_from_dconn(dconn_path, k)
     np.save(str(npy_path), neighbors)
-    log.info(f"  k-NN saved: {npy_path.name}")
+    log.info(f"  [L3] Saved new cache: {npy_path.name}")
 
-    # Free the 14 GB dconn for individual subjects; keep for group_average
+    # Free the 14 GB dconn for individual subjects; keep for group_average so
+    # that future requests for larger k can reuse it without re-running wb_command.
     if subject != "group_average" and dconn_path.exists():
         dconn_path.unlink()
-        log.info(f"  Deleted dconn: {dconn_path.name}")
+        log.info(f"  [L3] Deleted dconn (per-subject): {dconn_path.name}")
 
     return neighbors
 
@@ -431,19 +482,28 @@ def _streaming_fmri_tag(args) -> str:
 # Core analysis
 # =============================================================================
 
-def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, 
+def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
                   timing_df: pd.DataFrame, config: str, out_root: Path, fmri_tag: str):
-    
-    bin_sec_int = int(args.bin_sec)
-    
-    # The output map appends the delay config for clarity even though it wasn't preprocessed with it
-    delay_tag = f"delay{int(args.delay_sec)}s"
-    
-    # CHANGE THIS LINE:
-    maps_out = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_maps.dscalar.nii"
 
+    bin_sec_int  = int(args.bin_sec)
+    delay_tag    = f"delay{int(args.delay_sec)}s"
+    maps_out     = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_maps.dscalar.nii"
+    map_name     = f"searchlight_{args.method}_rho"
+    combined_path = Path(args.combined_output) if args.combined_output else None
+
+    # ── Skip / fast-merge logic ───────────────────────────────────────────────
     if maps_out.exists():
-        log.info(f"Output already exists — skipping: {maps_out.name}")
+        if combined_path is None:
+            log.info(f"Output already exists — skipping: {maps_out.name}")
+            return
+        if map_name in get_combined_map_names(combined_path):
+            log.info(f"Output already exists and combined up to date — skipping: {maps_out.name}")
+            return
+        # Individual done, combined missing this map → merge without recomputing
+        log.info(f"  Individual map exists; merging '{map_name}' into combined ...")
+        corr_full = nib.load(str(maps_out)).get_fdata(dtype=np.float32).squeeze()
+        combined_path.parent.mkdir(parents=True, exist_ok=True)
+        merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
         return
 
     fmri_binned = preprocess_fmri(
@@ -470,7 +530,14 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     left_indices, right_indices = get_cortex_vertex_indices(bm_axis)
     n_left = len(left_indices)
 
-    cache_dir = Path(args.output_dir) / "_geodesic_cache"
+    # Shared geodesic cache: use explicit override if provided, else fall back to
+    # the preprocessing-specific subdir.  All callers in run_analysis.sh pass
+    # --geodesic-cache-dir so the same .npy files are shared across preprocessing
+    # variants and the k_max derivation (Level 2) works correctly.
+    if getattr(args, "geodesic_cache_dir", None):
+        cache_dir = Path(args.geodesic_cache_dir)
+    else:
+        cache_dir = Path(args.output_dir) / "_geodesic_cache"
 
     surfaces = {
         "left":  (args.left_surface,  fmri_binned[:, :n_left],  left_indices),
@@ -516,6 +583,11 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
         str(maps_out),
     )
     log.info(f"  Saved: {maps_out.name}  max_r={corr_full.max():.4f}")
+
+    # ── Merge into combined output ────────────────────────────────────────────
+    if combined_path is not None:
+        combined_path.parent.mkdir(parents=True, exist_ok=True)
+        merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
 
     # ── Per-subject JSON report (flat directory, keyed by subject ID) ─────────
     reports_dir = Path(args.output_dir) / "subject_reports"

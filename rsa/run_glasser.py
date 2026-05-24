@@ -266,7 +266,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     emb = process_model_embeddings(
         str(emb_file), timing_df,
         bin_sec=args.bin_sec,
-        tr=args.tr,
+        tr=args.tr,run_trs=run_trs
     )
 
     # Enforce exact temporal alignment

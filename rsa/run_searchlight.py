@@ -516,7 +516,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     log.info(f"  Embeddings: {emb_file}")
 
     emb = process_model_embeddings(
-        str(emb_file), timing_df, bin_sec=args.bin_sec, hrf=args.hrf, tr=args.tr,
+        str(emb_file), timing_df, bin_sec=args.bin_sec, tr=args.tr,
         run_trs=run_trs, delay_sec=args.delay_sec
     )
     log.info(f"  Model binned & z-scored: {emb.shape}")

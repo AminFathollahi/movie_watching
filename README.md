@@ -107,3 +107,4 @@ conda env create -f rsa/environment.yml          # analysis  (RSA + encoding)
 conda env create -f cf_modeling/environment.yml  # cfmod     (CF modeling)
 conda env create -f notebooks/feature_extraction/environment.yml  # avtransformer
 ```
+

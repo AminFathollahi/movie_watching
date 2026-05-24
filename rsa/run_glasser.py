@@ -265,7 +265,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     log.info(f"  Embeddings: {emb_file}")
     emb = process_model_embeddings(
         str(emb_file), timing_df,
-        bin_sec=args.bin_sec, hrf=args.hrf,
+        bin_sec=args.bin_sec,
         tr=args.tr,
     )
 

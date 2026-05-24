@@ -112,3 +112,8 @@ Delete the output CIFTI to force a rerun for that subject.
 ```bash
 parallel --citation
 ```
+## Next Steps
+### 1. run the K reliability analysis
+### 2. Run per subject RSA with the group aggregate maps and analyses
+### 3. validate with other models and other PE-AV sizes
+### 4. run off-diagonal control to mitigate fmri autocorrelation

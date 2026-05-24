@@ -156,7 +156,7 @@ def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
 
 
 def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
-                             bin_sec: float, hrf: bool, tr: float,
+                             bin_sec: float, tr: float,
                              run_trs: np.ndarray, delay_sec: float = 0.0) -> np.ndarray:
     """Load and align model embeddings to the fMRI binning scheme.
 

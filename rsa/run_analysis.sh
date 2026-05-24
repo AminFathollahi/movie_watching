@@ -105,8 +105,8 @@ CIFTI_DIR="/media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI"
 STREAM=true
 
 # Preprocessing flags
-SG_FILTER=true     # Savitzky-Golay high-pass filter
-PSC=true           # percent signal change normalization
+SG_FILTER=fals     # Savitzky-Golay high-pass filter
+PSC=false           # percent signal change normalization
 GSR=true           # global signal regression
 
 # Automatically build PREPROCESSING_FLAG based on the toggles above
@@ -173,7 +173,7 @@ TR=1.0
 BIN_SEC=2.0
 HRF=false
 METHOD="spearman"
-K=150 
+K=100 
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(

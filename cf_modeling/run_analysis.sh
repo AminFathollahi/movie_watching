@@ -11,7 +11,7 @@
 #   MODE        preprocess   Preprocess all 175 subjects from SUBJECTS_LIST:
 #                            per-subject CIFTIs → PREPROCESSED_INDIV_DIR
 #                            group-average CIFTI → PREPROCESSED_DIR
-#                            Respects SG_FILTER/PSC/GSR flags and resumes.
+#                            Respects SG_FILTER/PSC/ flags and resumes.
 #               avg          Group-average CF modeling for all ROI pairs
 #               persubject   Per-subject CF modeling → group stats
 #               all          avg + persubject  (default)
@@ -35,7 +35,7 @@
 #
 # Streaming mode (STREAM=true)
 #   Preprocesses raw 7T CIFTIs on-the-fly; no CIFTI is saved.
-#   Set CIFTI_DIR below and configure SG_FILTER/PSC/GSR/Z_SCORE.
+#   Set CIFTI_DIR below and configure SG_FILTER/PSC/Z_SCORE.
 #
 # Excluded subjects
 #   Subjects without individual midthickness surfaces are listed in
@@ -55,12 +55,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # =============================================================================
 # CONFIG — all paths and analysis parameters defined here
 # =============================================================================
+
 DATA_BASE="/home/amin/Research/Representation/Movie/data"
 HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
+PYCORTEX_STORE="${DATA_BASE}/hedger2026"
+export PYCORTEX_FILESTORE="$PYCORTEX_STORE"
 OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
-
-# Raw 7T CIFTI files (used in streaming mode — preprocess on-the-fly)
-CIFTI_DIR="/media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI"
 
 # ── Streaming toggle ──────────────────────────────────────────────────────────
 # false → disk mode (read pre-saved preprocessed CIFTIs from PREPROCESSED_INDIV_DIR)
@@ -70,15 +70,15 @@ STREAM=false
 # Preprocessing flags
 SG_FILTER=true    # Savitzky-Golay high-pass filter
 PSC=true          # Percent signal change normalization
-GSR=true          # Global signal regression
-Z_SCORE=true      # Z-score per vertex (applied inside run_cfmodeling.py; not by preprocess_individual.py)
 
-# Automatically build PREPROCESSING_FLAG from SG_FILTER/PSC/GSR
+
+
+# Automatically build PREPROCESSING_FLAG from SG_FILTER/PSC
 # (Z_SCORE is NOT included — it is applied inside the Python analysis script)
 PREP_PARTS=()
 [ "$SG_FILTER" = "true" ] && PREP_PARTS+=("sg")
 [ "$PSC"       = "true" ] && PREP_PARTS+=("psc")
-[ "$GSR"       = "true" ] && PREP_PARTS+=("gsr")
+
 
 if [ ${#PREP_PARTS[@]} -eq 0 ]; then
     PREPROCESSING_FLAG="raw"
@@ -101,8 +101,6 @@ FMRI_GROUP_CIFTI="${PREPROCESSED_DIR}/group_average_${PREPROCESSING_FLAG}_cortex
 # All pipeline stages (preprocess / cf_modeling) must read from here.
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 
-# Timing
-TIMING_CSV="${DATA_BASE}/movie_timing.csv"
 
 # Glasser HCP-MMP1 59k_fs_LR dlabel (used by extract_geometry.py)
 GLASSER_DLABEL="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
@@ -112,7 +110,7 @@ OUTPUT_BASE="${OUTPUTS_BASE}/cf_modeling"
 RSA_BASE="${OUTPUTS_BASE}/rsa"
 
 # ── Parallelisation ─────────────────────────────────────────────────────────
-CONDA_ENV="cfmod"
+CONDA_ENV="vicsompy_av"
 DEFAULT_BATCH_SIZE=8    # 8 jobs × 2 BLAS threads ≈ 1 job per physical core
 
 # ── Analysis ROI pairs ───────────────────────────────────────────────────────
@@ -125,7 +123,7 @@ PERSUBJECT_PAIRS=(
 )
 # Group-average pairs
 AVG_PAIRS=(
-    "A1:V1"
+    # "A1:V1"
     "A5:FFC"
     "3b:V1"
 )
@@ -140,35 +138,35 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # =============================================================================
 # HELPERS
 # =============================================================================
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
-run_python() { conda run -n "$CONDA_ENV" python "$@"; }
+run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 
 # =============================================================================
 # PREPROCESSING PIPELINE
 # =============================================================================
 run_preprocess() {
     log "=== Preprocessing n=$(grep -cv '^\s*#' "$SUBJECTS_LIST") subjects → ${PREPROCESSED_INDIV_DIR} ==="
-    log "  Flags: SG_FILTER=${SG_FILTER}  PSC=${PSC}  GSR=${GSR}  (${PREPROCESSING_FLAG})"
+    log "  Flags: SG_FILTER=${SG_FILTER}  PSC=${PSC}  (${PREPROCESSING_FLAG})"
     log "  Note: Z_SCORE is applied inside run_cfmodeling.py, not during preprocessing"
     log "  Subjects: ${SUBJECTS_LIST}"
     log "  Raw CIFTI dir: ${CIFTI_DIR}"
 
-    local SG_FLAG="" PSC_FLAG="" GSR_FLAG="--no-gsr"
+    local SG_FLAG="" PSC_FLAG="" 
     [ "$SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
-    [ "$PSC"       = "true" ] && PSC_FLAG="--psc"
-    [ "$GSR"       = "true" ] && GSR_FLAG="--gsr"
+    [ "$PSC"       = "true" ] && PSC_FLAG="--psc" 
 
     run_python "${SCRIPT_DIR}/../preprocess_individual.py" \
         --raw-dir        "$CIFTI_DIR" \
         --out-dir        "$PREPROCESSED_INDIV_DIR" \
         --subjects-list  "$SUBJECTS_LIST" \
         --tr             1.0 \
-        $SG_FLAG $PSC_FLAG $GSR_FLAG \
+        $SG_FLAG $PSC_FLAG \
         --save-individual \
         --save-average
 
@@ -218,8 +216,8 @@ _run_one_subject() {
     if [ "$_CF_STREAM" = "true" ]; then
         local SG_FLAG="";   [ "$_CF_SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
         local PSC_FLAG="";  [ "$_CF_PSC"       = "true" ] && PSC_FLAG="--psc"
-        local GSR_FLAG="--gsr";     [ "$_CF_GSR"     = "false" ] && GSR_FLAG="--no-gsr"
-        local ZSC_FLAG="--z-score"; [ "$_CF_Z_SCORE" = "false" ] && ZSC_FLAG="--no-z-score"
+        
+        
 
         # shellcheck disable=SC2086
         conda run --no-capture-output -n "$_CF_CONDA_ENV" python \
@@ -230,7 +228,7 @@ _run_one_subject() {
             --subject    "$SUB" \
             --raw-dir    "$_CF_CIFTI_DIR" \
             --output-base "$_CF_OUTPUT_BASE" \
-            $SG_FLAG $PSC_FLAG $GSR_FLAG $ZSC_FLAG \
+            
             >> "$LOG" 2>&1 || STATUS=$?
     else
         local FMRI_PATH="${_CF_PREPROCESSED_INDIV_DIR}/${SUB}_${_CF_FMRI_SUFFIX}_cortex_59k.dtseries.nii"
@@ -284,12 +282,12 @@ run_persubject_pair() {
     else
         log "[01] Building ${ROI_A} + ${ROI_B} subsurfaces + LBOEs (59k_fs_LR) ..."
         run_python "${SCRIPT_DIR}/extract_geometry.py" \
-            --mode         per_subject \
-            --roi_a        "$ROI_A" \
-            --roi_b        "$ROI_B" \
-            --hcp_dir      "$HCP_DIR" \
+            --mode           per_subject \
+            --roi_a          "$ROI_A" \
+            --roi_b          "$ROI_B" \
+            --pycortex_store "$PYCORTEX_STORE" \
             --glasser_dlabel "$GLASSER_DLABEL" \
-            --output_base  "$OUTPUT_BASE"
+            --output_base    "$OUTPUT_BASE"
         log "[01] Done"
     fi
 
@@ -315,7 +313,7 @@ run_persubject_pair() {
     export _CF_CIFTI_DIR="$CIFTI_DIR"
     export _CF_SG_FILTER="$SG_FILTER"
     export _CF_PSC="$PSC"
-    export _CF_GSR="$GSR"
+    
     export _CF_Z_SCORE="$Z_SCORE"
 
     if command -v parallel &>/dev/null; then
@@ -333,17 +331,18 @@ run_persubject_pair() {
     # ── Step 05: aggregate + integration maps ────────────────────────────────
     log "[05] Aggregating subjects → integration maps ..."
     run_python "${SCRIPT_DIR}/integration_maps.py" \
-        --mode          per_subject \
-        --roi_a         "$ROI_A" \
-        --roi_b         "$ROI_B" \
-        --output_base   "$OUTPUT_BASE" \
+        --mode           per_subject \
+        --roi_a          "$ROI_A" \
+        --roi_b          "$ROI_B" \
+        --pycortex_store "$PYCORTEX_STORE" \
+        --output_base    "$OUTPUT_BASE" \
         --template_cifti "$FMRI_GROUP_CIFTI"
     log "[05] Done"
 
     # ── Step 06: group statistics ─────────────────────────────────────────────
     log "[06] Group statistics ..."
-    run_python "${SCRIPT_DIR}/summary.py" \
-        --mode          per_subject \
+    run_python "${SCRIPT_DIR}/overlap.py" \
+        --mode           per_subject \
         --roi_a         "$ROI_A" \
         --roi_b         "$ROI_B" \
         --output_base   "$OUTPUT_BASE" \
@@ -388,7 +387,7 @@ run_avg_pair() {
             --mode          group_average \
             --roi_a         "$ROI_A" \
             --roi_b         "$ROI_B" \
-            --hcp_dir       "$HCP_DIR" \
+            --pycortex_store "$PYCORTEX_STORE" \
             --glasser_dlabel "$GLASSER_DLABEL" \
             --output_base   "$OUTPUT_BASE"
         log "[01] Done"
@@ -407,15 +406,16 @@ run_avg_pair() {
 
     log "[05] Integration maps ..."
     run_python "${SCRIPT_DIR}/integration_maps.py" \
-        --mode          group_average \
-        --roi_a         "$ROI_A" \
-        --roi_b         "$ROI_B" \
-        --output_base   "$OUTPUT_BASE" \
+        --mode           group_average \
+        --roi_a          "$ROI_A" \
+        --roi_b          "$ROI_B" \
+        --pycortex_store "$PYCORTEX_STORE" \
+        --output_base    "$OUTPUT_BASE" \
         --template_cifti "$FMRI_GROUP_CIFTI"
     log "[05] Done"
 
     log "[06] RSA spatial overlap ..."
-    run_python "${SCRIPT_DIR}/summary.py" \
+    run_python "${SCRIPT_DIR}/overlap.py" \
         --mode          group_average \
         --roi_a         "$ROI_A" \
         --roi_b         "$ROI_B" \

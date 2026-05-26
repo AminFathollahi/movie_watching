@@ -74,13 +74,19 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+from scipy.stats import zscore
 from himalaya.scoring import r2_score, r2_score_split
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shared.ridge_utils import (project_onto_lboes, build_pipeline, fit_null_r2,
                                 build_sphere_to_grayord_lut)
+
+from vendor.hedger_cf.subsurface import Subsurface
+class StableSubsurface(Subsurface):
+    pass  
 
 logging.basicConfig(
     level=logging.INFO,
@@ -170,7 +176,9 @@ def load_subsurface(cache_dir: str, roi_name: str):
 
 
 def split_train_test(cortex_data: np.ndarray, run_trs: list, n_test_trs: int):
-    """Split (n_cortex, T_total) into train/test by run boundary."""
+    """Split (n_cortex, T_total) into train/test by run boundary and Z-SCORE per run."""
+    
+    
     train_chunks, test_chunks = [], []
     run_onsets = []
     n_train    = 0
@@ -178,18 +186,30 @@ def split_train_test(cortex_data: np.ndarray, run_trs: list, n_test_trs: int):
 
     for n_run in run_trs:
         if n_run <= n_test_trs:
-            raise ValueError(
-                f"Run has only {n_run} TRs but n_test_trs={n_test_trs}.")
+            raise ValueError(f"Run has only {n_run} TRs but n_test_trs={n_test_trs}.")
+        
         test_start = offset + n_run - n_test_trs
-        train_chunks.append(cortex_data[:, offset:test_start])
-        test_chunks.append(cortex_data[:, test_start:offset + n_run])
+        
+        # Extract raw chunks for this specific run
+        train_raw = cortex_data[:, offset:test_start]
+        test_raw  = cortex_data[:, test_start:offset + n_run]
+
+        # Hedger et al. 2025: Z-score train and test independently per run along the time axis
+        train_z = zscore(train_raw, axis=1, nan_policy='omit')
+        test_z  = zscore(test_raw, axis=1, nan_policy='omit')
+
+        train_chunks.append(train_z)
+        test_chunks.append(test_z)
+
         run_onsets.append(n_train)
         n_train += n_run - n_test_trs
         offset  += n_run
 
-    return (np.concatenate(train_chunks, axis=1),
-            np.concatenate(test_chunks,  axis=1),
-            run_onsets)
+    # Concatenate and replace any NaNs (from zero-variance vertices) with 0
+    train_out = np.nan_to_num(np.concatenate(train_chunks, axis=1))
+    test_out  = np.nan_to_num(np.concatenate(test_chunks, axis=1))
+
+    return train_out, test_out, run_onsets
 
 
 def _be_to_npy(var, backend):
@@ -203,11 +223,17 @@ def _save_npy(arr: np.ndarray, name: str, out_dir: str):
     log.info(f"  Saved {name}.npy")
 
 
-def _save_cifti(arr: np.ndarray, name: str, template_cifti: str, cifti_dir: str):
-    template = nib.load(template_cifti)
-    img = nib.Cifti2Image(arr.astype(np.float32).reshape(1, -1),
-                          header=template.header,
-                          nifti_header=template.nifti_header)
+def _save_cifti(arr, name, template_cifti, cifti_dir):
+    import nibabel as nib
+    import os
+    
+    # Extract only the spatial axis, not the time axis
+    bm_axis = nib.load(template_cifti).header.get_axis(1)
+    scalar_axis = nib.cifti2.ScalarAxis([name])
+    header = nib.cifti2.Cifti2Header.from_axes((scalar_axis, bm_axis))
+    
+    # Save as a standard 1D map
+    img = nib.Cifti2Image(arr.astype(np.float32).reshape(1, -1), header=header)
     nib.save(img, os.path.join(cifti_dir, f"{name}.dscalar.nii"))
     log.info(f"  Saved {name}.dscalar.nii  "
              f"(mean={arr.mean():.4f}, frac>0={np.mean(arr > 0):.1%})")
@@ -286,6 +312,13 @@ def _run_pipeline(args, cortex_data: np.ndarray, run_trs: list,
     log.info(f"{prefix}  Fit complete.")
 
     log.info(f"{prefix}Computing variance partitioning on test set ...")
+
+    X_fit = pipeline.named_steps["columnkernelizer"].get_X_fit()
+    raw_betas = pipeline.named_steps["multiplekernelridgecv"].get_primal_coef(X_fit)
+    betas_a = _be_to_npy(raw_betas[:band_sizes[0]], backend)
+    betas_b = _be_to_npy(raw_betas[band_sizes[0]:], backend)
+    best_alphas = _be_to_npy(pipeline.named_steps["multiplekernelridgecv"].best_alphas_, backend)
+
     Y_hat_full   = pipeline.predict(X_test)
     R2_full      = _be_to_npy(r2_score(Y_test, Y_hat_full), backend)
     Y_hat_split  = pipeline.predict(X_test, split=True)
@@ -307,10 +340,17 @@ def _run_pipeline(args, cortex_data: np.ndarray, run_trs: list,
     R2_a_nc = (R2_a - R2_null_a).astype(np.float32)
     R2_b_nc = (R2_b - R2_null_b).astype(np.float32)
 
+    product_map = np.sqrt(
+        np.clip(R2_a_nc, 0, None) * np.clip(R2_b_nc, 0, None)
+    ).astype(np.float32)
+  
+
     log.info(f"{prefix}  R2_{args.roi_a}_nc: mean={R2_a_nc.mean():.4f}  "
              f"frac>0={np.mean(R2_a_nc > 0):.1%}")
     log.info(f"{prefix}  R2_{args.roi_b}_nc: mean={R2_b_nc.mean():.4f}  "
              f"frac>0={np.mean(R2_b_nc > 0):.1%}")
+    log.info(f"{prefix}  product_map: mean={product_map.mean():.4f}  "
+             f"frac>0={np.mean(product_map > 0):.1%}")
 
     os.makedirs(out_dir, exist_ok=True)
     if cifti_dir:
@@ -326,6 +366,10 @@ def _run_pipeline(args, cortex_data: np.ndarray, run_trs: list,
         (f"R2_null_{args.roi_b}", R2_null_b),
         (f"R2_{args.roi_a}_nc",   R2_a_nc),
         (f"R2_{args.roi_b}_nc",   R2_b_nc),
+        ("product_map",          product_map), 
+        (f"betas_{args.roi_a}",  betas_a),      
+        (f"betas_{args.roi_b}",  betas_b),       
+        ("best_alphas",          best_alphas)    
     ]:
         _save_npy(arr, name, out_dir)
         if cifti_dir:

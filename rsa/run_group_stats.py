@@ -50,7 +50,7 @@ from statsmodels.stats.multitest import fdrcorrection
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from rsa.shared.cifti_io import (
+from cifti_io import (
     get_bm_axis,
     get_cortex_vertex_indices,
     save_cifti_multimap,

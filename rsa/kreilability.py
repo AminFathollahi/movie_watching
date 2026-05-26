@@ -55,7 +55,7 @@ from rsa.shared.rsa_utils import (
     align_and_assert_bins, preprocess_fmri,
     process_model_embeddings,
 )
-from rsa.shared.cifti_io import get_bm_axis, get_cortex_vertex_indices
+from cifti_io import get_bm_axis, get_cortex_vertex_indices
 
 logging.basicConfig(
     level=logging.INFO,

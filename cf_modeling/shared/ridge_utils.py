@@ -11,7 +11,7 @@ and documents this in its own docstring.
 
 import os
 import sys
-
+import torch
 import numpy as np
 from himalaya.backend import set_backend
 from himalaya.kernel_ridge import ColumnKernelizer, Kernelizer, MultipleKernelRidgeCV
@@ -24,10 +24,10 @@ from vendor.hedger_cf.utils import generate_leave_one_run_out  # noqa: F401  (re
 
 
 def build_pipeline(n_samples_train, run_onsets, band_sizes, roi_names,
-                   backend_engine="torch", solver="random_search",
+                   backend_engine="torch_cuda", solver="random_search",
                    n_iter=20, alpha_min=1, alpha_max=20, alpha_vals=20,
-                   n_targets_batch=400, n_alphas_batch=10,
-                   n_targets_batch_refit=400, with_mean=True, with_std=True):
+                   n_targets_batch=20000, n_alphas_batch=10,
+                   n_targets_batch_refit=20000, with_mean=True, with_std=True):
     """Build the himalaya ColumnKernelizer → MultipleKernelRidgeCV pipeline.
 
     Replicates vicsompy's MssCf.prep_pipeline() sequence:
@@ -47,6 +47,8 @@ def build_pipeline(n_samples_train, run_onsets, band_sizes, roi_names,
     pipeline : sklearn Pipeline — ready to .fit(X_train, Y_train)
     backend  : himalaya backend object — for .to_numpy() conversions
     """
+    if backend_engine == "torch_cuda":
+        torch.set_default_device('cuda')
     backend = set_backend(backend_engine, on_error="warn")
 
     cv_gen = generate_leave_one_run_out(n_samples_train, run_onsets)

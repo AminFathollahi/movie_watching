@@ -1,10 +1,8 @@
 """
-rsa/shared/cifti_io.py
+cifti_io.py
 ======================
-Minimal CIFTI I/O utilities for RSA scripts.
+Minimal CIFTI I/O utilities for scripts.
 
-Adapted from cf_modeling/shared/cifti_io.py (Nicholas Hedger, MIT License),
-keeping only what the RSA pipeline requires.
 """
 
 import nibabel as nib

@@ -105,9 +105,9 @@ CIFTI_DIR="/media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI"
 STREAM=true
 
 # Preprocessing flags
-SG_FILTER=fals     # Savitzky-Golay high-pass filter
+SG_FILTER=false    # Savitzky-Golay high-pass filter
 PSC=false           # percent signal change normalization
-GSR=true           # global signal regression
+GSR=false           # global signal regression
 
 # Automatically build PREPROCESSING_FLAG based on the toggles above
 PREP_PARTS=()
@@ -170,7 +170,7 @@ GEODESIC_CACHE_DIR="${OUTPUTS_BASE}/rsa/_geodesic_cache"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-BIN_SEC=2.0
+BIN_SEC=5.0
 HRF=false
 METHOD="spearman"
 K=100 

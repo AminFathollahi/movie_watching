@@ -48,7 +48,7 @@ from rsa.shared.rsa_utils import (
     process_model_embeddings, compute_rdm, correlate_rdms,
     align_and_assert_bins
 )
-from rsa.shared.cifti_io import (
+from cifti_io import (
     get_bm_axis, save_cifti_multimap,
     get_combined_map_names, merge_into_combined,
 )

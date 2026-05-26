@@ -27,7 +27,7 @@ Use --save-average to compute and save a continuous group-average CIFTI
 Usage (saving individual continuous maps to disk):
   python preprocess_individual.py \
       --raw-dir /media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI \
-      --out-dir /home/amin/Research/Representation/Movie/outputs/preprocessed \
+      --out-dir /home/amin/Research/Representation/Movie/data/preprocessed \
       --subjects-list /home/amin/Research/Representation/Movie/data/subjects.txt \
       --sg-filter --psc --gsr \
       --save-individual

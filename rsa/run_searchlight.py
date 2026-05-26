@@ -62,13 +62,13 @@ import pandas as pd
 from joblib import Parallel, delayed
 from scipy.stats import rankdata
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
 from rsa.shared.rsa_utils import (
     load_fmri_cifti, preprocess_fmri,
     process_model_embeddings, align_and_assert_bins
 )
-from rsa.shared.cifti_io import (
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from cifti_io import (
     get_bm_axis, save_cifti_multimap, get_cortex_vertex_indices,
     get_combined_map_names, merge_into_combined,
 )
@@ -576,13 +576,13 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     gc.collect()
 
     out_root.mkdir(parents=True, exist_ok=True)
-    save_cifti_multimap(
-        corr_full.reshape(1, -1),
-        [f"{args.method}_rho"],
-        args.template_cifti,
-        str(maps_out),
-    )
-    log.info(f"  Saved: {maps_out.name}  max_r={corr_full.max():.4f}")
+    # save_cifti_multimap(
+    #     corr_full.reshape(1, -1),
+    #     [f"{args.method}_rho"],
+    #     args.template_cifti,
+    #     str(maps_out),
+    # )
+    # log.info(f"  Saved: {maps_out.name}  max_r={corr_full.max():.4f}")
 
     # ── Merge into combined output ────────────────────────────────────────────
     if combined_path is not None:

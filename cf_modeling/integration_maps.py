@@ -1,28 +1,16 @@
 """
 cf_modeling/integration_maps.py
 =================================
-Derive Figure 3a display maps from null-corrected split R².
+Derive continuous 2D dual-overlay maps and comprehensive CIFTI outputs.
 
-For group_average mode: loads R2_nc from the prep directory and computes
-integration maps directly.
+For group_average mode: loads all R2 components from the prep directory.
+For per_subject mode: aggregates all R² maps across subjects (nanmean).
 
-For per_subject mode: first aggregates null-corrected R² maps across subjects
-(nanmean), then computes integration maps on the group average.
-
-Integration maps
-----------------
-  integration_score   = √(clip(R2_A_nc, 0) × clip(R2_B_nc, 0))
-                        high where BOTH are positive → bimodal zone
-  modality_balance    = R2_A_nc − R2_B_nc  (diverging; + = ROI_A dominant)
-  bimodal_map.dlabel  = 4-category label: neither / ROI_A_only / ROI_B_only / bimodal
-
-All outputs saved as CIFTI dscalar.nii using --template_cifti.
-
-Run
----
-    python integration_maps.py --mode group_average --roi_a A1 --roi_b V1
-    python integration_maps.py --mode per_subject   --roi_a A5 --roi_b FFC
-                                  --min_subjects 5
+Outputs:
+  1. CIFTI dscalar.nii: A combined multi-map CIFTI containing the full model, 
+     raw splits, null models, and null-corrected maps with dynamic ROI names.
+  2. Pycortex Flatmap (PNG): A 2D colormap (Vertex2D) flatmap using the 
+     null-corrected maps, reproducing the dual-overlay style of Hedger et al.
 """
 
 import argparse
@@ -30,10 +18,18 @@ import logging
 import os
 import sys
 from glob import glob
+from pathlib import Path
 
-import nibabel as nib
+import matplotlib.pyplot as plt
 import numpy as np
-from nibabel.cifti2.cifti2_axes import LabelAxis
+
+# Set ROOT to the 'movie_watching' parent directory
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+# Import from shared ridge_utils and root cifti_io
+from shared.ridge_utils import build_sphere_to_grayord_lut
+from cifti_io import get_bm_axis, save_cifti_multimap
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)s  %(message)s",
@@ -41,71 +37,8 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger(__name__)
 
 _DATA_BASE = "/home/amin/Research/Representation/Movie/data/Setareh"
-_HCP_DIR   = f"{_DATA_BASE}/HCP_S1200_GroupAvg_v1"
 _OUT_BASE  = "/home/amin/Research/Representation/Movie/outputs/cf_modeling"
-
-MASK_PERCENTILE  = 90    # top 10% of vertices → integration mask
-DLABEL_THRESHOLD = 0.0   # vertices above this count as "hot" for dlabel
-
-
-# =============================================================================
-# CIFTI saving
-# =============================================================================
-
-def _bm_axis_from_template(template_cifti):
-    return nib.load(template_cifti).header.get_axis(1)
-
-
-def _save_dscalar(arr, name, bm_axis, out_dir):
-    arr_f32   = arr.astype(np.float32)
-    scalar_ax = nib.cifti2.ScalarAxis([name])
-    header    = nib.cifti2.Cifti2Header.from_axes((scalar_ax, bm_axis))
-    img       = nib.Cifti2Image(arr_f32.reshape(1, -1), header=header)
-    path      = os.path.join(out_dir, f"{name}.dscalar.nii")
-    nib.save(img, path)
-    log.info(f"  {name}: min={arr.min():.4f}  max={arr.max():.4f}  "
-             f"mean={arr.mean():.4f}  frac>0={np.mean(arr>0):.1%}")
-    return path
-
-
-def _save_dlabel(R2_a_nc, R2_b_nc, roi_a, roi_b, bm_axis, out_dir, threshold=0.0):
-    a_hot = R2_a_nc > threshold
-    b_hot = R2_b_nc > threshold
-    label_arr = np.zeros(len(R2_a_nc), dtype=np.int32)
-    label_arr[a_hot & ~b_hot] = 1
-    label_arr[~a_hot & b_hot] = 2
-    label_arr[a_hot  &  b_hot] = 3
-
-    lt = {
-        0: ("neither",       (0.5, 0.5, 0.5, 0.0)),
-        1: (f"{roi_a}_only", (0.8, 0.1, 0.1, 1.0)),
-        2: (f"{roi_b}_only", (0.1, 0.1, 0.8, 1.0)),
-        3: ("bimodal",       (0.6, 0.0, 0.8, 1.0)),
-    }
-    label_col    = np.empty(1, dtype=object)
-    label_col[0] = lt
-    la     = LabelAxis(name=np.array(["bimodal_map"]), label=label_col)
-    header = nib.Cifti2Header.from_axes((la, bm_axis))
-    img    = nib.Cifti2Image(label_arr.reshape(1, -1).astype(np.float32), header=header)
-    img.nifti_header["intent_code"] = 3007
-    path = os.path.join(out_dir, "bimodal_map.dlabel.nii")
-    nib.save(img, path)
-    counts = {k: int((label_arr == k).sum()) for k in range(4)}
-    log.info(f"  bimodal dlabel — neither={counts[0]}  {roi_a}_only={counts[1]}  "
-             f"{roi_b}_only={counts[2]}  bimodal={counts[3]}")
-
-
-# =============================================================================
-# Map arithmetic
-# =============================================================================
-
-def compute_integration_maps(R2_a_nc, R2_b_nc):
-    integration_score = np.sqrt(
-        np.clip(R2_a_nc, 0, None) * np.clip(R2_b_nc, 0, None)
-    ).astype(np.float32)
-    modality_balance = (R2_a_nc - R2_b_nc).astype(np.float32)
-    return integration_score, modality_balance
-
+_PYCORTEX_STORE = f"{_DATA_BASE}/hedger2026"
 
 # =============================================================================
 # Per-subject aggregation
@@ -121,14 +54,10 @@ def collect_maps(subjects_dir, map_name, min_subjects):
             arrays.append(np.load(path))
         else:
             missing.append(os.path.basename(sd))
-    if missing:
-        log.warning(f"  {map_name}: missing for {len(missing)} subjects "
-                    f"(e.g. {missing[:3]})")
     if len(arrays) < min_subjects:
         raise RuntimeError(
             f"Only {len(arrays)} subjects have {map_name}.npy — "
             f"need at least {min_subjects}.")
-    log.info(f"  {map_name}: loaded {len(arrays)} subjects")
     return np.stack(arrays, axis=0)
 
 
@@ -138,19 +67,18 @@ def collect_maps(subjects_dir, map_name, min_subjects):
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Compute integration maps from null-corrected R² (Figure 3a).",
+        description="Compute and visualize continuous 2D integration maps and comprehensive CIFTIs.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--mode",          required=True, choices=["group_average", "per_subject"])
     p.add_argument("--roi_a",         default="A1")
     p.add_argument("--roi_b",         default="V1")
     p.add_argument("--output_base",   default=_OUT_BASE)
+    p.add_argument("--pycortex_store", default=_PYCORTEX_STORE,
+                   help="Path to directory containing hcp_999999_draw_NH")
     p.add_argument("--template_cifti", default=None,
-                   help="59k preprocessed CIFTI used as template for dscalar/dlabel "
-                        "output headers (required). Pass the group-average dtseries "
-                        "from preprocess_individual.py.")
-    p.add_argument("--min_subjects", type=int, default=1,
-                   help="Minimum subjects required (per_subject mode only).")
+                   help="59k preprocessed CIFTI used as template for dscalar output.")
+    p.add_argument("--min_subjects", type=int, default=1)
     return p.parse_args()
 
 
@@ -158,105 +86,113 @@ def main():
     args = parse_args()
 
     if args.template_cifti is None:
-        raise ValueError(
-            "--template_cifti is required. Pass the preprocessed group-average 59k "
-            "CIFTI (group_average_{suffix}_cortex_59k.dtseries.nii).")
+        raise ValueError("--template_cifti is required for mapping headers.")
+
+
+    os.environ["PYCORTEX_FILESTORE"] = args.pycortex_store
 
     roi_root = f"{args.output_base}/{args.mode}/{args.roi_a}_{args.roi_b}"
-    bm_axis  = _bm_axis_from_template(args.template_cifti)
+    bm_axis  = get_bm_axis(args.template_cifti)
 
     log.info("=" * 60)
-    log.info(f"Script 05 — Integration maps ({args.mode})")
+    log.info(f"Script 05 — 2D Flatmaps & Combined CIFTIs ({args.mode})")
     log.info(f"  ROIs: {args.roi_a} × {args.roi_b}")
-    log.info(f"  dlabel threshold: {DLABEL_THRESHOLD}")
     log.info("=" * 60)
 
     if args.mode == "group_average":
         prep_dir  = f"{roi_root}/prep"
-        cifti_dir = f"{roi_root}/cifti_maps"
-        os.makedirs(cifti_dir, exist_ok=True)
+        out_cifti_dir = f"{roi_root}/cifti_maps"
+        out_fig_dir   = f"{roi_root}/figures"
+        os.makedirs(out_cifti_dir, exist_ok=True)
+        os.makedirs(out_fig_dir, exist_ok=True)
 
-        log.info("\nLoading null-corrected R² maps …")
-        R2_a_nc = np.load(os.path.join(prep_dir, f"R2_{args.roi_a}_nc.npy"))
-        R2_b_nc = np.load(os.path.join(prep_dir, f"R2_{args.roi_b}_nc.npy"))
-        out_npy_dir  = prep_dir
-        out_cifti_dir = cifti_dir
+        log.info("\nLoading R² maps …")
+        R2_full   = np.load(os.path.join(prep_dir, "R2_full.npy"))
+        R2_a      = np.load(os.path.join(prep_dir, f"R2_{args.roi_a}.npy"))
+        R2_b      = np.load(os.path.join(prep_dir, f"R2_{args.roi_b}.npy"))
+        R2_null_a = np.load(os.path.join(prep_dir, f"R2_null_{args.roi_a}.npy"))
+        R2_null_b = np.load(os.path.join(prep_dir, f"R2_null_{args.roi_b}.npy"))
+        R2_a_nc   = np.load(os.path.join(prep_dir, f"R2_{args.roi_a}_nc.npy"))
+        R2_b_nc   = np.load(os.path.join(prep_dir, f"R2_{args.roi_b}_nc.npy"))
+        product_map = np.load(os.path.join(prep_dir, "product_map.npy")) 
+        map_names = [
+            "R2_full", f"R2_{args.roi_a}", f"R2_{args.roi_b}", 
+            f"R2_null_{args.roi_a}", f"R2_null_{args.roi_b}", 
+            f"R2_{args.roi_a}_nc", f"R2_{args.roi_b}_nc",
+            "product_map"  
+        ]
 
     else:  # per_subject
         subjects_dir = f"{roi_root}/subjects"
         group_dir    = f"{roi_root}/group"
-        out_npy_dir  = group_dir
         out_cifti_dir = f"{group_dir}/cifti_maps"
-        os.makedirs(out_npy_dir,  exist_ok=True)
+        out_fig_dir   = f"{group_dir}/figures"
+        os.makedirs(group_dir,  exist_ok=True)
         os.makedirs(out_cifti_dir, exist_ok=True)
+        os.makedirs(out_fig_dir, exist_ok=True)
 
-        log.info("\nAggregating per-subject null-corrected R² maps …")
-        maps_a_nc = collect_maps(subjects_dir, f"R2_{args.roi_a}_nc", args.min_subjects)
-        maps_b_nc = collect_maps(subjects_dir, f"R2_{args.roi_b}_nc", args.min_subjects)
-        maps_full = collect_maps(subjects_dir, "R2_full",              args.min_subjects)
-        maps_a    = collect_maps(subjects_dir, f"R2_{args.roi_a}",     args.min_subjects)
-        maps_b    = collect_maps(subjects_dir, f"R2_{args.roi_b}",     args.min_subjects)
-        n_subs    = maps_a_nc.shape[0]
-        log.info(f"  Averaging across {n_subs} subjects …")
+        log.info("\nAggregating per-subject R² maps …")
+        maps_full   = collect_maps(subjects_dir, "R2_full", args.min_subjects)
+        maps_a      = collect_maps(subjects_dir, f"R2_{args.roi_a}", args.min_subjects)
+        maps_b      = collect_maps(subjects_dir, f"R2_{args.roi_b}", args.min_subjects)
+        maps_null_a = collect_maps(subjects_dir, f"R2_null_{args.roi_a}", args.min_subjects)
+        maps_null_b = collect_maps(subjects_dir, f"R2_null_{args.roi_b}", args.min_subjects)
+        maps_a_nc   = collect_maps(subjects_dir, f"R2_{args.roi_a}_nc", args.min_subjects)
+        maps_b_nc   = collect_maps(subjects_dir, f"R2_{args.roi_b}_nc", args.min_subjects)
+        maps_product = collect_maps(subjects_dir, "product_map", args.min_subjects)
+        log.info(f"  Averaging across {maps_a_nc.shape[0]} subjects …")
 
-        R2_a_nc = np.nanmean(maps_a_nc, axis=0).astype(np.float32)
-        R2_b_nc = np.nanmean(maps_b_nc, axis=0).astype(np.float32)
-        R2_full_avg = np.nanmean(maps_full, axis=0).astype(np.float32)
-        R2_a_avg    = np.nanmean(maps_a,    axis=0).astype(np.float32)
-        R2_b_avg    = np.nanmean(maps_b,    axis=0).astype(np.float32)
+        R2_full   = np.nanmean(maps_full, axis=0).astype(np.float32)
+        R2_a      = np.nanmean(maps_a, axis=0).astype(np.float32)
+        R2_b      = np.nanmean(maps_b, axis=0).astype(np.float32)
+        R2_null_a = np.nanmean(maps_null_a, axis=0).astype(np.float32)
+        R2_null_b = np.nanmean(maps_null_b, axis=0).astype(np.float32)
+        R2_a_nc   = np.nanmean(maps_a_nc, axis=0).astype(np.float32)
+        R2_b_nc   = np.nanmean(maps_b_nc, axis=0).astype(np.float32)
+        product_map = np.nanmean(maps_product, axis=0).astype(np.float32)
 
-        log.info(f"  R2_{args.roi_a}_nc: mean={R2_a_nc.mean():.4f}  "
-                 f"frac>0={np.mean(R2_a_nc > 0):.1%}")
-        log.info(f"  R2_{args.roi_b}_nc: mean={R2_b_nc.mean():.4f}  "
-                 f"frac>0={np.mean(R2_b_nc > 0):.1%}")
-
-        # Save group average R2 maps as .npy and CIFTI
+        # Save group average .npy 
         for name, arr in [
+            ("R2_full_avg", R2_full),
+            (f"R2_{args.roi_a}_avg", R2_a),
+            (f"R2_{args.roi_b}_avg", R2_b),
+            (f"R2_null_{args.roi_a}_avg", R2_null_a),
+            (f"R2_null_{args.roi_b}_avg", R2_null_b),
             (f"R2_{args.roi_a}_nc_avg", R2_a_nc),
             (f"R2_{args.roi_b}_nc_avg", R2_b_nc),
-            ("R2_full_avg",              R2_full_avg),
-            (f"R2_{args.roi_a}_avg",     R2_a_avg),
-            (f"R2_{args.roi_b}_avg",     R2_b_avg),
+            ("product_map_avg", product_map),
         ]:
-            np.save(os.path.join(out_npy_dir, f"{name}.npy"), arr)
-            _save_dscalar(arr, name, bm_axis, out_cifti_dir)
+            np.save(os.path.join(group_dir, f"{name}.npy"), arr)
+        
+        R2_a_pos = np.clip(R2_a_nc, 0, None)
+        R2_b_pos = np.clip(R2_b_nc, 0, None)
+    
+        # 2. Calculate the square root of the product
+        integration_score = np.sqrt(R2_a_pos * R2_b_pos)
+        
+        # 3. Save it as a pure numpy array so summary.py can read it
+        np.save(os.path.join(prep_dir, "integration_score.npy"), integration_score)
+        map_names = [
+            "R2_full_avg", 
+            f"R2_{args.roi_a}_avg", 
+            f"R2_{args.roi_b}_avg", 
+            f"R2_null_{args.roi_a}_avg", 
+            f"R2_null_{args.roi_b}_avg", 
+            f"R2_{args.roi_a}_nc_avg", 
+            f"R2_{args.roi_b}_nc_avg",
+            "product_map_avg"
+        ]
 
-    log.info(f"\n  R2_{args.roi_a}_nc: mean={R2_a_nc.mean():.4f}")
-    log.info(f"  R2_{args.roi_b}_nc: mean={R2_b_nc.mean():.4f}")
+    # Save Combined Multi-Map CIFTI
+    combined_cifti_name = f"cf_result_{args.roi_a.lower()}_{args.roi_b.lower()}.dscalar.nii"
+    combined_cifti_path = os.path.join(out_cifti_dir, combined_cifti_name)
+    
+    data_2d = np.vstack([R2_full, R2_a, R2_b, R2_null_a, R2_null_b, R2_a_nc, R2_b_nc, product_map])
+    save_cifti_multimap(data_2d, map_names, args.template_cifti, combined_cifti_path)
+    log.info(f"\nSaved combined CIFTI: {combined_cifti_path}")
+    log.info(f"  Maps included: {map_names}")
 
-    # ── Integration maps ──────────────────────────────────────────────────────
-    log.info("\nComputing integration maps …")
-    integration_score, modality_balance = compute_integration_maps(R2_a_nc, R2_b_nc)
-
-    threshold      = np.percentile(integration_score, MASK_PERCENTILE)
-    int_mask       = (integration_score >= threshold).astype(np.float32)
-    mask_name      = f"top_{MASK_PERCENTILE}_percentile_integration"
-    log.info(f"  Integration mask: threshold={threshold:.5f}  "
-             f"n_verts={int(int_mask.sum())}  ({100-MASK_PERCENTILE}% of cortex)")
-
-    suffix = "_avg" if args.mode == "per_subject" else ""
-    for name, arr in [
-        (f"integration_score{suffix}",  integration_score),
-        (f"modality_balance{suffix}",   modality_balance),
-        (f"{mask_name}{suffix}",        int_mask),
-    ]:
-        np.save(os.path.join(out_npy_dir, f"{name}.npy"), arr.astype(np.float32))
-        _save_dscalar(arr, name, bm_axis, out_cifti_dir)
-
-    log.info("\nBuilding bimodal dlabel …")
-    _save_dlabel(R2_a_nc, R2_b_nc, args.roi_a, args.roi_b, bm_axis,
-                 out_cifti_dir, threshold=DLABEL_THRESHOLD)
-
-    p95_a = np.percentile(R2_a_nc[R2_a_nc > 0], 95) if (R2_a_nc > 0).any() else 0
-    p95_b = np.percentile(R2_b_nc[R2_b_nc > 0], 95) if (R2_b_nc > 0).any() else 0
-    log.info("\n--- wb_view: continuous 2D dual-overlay (Figure 3a equivalent) ---")
-    log.info(f"  Overlay 1 (blue): R2_{args.roi_b}_nc dscalar  min=0  max≈{p95_b:.4f}  transparent below 0")
-    log.info(f"  Overlay 2 (red):  R2_{args.roi_a}_nc dscalar  min=0  max≈{p95_a:.4f}  transparent below 0")
-    log.info(f"  Discrete labels: bimodal_map.dlabel.nii")
     log.info("\nScript 05 complete.")
-    log.info(f"Next: python summary.py --mode {args.mode} "
-             f"--roi_a {args.roi_a} --roi_b {args.roi_b}")
-
 
 if __name__ == "__main__":
     main()

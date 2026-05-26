@@ -236,10 +236,10 @@ def run_group_average(args):
     os.makedirs(results_dir, exist_ok=True)
 
     log.info("\nLoading CF-model integration maps …")
-    integration_score = np.load(os.path.join(prep_dir, "integration_score.npy"))
+    product_map = np.load(os.path.join(prep_dir, "product_map.npy"))
     R2_a_nc           = np.load(os.path.join(prep_dir, f"R2_{args.roi_a}_nc.npy"))
     R2_b_nc           = np.load(os.path.join(prep_dir, f"R2_{args.roi_b}_nc.npy"))
-    log.info(f"  integration_score: frac>0={np.mean(integration_score>0):.1%}")
+    log.info(f"  product_map: frac>0={np.mean(product_map>0):.1%}")
 
     bm_axis        = _bm_axis_from_template(args.template_cifti)
     gray_L, gray_R = _get_grayordinate_indices(args.template_cifti)
@@ -250,7 +250,7 @@ def run_group_average(args):
     all_results = {}
     for cfg_name in configs:
         res = _run_one_rsa_config(
-            cfg_name, integration_score, R2_a_nc, R2_b_nc,
+            cfg_name, product_map, R2_a_nc, R2_b_nc,
             args.roi_a, args.roi_b,
             args.rsa_base, args.rsa_model,
             gray_L, gray_R, bm_axis, cifti_dir, results_dir,
@@ -260,11 +260,11 @@ def run_group_average(args):
 
     if len(all_results) > 1:
         log.info("\n" + "=" * 60)
-        log.info("Summary — Spearman rho(integration_score, rsa_joint):")
+        log.info("Summary — Spearman rho(product_map, rsa_joint):")
         for cname, res in all_results.items():
-            rho   = res.get("rho_integration_vs_rsa_joint", float("nan"))
-            ci_lo = res.get("ci_lo_integration_vs_rsa_joint", float("nan"))
-            ci_hi = res.get("ci_hi_integration_vs_rsa_joint", float("nan"))
+            rho   = res.get("rho_product_map_vs_rsa_joint", float("nan"))
+            ci_lo = res.get("ci_lo_product_map_vs_rsa_joint", float("nan"))
+            ci_hi = res.get("ci_hi_product_map_vs_rsa_joint", float("nan"))
             log.info(f"  {cname:45s}  rho={rho:.4f}  [{ci_lo:.4f}, {ci_hi:.4f}]")
 
 
@@ -310,13 +310,9 @@ def run_per_subject(args):
     log.info("\nLoading per-subject null-corrected R² maps …")
     maps_a = collect_maps(subjects_dir, f"R2_{args.roi_a}_nc", args.min_subjects)
     maps_b = collect_maps(subjects_dir, f"R2_{args.roi_b}_nc", args.min_subjects)
+    maps_product = collect_maps(subjects_dir, "product_map", args.min_subjects) 
     N = maps_a.shape[0]
     log.info(f"  N subjects: {N}")
-
-    log.info("\nComputing per-subject integration scores …")
-    maps_integ = np.sqrt(
-        np.clip(maps_a, 0, None) * np.clip(maps_b, 0, None)
-    ).astype(np.float32)
 
     critical_t = float(scipy_stats.t.ppf(1 - ALPHA / 2, df=N - 1))
     log.info(f"  Critical t (two-tailed α={ALPHA}, df={N-1}): {critical_t:.3f}")
@@ -324,7 +320,7 @@ def run_per_subject(args):
     log.info("\nRunning one-sample t-tests (H0: mean=0) …")
     t_a, d_a, p_a = _one_sample_stats(maps_a)
     t_b, d_b, p_b = _one_sample_stats(maps_b)
-    t_i, d_i, p_i = _one_sample_stats(maps_integ)
+    t_i, d_i, p_i = _one_sample_stats(maps_product) 
 
     log.info(f"  {args.roi_a}: mean_d={d_a.mean():.4f}  "
              f"frac_sig: {np.mean(np.abs(t_a) > critical_t):.1%}")

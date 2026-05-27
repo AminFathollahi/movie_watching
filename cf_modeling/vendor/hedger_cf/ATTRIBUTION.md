@@ -30,7 +30,9 @@ package by the Gallant Lab (UC Berkeley, MIT License):
 https://github.com/gallantlab/voxelwise_tutorials
 
 That attribution is preserved verbatim in the function's docstring.
-`shared/ridge_utils.py` imports it directly from `vendor/hedger_cf/utils.py`.
+`shared/ridge_utils.py` now imports it directly from `vicsompy.utils` (the source repo),
+not from this vendor copy.  The vendor copy is retained for reference only — see
+`vendor/DEPRECATED.md`.
 
 ## Overall pipeline fidelity
 

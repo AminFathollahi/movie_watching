@@ -126,6 +126,9 @@ def parse_args():
                    help="Number of alpha values on the log scale.")
     p.add_argument("--chunk-size", type=int, required=True,
                    help="Vertices per batch for Pearson r computation.")
+    p.add_argument("--backend", default="torch_cuda", dest="backend",
+                   help="himalaya backend for ridge fitting: torch_cuda | torch | numpy. "
+                        "torch_cuda uses GPU if available, falls back to torch automatically.")
     p.add_argument("--test-video-ids", required=True,
                    help="Comma-separated test video IDs.")
 
@@ -182,6 +185,7 @@ def _run_modalities(args, timing_df, test_ids, alphas, config,
         r_vals = run_encoding_model(
             X_train, Y_train, X_test, Y_test,
             run_onsets=run_onsets, alphas=alphas, chunk_size=args.chunk_size,
+            backend=args.backend,
         )
         save_cifti(r_vals, args.template_cifti, str(out_path),
                    map_name=f"encoding_r_{mod}")

@@ -120,6 +120,11 @@ ALPHA_MAX=9
 N_ALPHAS=23
 CHUNK_SIZE=2000
 
+# ── himalaya backend ───────────────────────────────────────────────────────
+# torch_cuda uses GPU if CUDA is available (auto-detected); falls back to torch.
+# Use "numpy" for CPU-only (slower but no GPU memory required).
+BACKEND="torch_cuda"
+
 TEST_VIDEO_IDS="video5,video9,video14,video18"
 
 # ── Model registry ─────────────────────────────────────────────────────────
@@ -137,7 +142,7 @@ MODELS=(
 )
 
 # ── Parallelisation ─────────────────────────────────────────────────────────
-CONDA_ENV="analysis"
+CONDA_ENV="movie"
 DEFAULT_BATCH_SIZE=8
 # =============================================================================
 
@@ -243,6 +248,7 @@ run_avg() {
                 --alpha-max        "$ALPHA_MAX" \
                 --n-alphas         "$N_ALPHAS" \
                 --chunk-size       "$CHUNK_SIZE" \
+                --backend          "$BACKEND" \
                 --test-video-ids   "$TEST_VIDEO_IDS" \
                 $(_hrf_flag) $(_normalize_flag)
         done
@@ -322,6 +328,7 @@ _run_one_subject() {
                 --alpha-max      "$_ENC_ALPHA_MAX" \
                 --n-alphas       "$_ENC_N_ALPHAS" \
                 --chunk-size     "$_ENC_CHUNK_SIZE" \
+                --backend        "$_ENC_BACKEND" \
                 --test-video-ids "$_ENC_TEST_VIDEO_IDS" \
                 $HRF_FLAG $NORM_FLAG \
                 >> "$LOG" 2>&1 || STATUS=$?
@@ -376,6 +383,7 @@ run_persubject() {
     export _ENC_TEST_VIDEO_IDS="$TEST_VIDEO_IDS"
     export _ENC_HRF="$HRF"
     export _ENC_NORMALIZE="$NORMALIZE"
+    export _ENC_BACKEND="$BACKEND"
     export _ENC_STREAM="$STREAM"
     export _ENC_CIFTI_DIR="$CIFTI_DIR"
     export _ENC_SG_FILTER="$SG_FILTER"

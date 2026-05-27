@@ -186,8 +186,14 @@ MODELS=(
     # "pe-core-l14:v"
 )
 
+# ── GPU acceleration ─────────────────────────────────────────────────────
+# true  → GPU-batched searchlight (full-k vertices on CUDA; partial-k on CPU)
+# false → CPU joblib parallelism (use when GPU unavailable or for per-subject parallel)
+USE_GPU=true
+GPU_BATCH_SIZE=512   # vertices per GPU batch; reduce if OOM
+
 # ── Parallelisation ─────────────────────────────────────────────────────────
-CONDA_ENV="analysis"
+CONDA_ENV="movie"
 # Default number of subjects processed in parallel.
 # persubject mode divides nproc evenly across subjects for joblib threads.
 DEFAULT_BATCH_SIZE=4
@@ -309,6 +315,7 @@ _run_avg_one_model() {
         local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${METHOD}_maps.dscalar.nii"
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; then
+            local GPU_FLAG="--no-gpu"; [ "$USE_GPU" = "true" ] && GPU_FLAG="--gpu"
             run_python "${SCRIPT_DIR}/run_searchlight.py" \
                 --preprocessed-dir   "$PREPROCESSED_DIR" \
                 --fmri-suffix        "$FMRI_SUFFIX" \
@@ -329,6 +336,7 @@ _run_avg_one_model() {
                 --workbench          "$WORKBENCH" \
                 --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
                 --combined-output    "$COMBINED_OUT" \
+                $GPU_FLAG --gpu-batch-size "$GPU_BATCH_SIZE" \
                 $(_hrf_flag)
         fi
 
@@ -461,6 +469,7 @@ _run_one_subject() {
                     echo "[$(date +%H:%M:%S)] ${SUB}: searchlight ${MODEL_NAME}/${MOD} already complete; skipping" \
                         | tee -a "$LOG"
                 else
+                    local GPU_FLAG="--no-gpu"   # per-subject: disable GPU to allow parallel CPU jobs
                     # shellcheck disable=SC2086
                     conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
                         "${_RSA_SCRIPT_DIR}/run_searchlight.py" \
@@ -482,6 +491,7 @@ _run_one_subject() {
                         --workbench          "$_RSA_WORKBENCH" \
                         --geodesic-cache-dir "$_RSA_GEODESIC_CACHE_DIR" \
                         --combined-output    "$COMBINED_OUT" \
+                        $GPU_FLAG --gpu-batch-size 512 \
                         $HRF_FLAG \
                         >> "$LOG" 2>&1 || STATUS=$?
                 fi

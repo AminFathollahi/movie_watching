@@ -1,19 +1,32 @@
-name: analysis
+name: movie
+# Shared conda environment for CF modeling, encoding, and RSA analyses.
+# Clone from the existing movie env (already has torch 2.11.0+cu128):
+#   conda create --clone vicsompy_av --name movie -y
+# This file is for reference and reproducibility only.
 channels:
   - conda-forge
+  - pytorch
+  - nvidia
   - defaults
 dependencies:
   - python=3.10
-  - numpy>=1.26
+  - numpy>=1.26,<2.0    # himalaya 0.3.5 requires numpy < 2.0
   - scipy>=1.11
   - pandas>=2.0
   - nibabel>=5.1
   - matplotlib>=3.8
-  - joblib>=1.3
+  - scikit-learn=1.3.2
+  - h5py>=3.9
+  - pyyaml>=6.0
   - tqdm>=4.66
+  - joblib>=1.3
   - statsmodels>=0.14
-  - parallel          # GNU parallel for batch subject processing
+  - parallel              # GNU parallel for batch subject processing
   - pip
   - pip:
-    - scikit-learn>=1.3
-    - himalaya>=0.4.0  # 0.3.5 incompatible with numpy>=2.0 (numpy.core removed)
+    - torch>=2.6.0        # installed as torch 2.11.0+cu128 in movie env
+    - himalaya==0.3.5
+    - pycortex            # for CF modeling visualisation
+    - mne>=1.9            # for Savitzky-Golay filter
+    # vicsompy: do NOT pip install — import directly from source repo
+    # sys.path.insert(0, VICSOMPY_REPO) in scripts

@@ -4,7 +4,7 @@ tests/test_cf_math.py
 Unit tests for cf_modeling/shared/ridge_utils.py math.
 
 All tests use synthetic data — no real fMRI or external drive needed.
-Run with: conda run -n vicsompy_av pytest tests/test_cf_math.py -v
+Run with: conda run -n movie pytest tests/test_cf_math.py -v
 """
 import sys
 import os

@@ -143,6 +143,12 @@ def parse_args():
                         "All analysis variants should point here so the k_max derivation "
                         "logic works across preprocessing configs.")
 
+    p.add_argument("--gpu", default=False, action=argparse.BooleanOptionalAction,
+                   help="Use GPU-batched searchlight (requires CUDA). "
+                        "Full-k vertices computed on GPU; partial-k fall back to CPU.")
+    p.add_argument("--gpu-batch-size", type=int, default=512, dest="gpu_batch_size",
+                   help="Vertices per GPU batch (default 512; reduce if GPU OOM).")
+
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
     prep.add_argument("--sg-filter", default=False, action="store_true")
     prep.add_argument("--psc", default=False, action="store_true")
@@ -412,7 +418,9 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                     surface_indices: np.ndarray,
                     vertex_to_col: np.ndarray,
                     method: str = "spearman",
-                    n_jobs: int = -1) -> np.ndarray:
+                    n_jobs: int = -1,
+                    use_gpu: bool = False,
+                    batch_size: int = 512) -> np.ndarray:
     """Searchlight RSA across all grayordinate vertices.
 
     Parameters
@@ -424,11 +432,31 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
     vertex_to_col  : (n_surf_verts,) int32 — surface vertex → fmri column (-1=medial)
     method         : "spearman" | "pearson"
     n_jobs         : joblib parallel workers (-1 = all CPUs)
+    use_gpu        : bool — use GPU-batched computation (requires CUDA).
+                     Full-k vertices are processed in batches on GPU; partial-k
+                     (near medial wall) fall back to CPU.
+    batch_size     : int — vertices per GPU batch (default 512; reduce if OOM).
     """
     n_verts = fmri.shape[1]
     n_bins = fmri.shape[0]
     tril_idx = np.tril_indices(n_bins, k=-1)
 
+    # Try GPU dispatch first
+    if use_gpu:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                log.info(f"  Using GPU searchlight (device=cuda, batch_size={batch_size})")
+                return run_searchlight_gpu(
+                    fmri, model_emb, neighbors, surface_indices,
+                    vertex_to_col, method, batch_size=batch_size, device="cuda",
+                )
+            else:
+                log.warning("  use_gpu=True but CUDA not available — falling back to CPU")
+        except ImportError:
+            log.warning("  use_gpu=True but torch not installed — falling back to CPU")
+
+    # CPU joblib path (existing implementation)
     log.info(f"  Precomputing model RDM ({method}) ...")
     _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
 
@@ -444,6 +472,125 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
         ),
         dtype=np.float32,
     )
+    return corr_map
+
+
+def run_searchlight_gpu(
+    fmri: np.ndarray,
+    model_emb: np.ndarray,
+    neighbors: np.ndarray,
+    surface_indices: np.ndarray,
+    vertex_to_col: np.ndarray,
+    method: str = "spearman",
+    batch_size: int = 512,
+    device: str = "cuda",
+) -> np.ndarray:
+    """GPU-batched searchlight RSA.
+
+    Processes vertices in batches on a CUDA device.  For vertices whose geodesic
+    neighbourhood contains no medial-wall exclusions (the vast majority), computation
+    is fully GPU-batched.  Vertices near the medial wall (with at least one invalid
+    neighbour) fall back to the optimised CPU implementation.
+
+    Parameters
+    ----------
+    fmri            : (n_bins, n_hem_verts) float32
+    model_emb       : (n_bins, n_features) float32
+    neighbors       : (n_surf_verts, k) int32
+    surface_indices : (n_hem_verts,) int32
+    vertex_to_col   : (n_surf_verts,) int32
+    method          : "spearman" | "pearson"
+    batch_size      : int — vertices per GPU batch (default 512; reduce if OOM)
+    device          : str — torch device (default "cuda")
+
+    Returns
+    -------
+    corr_map : (n_hem_verts,) float32
+    """
+    import torch
+
+    n_verts = fmri.shape[1]
+    n_bins  = fmri.shape[0]
+    k       = neighbors.shape[1]
+    tril_idx = np.tril_indices(n_bins, k=-1)
+    n_pairs  = len(tril_idx[0])
+
+    log.info(f"  [GPU] Precomputing model RDM ({method}) ...")
+    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
+    model_norm_t  = torch.from_numpy(model_norm).to(device)            # (n_pairs,)
+    # fmri on GPU, transposed for fast column gather: (n_hem_verts, n_bins)
+    fmri_t = torch.from_numpy(fmri.T.astype(np.float32)).to(device)   # (n_hem_verts, n_bins)
+
+    # Pre-compute neighbour fMRI column indices for every surface vertex
+    # neighbor_cols_all[sv, :] = fMRI column indices for sv's k neighbours (-1=medial)
+    neighbor_cols_all = vertex_to_col[neighbors]  # (n_surf_verts, k)
+
+    # For every grayordinate vertex, look up its surface vertex → its neighbour columns
+    surf_verts_for_v  = surface_indices.astype(np.int32)            # (n_verts,)
+    ncols_for_v       = neighbor_cols_all[surf_verts_for_v]         # (n_verts, k)
+
+    # Split into full-k (all neighbours valid) and partial-k (some medial-wall)
+    full_k_mask    = np.all(ncols_for_v >= 0, axis=1)
+    full_k_verts   = np.where(full_k_mask)[0]   # grayordinate indices
+    partial_k_verts = np.where(~full_k_mask)[0]
+
+    log.info(
+        f"  [GPU] {len(full_k_verts):,} full-k vertices (GPU batch={batch_size}), "
+        f"{len(partial_k_verts):,} partial-k vertices (CPU fallback)"
+    )
+
+    corr_map = np.zeros(n_verts, dtype=np.float32)
+    tril_row  = torch.tensor(tril_idx[0], dtype=torch.long, device=device)
+    tril_col  = torch.tensor(tril_idx[1], dtype=torch.long, device=device)
+
+    # ── GPU batched pass (full-k vertices) ─────────────────────────────────
+    for start in range(0, len(full_k_verts), batch_size):
+        batch_v  = full_k_verts[start : start + batch_size]            # grayordinate indices
+        batch_nc = ncols_for_v[batch_v].astype(np.int64)               # (B, k), all >= 0
+        B = len(batch_v)
+
+        batch_nc_t = torch.from_numpy(batch_nc).to(device)             # (B, k)
+
+        # Gather neighbourhood fMRI: (B, k, n_bins) then → (B, n_bins, k)
+        # fmri_t: (n_hem_verts, n_bins), batch_nc_t: (B, k)
+        hood = fmri_t[batch_nc_t]                                       # (B, k, n_bins)
+        hood = hood.permute(0, 2, 1).float()                            # (B, n_bins, k)
+
+        # Row-normalise each (n_bins, k) slice for cosine-based RDM
+        mu    = hood.mean(dim=2, keepdim=True)
+        hc    = hood - mu
+        norms = torch.linalg.norm(hc, dim=2, keepdim=True).clamp(min=1e-10)
+        hn    = hc / norms                                              # (B, n_bins, k)
+
+        # RDM via batched matmul: (B, n_bins, n_bins)
+        rdm_full  = torch.bmm(hn, hn.permute(0, 2, 1))
+        fmri_flat = (1.0 - rdm_full)[:, tril_row, tril_col]            # (B, n_pairs)
+
+        if method == "spearman":
+            # Rank the fMRI distances (argsort of argsort = rank)
+            order = torch.argsort(fmri_flat, dim=1)
+            ranks = torch.argsort(order, dim=1).float()
+            fc    = ranks - ranks.mean(dim=1, keepdim=True)
+            fn    = torch.linalg.norm(fc, dim=1, keepdim=True).clamp(min=1e-10)
+            rho   = (fc / fn * model_norm_t).sum(dim=1)                # (B,)
+        else:
+            fc    = fmri_flat - fmri_flat.mean(dim=1, keepdim=True)
+            fn    = torch.linalg.norm(fc, dim=1, keepdim=True).clamp(min=1e-10)
+            rho   = (fc / fn * model_norm_t).sum(dim=1)                # (B,)
+
+        corr_map[batch_v] = rho.cpu().numpy().astype(np.float32)
+
+    # ── CPU fallback (partial-k vertices near medial wall) ──────────────────
+    if len(partial_k_verts) > 0:
+        log.info(f"  [CPU fallback] {len(partial_k_verts):,} partial-k vertices ...")
+        # Bring fmri back to CPU for the per-vertex function
+        fmri_cpu = fmri_t.cpu().numpy().T   # (n_bins, n_hem_verts)
+        for v in partial_k_verts:
+            sv = int(surf_verts_for_v[v])
+            corr_map[v] = _searchlight_vertex_fast(
+                sv, fmri_cpu, model_norm, neighbors, vertex_to_col, tril_idx, method
+            )
+
     return corr_map
 
 
@@ -563,6 +710,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
             surface_indices=surf_indices,
             vertex_to_col=vertex_to_col,
             method=args.method, n_jobs=N_JOBS,
+            use_gpu=args.gpu, batch_size=args.gpu_batch_size,
         )
 
         n_hem = corr_hem.shape[0]

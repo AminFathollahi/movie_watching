@@ -2,6 +2,19 @@
 
 Fits ridge regression models (himalaya RidgeCV, SVD solver) predicting cortical fMRI responses from model embeddings. Alpha is selected independently per vertex via leave-one-run-out cross-validation on the training set.
 
+## GPU Acceleration
+
+The encoding model uses himalaya `RidgeCV` with `torch_cuda` backend by default.
+On an RTX 5070Ti (or any CUDA-capable GPU), the banded ridge fitting is offloaded
+to GPU; the large Y matrix (59412 vertices × T_train) stays in CPU RAM via
+`Y_in_cpu=True` to avoid GPU OOM.
+
+Pearson r evaluation uses a fully vectorized numpy computation (no per-vertex loop),
+replacing the previous O(n_vertices) scipy.stats.pearsonr calls.
+
+Control via CLI: `--backend torch_cuda | torch | numpy`.
+Control via run_analysis.sh: `BACKEND="torch_cuda"`.
+
 ## Structure
 
 ```

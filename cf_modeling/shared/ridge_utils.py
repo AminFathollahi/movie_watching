@@ -3,10 +3,14 @@ shared/ridge_utils.py
 =====================
 Shared ridge regression utilities for the CF modeling pipeline.
 
-generate_leave_one_run_out is imported verbatim from vendor/hedger_cf/utils.py,
-which is itself taken verbatim from vicsompy/utils.py (Hedger et al. 2025, MIT License).
-vicsompy in turn borrowed the function from the gallantlab/voxelwise_tutorials package
-and documents this in its own docstring.
+generate_leave_one_run_out is imported directly from vicsompy.utils (Hedger et al. 2025,
+MIT License), which itself credits the gallantlab/voxelwise_tutorials package and documents
+this in the function's docstring.
+
+vicsompy is imported without pip install by inserting the source repo path:
+  VICSOMPY_REPO = /home/amin/Research/Representation/Movie/Vicarious_somatotopy
+This path is already inserted by 01_extract_geometry.py or 02_fit_cf_model.py before
+this module is imported.  If called in isolation, we fall back to the default path.
 """
 
 import os
@@ -19,8 +23,12 @@ from sklearn.model_selection import check_cv
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vendor.hedger_cf.utils import generate_leave_one_run_out  # noqa: F401  (re-exported)
+# Ensure vicsompy is importable from the source repo (no pip install required)
+_DEFAULT_VICSOMPY_REPO = "/home/amin/Research/Representation/Movie/Vicarious_somatotopy"
+if _DEFAULT_VICSOMPY_REPO not in sys.path:
+    sys.path.insert(0, _DEFAULT_VICSOMPY_REPO)
+
+from vicsompy.utils import generate_leave_one_run_out  # noqa: F401  (re-exported)
 
 
 def build_pipeline(n_samples_train, run_onsets, band_sizes, roi_names,

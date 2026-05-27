@@ -330,7 +330,8 @@ def make_loro_splitter(n_train: int, run_onsets: list) -> PredefinedSplit:
 def run_encoding_model(X_train: np.ndarray, Y_train: np.ndarray,
                         X_test: np.ndarray, Y_test: np.ndarray,
                         run_onsets: list, alphas: np.ndarray,
-                        chunk_size: int = 2000) -> np.ndarray:
+                        chunk_size: int = 2000,
+                        backend: str = "torch_cuda") -> np.ndarray:
     """Fit a ridge encoding model with LORO-CV alpha selection.
 
     Uses himalaya RidgeCV with SVD solver. Alpha is selected independently per
@@ -343,39 +344,48 @@ def run_encoding_model(X_train: np.ndarray, Y_train: np.ndarray,
         Y_test: (n_test, n_vertices) float32
         run_onsets: list[int] — run boundary indices for LORO-CV
         alphas: (n_alphas,) array — regularisation strengths to search
-        chunk_size: int — number of vertices processed per batch
+        chunk_size: deprecated, ignored — vectorized computation used instead
+        backend: str — himalaya backend for ridge fitting: torch_cuda | torch | numpy.
+                 torch_cuda uses GPU if available, falls back to torch automatically.
 
     Returns:
         (n_vertices,) float32 — Pearson r correlation on test set per vertex
     """
+    import torch as _torch
+    import numpy as _np
     from himalaya.ridge import RidgeCV
     from himalaya.backend import set_backend
-    from scipy.stats import pearsonr
 
-    backend = set_backend("numpy", on_error="warn")
+    if backend == "torch_cuda" and not _torch.cuda.is_available():
+        log.warning("CUDA not available — falling back to torch backend")
+        backend = "torch"
+    backend_obj = set_backend(backend, on_error="warn")
+
     cv_splitter = make_loro_splitter(len(Y_train), run_onsets)
 
-    model = RidgeCV(
-        alphas=alphas,
-        cv=cv_splitter,
-        solver="svd",
-        Y_in_cpu=True,
-    )
+    y_in_cpu = backend != "numpy"
+    model = RidgeCV(alphas=alphas, cv=cv_splitter, solver="svd", Y_in_cpu=y_in_cpu)
 
-    log.info(f"  Fitting RidgeCV: X_train={X_train.shape}, Y_train={Y_train.shape}")
+    log.info(f"  Fitting RidgeCV: X_train={X_train.shape}, Y_train={Y_train.shape} "
+             f"(backend={backend}, Y_in_cpu={y_in_cpu})")
     model.fit(X_train, Y_train)
 
     log.info("  Predicting on test set ...")
     Y_hat = model.predict(X_test)
 
-    n_vertices = Y_test.shape[1]
-    r_vals = np.zeros(n_vertices, dtype=np.float32)
-    for start in range(0, n_vertices, chunk_size):
-        end = min(start + chunk_size, n_vertices)
-        for v in range(start, end):
-            r, _ = pearsonr(Y_test[:, v], Y_hat[:, v])
-            r_vals[v] = r
+    if hasattr(Y_hat, 'cpu'):
+        Y_hat = Y_hat.cpu().numpy()
+    Y_hat = _np.asarray(Y_hat, dtype=np.float32)
+    Y_test = _np.asarray(Y_test, dtype=np.float32)
 
+    # Vectorized Pearson r — replaces the O(n_vertices) loop
+    # Much faster: single matrix operation instead of 59412 scipy.stats.pearsonr calls
+    log.info("  Pearson r: vectorized (n_vertices=%d)", Y_test.shape[1])
+    Y_test_c = Y_test - Y_test.mean(axis=0, keepdims=True)
+    Y_hat_c  = Y_hat  - Y_hat.mean(axis=0, keepdims=True)
+    num   = (Y_test_c * Y_hat_c).sum(axis=0)
+    denom = np.sqrt((Y_test_c**2).sum(axis=0) * (Y_hat_c**2).sum(axis=0))
+    r_vals = np.where(denom > 1e-10, num / denom, 0.0).astype(np.float32)
     return r_vals
 
 

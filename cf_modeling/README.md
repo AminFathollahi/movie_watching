@@ -8,6 +8,24 @@ The pipeline fits banded ridge models predicting cortical fMRI from Laplace-Belt
 Operator Eigenfunctions (LBOEs) of two Glasser ROI subsurfaces, then derives
 audiovisual integration zone maps via null-corrected variance partitioning.
 
+## Architecture
+
+This pipeline imports vicsompy **directly from its source repository** without
+`pip install` (required because torch 2.6+ / RTX 5070Ti is incompatible with
+the vendored torch version in vicsompy's dependency list).  All core modeling
+logic — `MssCf`, `Subsurface`, `generate_leave_one_run_out` — is used verbatim.
+
+The main additions are:
+- **Modular ROI definition**: any Glasser HCP-MMP1 ROI pair via CLI args.
+- **LBOE cap**: ROIs with < 200 vertices automatically reduce n_lboe to
+  min(200, n_L−2, n_R−2) (see `01_extract_geometry.py`).
+- **CIFTI grayordinate targets**: model is evaluated on the full 59k cortex
+  (not just within-ROI vertices); data-space conversion handled by
+  `lib/data_adapter.py`.
+- **No splicing**: `splice_lookups()` is not called (requires lookup-table CSVs
+  that do not exist for custom ROI pairs).
+- **GPU acceleration**: himalaya `torch_cuda` backend; controlled by `--backend`.
+
 ## Attribution
 
 This pipeline builds directly on code and methods from two open-source packages.
@@ -15,34 +33,35 @@ See [NOTICE](NOTICE) for full details.
 
 | Component | Source | License |
 |---|---|---|
-| `vendor/hedger_cf/subsurface.py` — `Subsurface` class | [Hedger et al. (2025) / vicsompy](https://github.com/nicholashedger/vicsompy) | MIT |
-| `vendor/hedger_cf/utils.py` — `generate_leave_one_run_out()` | [Hedger et al. (2025) / vicsompy](https://github.com/nicholashedger/vicsompy) (credits [Gallant Lab / voxelwise_tutorials](https://github.com/gallantlab/voxelwise_tutorials)) | MIT |
-
-`Subsurface59k` in `extract_geometry.py` extends `Subsurface` to load 59k_fs_LR
-sphere GIFTIs and apply a regularisation shift to the Laplacian eigendecomposition.
-`generate_leave_one_run_out` in `vendor/hedger_cf/utils.py` is taken verbatim from
-vicsompy, which itself credits the Gallant Lab (documented in the function's docstring).
-The CF modeling logic (LBOEs, banded ridge, null-model correction) is unchanged
-from Hedger et al. (2025).
+| `vicsompy.modeling.MssCf` | [Hedger et al. (2025) / vicsompy](https://github.com/nicholashedger/vicsompy) | MIT |
+| `vicsompy.surface.Subsurface` | [Hedger et al. (2025) / vicsompy](https://github.com/nicholashedger/vicsompy) | MIT |
+| `vicsompy.utils.generate_leave_one_run_out` | Hedger et al. (2025) / vicsompy (credits [Gallant Lab](https://github.com/gallantlab/voxelwise_tutorials)) | MIT |
 
 If you use this pipeline, please cite:
 
 > Hedger, N. et al. (2025). Vicarious somatotopy: somatosensory and visual
 > representations converge in human cortex during naturalistic movie watching.
 
+## Environment
+
+```bash
+conda activate movie   # cloned from vicsompy_av; torch 2.11+cu128, himalaya 0.3.5
+```
+
+Do not `pip install vicsompy` — direct import via `sys.path` is intentional.
+
 ## Required Preprocessed fMRI
 
-cf_modeling reads the **full-run continuous** output of `preprocess_individual.py`
-(SG high-pass → PSC → GSR per run, concatenated). No timing filtering is applied
-during preprocessing; the train/test split (last `--n-test-trs` TRs per run = test)
-is done inside `run_cfmodeling.py`, following Hedger et al.
+CF modeling reads the **concatenated-run** output of `preprocess_individual.py`
+(SG high-pass → PSC → GSR applied **per run**, then concatenated).  Z-scoring
+is applied **inside** `02_fit_cf_model.py`, matching Hedger et al. exactly.
 
 ### Disk mode (default, `STREAM=false`)
 
 Preprocess once and save per-subject continuous CIFTIs:
 
 ```bash
-conda activate analysis
+conda activate movie
 
 python preprocess_individual.py \
     --raw-dir /media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI \
@@ -65,177 +84,226 @@ Set `FMRI_SUFFIX="sg_psc_gsr"` in `run_analysis.sh` (this is the default).
 
 ### Streaming mode (`STREAM=true`)
 
-Set `STREAM=true` in `run_analysis.sh` to skip saving preprocessed CIFTIs. Raw
-data is preprocessed on-the-fly inside `run_cfmodeling.py`; only the R²_nc maps
-are written to disk. Controlled by `SG_FILTER`, `PSC`, `GSR` flags in `run_analysis.sh`.
+Set `STREAM=true` in `run_analysis.sh` to preprocess raw CIFTIs on-the-fly
+inside `02_fit_cf_model.py`; only R²_nc maps are written to disk.
 
 ## Structure
 
 ```
 cf_modeling/
-├── NOTICE                    # third-party code attributions (read this)
-├── run_analysis.sh           # master runner — all paths and ROI pairs here
-├── extract_geometry.py       # build Subsurfaces + LBOEs (59k sphere)
-├── run_cfmodeling.py         # phases 02→04: load data, fit, null-correct
-│                             #   disk mode:      --preprocessed-dir + --fmri-suffix
-│                             #   streaming mode: --raw-dir (per_subject only)
-├── integration_maps.py       # integration_score, modality_balance, bimodal dlabel
-├── summary.py                # RSA overlap (group_average) or group stats (per_subject)
-├── vendor/
-│   └── hedger_cf/
-│       ├── subsurface.py     # Subsurface class — verbatim from vicsompy (MIT)
-│       ├── utils.py          # generate_leave_one_run_out — verbatim from vicsompy (MIT)
-│       ├── ATTRIBUTION.md    # detailed attribution for vendored code
-│       └── LICENSE           # MIT License (Hedger / vicsompy)
-└── shared/
-    └── ridge_utils.py        # build_pipeline, project_onto_lboes, fit_null_r2,
-                              # build_sphere_to_grayord_lut
+├── NOTICE                         # third-party code attributions (read this)
+├── README.md                      # this file
+├── run_analysis.sh                # master runner — all paths and ROI pairs here
+│
+├── 00_make_roi_masks.py           # (optional) export CSV masks from Glasser dlabel
+├── 01_extract_geometry.py         # build Subsurfaces + LBOEs (59k_fs_LR)
+├── 02_fit_cf_model.py             # fit CF model; save R² + CIFTI maps
+├── integration_maps.py            # integration_score, modality_balance, bimodal dlabel
+├── overlap.py                     # RSA overlap (group_average) or group stats (per_subject)
+│
+├── lib/                           # reusable wrappers around vicsompy
+│   ├── __init__.py
+│   ├── cf_model.py                # CfModel(MssCf) — grayordinate targets, no splicing
+│   ├── config_builder.py          # build_temp_yaml() for MssCf initialisation
+│   ├── data_adapter.py            # grayord↔sphere-space conversion (BrainModelAxis)
+│   └── subject_adapter.py         # minimal mock subject for MssCf
+│
+├── shared/
+│   └── ridge_utils.py             # build_pipeline, project_onto_lboes, fit_null_r2
+│                                  # generate_leave_one_run_out (from vicsompy.utils)
+│
+├── viz_cf_modeling.ipynb          # visualisation: CIFTI multimaps + flatmaps
+└── environment.yml                # (reference only) conda env spec
 ```
+
+> The `vendor/` directory is no longer imported — all vicsompy code is imported
+> directly from `VICSOMPY_REPO` via `sys.path` injection. See `vendor/DEPRECATED.md`.
 
 ## Usage
 
 ```bash
-conda activate cfmod
-cd movie_watching   # run from repo root
+conda activate movie
+cd /home/amin/Research/Representation/Movie/movie_watching   # repo root
 
-bash cf_modeling/run_analysis.sh all           # group-average + per-subject
-bash cf_modeling/run_analysis.sh groupaverage  # group-average only
-bash cf_modeling/run_analysis.sh persubject    # per-subject only
-bash cf_modeling/run_analysis.sh persubject 4  # per-subject, 4 parallel jobs
+# Full pipeline (geometry → group-average → per-subject)
+bash cf_modeling/run_analysis.sh all
+
+# Individual stages
+bash cf_modeling/run_analysis.sh masks        # optional CSV mask generation
+bash cf_modeling/run_analysis.sh geometry     # build subsurfaces only
+bash cf_modeling/run_analysis.sh avg          # group-average only
+bash cf_modeling/run_analysis.sh persubject   # per-subject, sequential
+bash cf_modeling/run_analysis.sh persubject 8 # per-subject, 8 parallel jobs
 bash cf_modeling/run_analysis.sh persubject 8 100610  # resume from subject 100610
 ```
 
-Add or remove ROI pairs by editing `run_all_persubject()` and `run_all_groupaverage()`
-in `run_analysis.sh`.
+Add or remove ROI pairs by editing `PERSUBJECT_PAIRS` and `AVG_PAIRS` in
+`run_analysis.sh`.
 
 ## Script-by-script overview
 
-### `extract_geometry.py`
+### `00_make_roi_masks.py` (optional)
 
-Builds `Subsurface59k` objects (extending Hedger et al.'s `Subsurface`) and
-computes up to 200 LBOEs for two Glasser ROIs. Subsurfaces are cached as `.pkl`
-files — re-running skips this step automatically.
-
-**Surface**: 59k_fs_LR sphere (`S1200.{L,R}.sphere.59k_fs_LR.surf.gii`),
-following the Hedger et al. (2025) convention.
-**Parcellation**: 59k_fs_LR Glasser dlabel.nii for ROI vertex masks.
+Generates `{roi}_L_mask.csv` / `{roi}_R_mask.csv` from the Glasser
+59k_fs_LR dlabel.nii.  Each CSV has a `mask` column with 59292 rows (bool).
+`01_extract_geometry.py` reads the dlabel directly and does **not** require
+these files — run `00_make_roi_masks.py` only if you need standalone masks
+for external tools or forced-new vicsompy subsurfaces.
 
 ```bash
-python cf_modeling/extract_geometry.py --mode group_average --roi_a A1 --roi_b V1
-python cf_modeling/extract_geometry.py --mode per_subject   --roi_a A5 --roi_b FFC
+python cf_modeling/00_make_roi_masks.py \
+    --glasser-dlabel /path/to/...59k_fs_LR.dlabel.nii \
+    --rois 3b V1 A1 TA2 MST A5 FFC \
+    --masks-dir /path/to/outputs/cf_modeling/masks
 ```
 
-### `run_cfmodeling.py` (phases 02→04)
+### `01_extract_geometry.py`
 
-Unified entry point for data preparation, banded ridge fitting, and null
-correction. One process per (subject, ROI pair).
+Builds `StableSubsurface` objects (Subsurface subclass with σ=1e-6 Laplacian
+regularisation) and computes up to 200 LBOEs for two Glasser ROIs.
+
+- **Surface**: pycortex `fiducial` (midthickness) from `hcp_999999_draw_NH`.
+  Uses sphere LBOEs in the same mathematical sense as Hedger et al. (2025);
+  the `fiducial` surface is used because `sphere` is not in our pycortex subject.
+- **Parcellation**: 59k_fs_LR Glasser dlabel.nii (read directly; CSV masks not required).
+- **LBOE cap**: `n_lboe = min(N_LBOE, n_L−2, n_R−2)` — handles small ROIs.
+- **Caching**: saves `sub_{roi}.pkl` (our convention) and
+  `{roi}_subsurface.pickle` (vicsompy convention) to the subsurfaces directory.
+  Re-running uses the cached files.
+
+```bash
+python cf_modeling/01_extract_geometry.py \
+    --mode group_average --roi-a 3b --roi-b V1 \
+    --pycortex-store /path/to/data/hedger2026 \
+    --glasser-dlabel /path/to/...59k_fs_LR.dlabel.nii \
+    --output-base /path/to/outputs/cf_modeling \
+    --vicsompy-repo /path/to/Vicarious_somatotopy
+```
+
+### `02_fit_cf_model.py`
+
+Main modeling script.  One process per (subject, ROI pair).
 
 **Disk mode** (default — requires pre-saved CIFTIs):
 ```bash
-python cf_modeling/run_cfmodeling.py \
-    --mode group_average --roi-a A1 --roi-b V1 \
-    --preprocessed-dir /path/to/preprocessed \
+python cf_modeling/02_fit_cf_model.py \
+    --mode group_average --roi-a 3b --roi-b V1 \
+    --preprocessed-dir /path/to/preprocessed/average_sub/sg_psc_gsr \
     --fmri-suffix sg_psc_gsr \
+    --template-cifti /path/to/group_average_sg_psc_gsr_cortex_59k.dtseries.nii \
     --output-base /path/to/outputs/cf_modeling \
-    --template-cifti /path/to/group_average_sg_psc_gsr_cortex_59k.dtseries.nii
+    --vicsompy-repo /path/to/Vicarious_somatotopy
 ```
 
-**Streaming mode** (per_subject only — no CIFTI saved):
+**Streaming mode** (per_subject only):
 ```bash
-python cf_modeling/run_cfmodeling.py \
+python cf_modeling/02_fit_cf_model.py \
     --mode per_subject --roi-a A5 --roi-b FFC --subject 100610 \
     --raw-dir /path/to/raw_ciftis \
     --output-base /path/to/outputs/cf_modeling \
-    [--sg-filter] [--psc] [--no-gsr]
+    --sg-filter --psc --gsr \
+    --vicsompy-repo /path/to/Vicarious_somatotopy
 ```
 
-What it does internally:
-1. Load CIFTI (disk) or preprocess raw CIFTI on-the-fly (streaming)
-2. Build sphere→grayordinate LUT from the BrainModelAxis (maps full 59k sphere
-   vertex indices to CIFTI grayordinate rows; critical for correct ROI extraction)
-3. Split train/test: last `--n-test-trs` TRs per run = test (default: 103, per Hedger et al.)
-4. Project ROI vertex timecourses onto LBOEs → feature matrix X (banded)
-5. Fit `himalaya.MultipleKernelRidgeCV` (banded ridge, LORO-CV alpha selection)
-6. Compute full-model R², per-band split R², shared R²
-7. Subtract OLS null-model R² → null-corrected maps R²_nc
-8. Save `.npy` maps (+ `.dscalar.nii` in group_average mode)
+Internal pipeline (matches vicsompy's `analyse_subject` exactly):
 
-Skip logic: if `R2_{ROI_A}_nc.npy` and `R2_{ROI_B}_nc.npy` already exist, the
-run is skipped automatically.
+1. Load CIFTI (disk) or preprocess on-the-fly (streaming)
+2. Split train/test per run with independent z-scoring (Hedger convention)
+3. Convert grayordinate → sphere space (118584 verts, medial wall = 0)
+4. Load cached Subsurface objects → inject into `CfModel`
+5. Build temp YAML → instantiate `CfModel(MssCf)`
+6. `make_dm_grayord()` — LBOE design matrix from sphere-space train data
+7. `prep_pipeline()` — himalaya `MultipleKernelRidgeCV` with LORO-CV
+8. `fit_grayord()` — fit on grayordinate targets (T_train × 59412)
+9. `get_params()` — betas, train split R², best alphas
+10. `test_xval_grayord()` — test R² (full + per-band split) on 59412 targets
+11. `compute_null_r2()` — OLS null model from ROI mean timecourses
+12. `save_all_maps()` — R²_nc npy + CIFTI multimap
 
-### `integration_maps.py`
+**Skip logic**: if `R2_{ROI_A}_nc.npy` and `R2_{ROI_B}_nc.npy` already exist,
+the run is skipped automatically.
 
-Derives Figure 3a display maps:
-- `integration_score = √(clip(R²_A_nc, 0) × clip(R²_B_nc, 0))`
-- `modality_balance = R²_A_nc − R²_B_nc`
-- `bimodal_map.dlabel.nii` — 4-category label
-- Top-10% integration mask
+### `viz_cf_modeling.ipynb`
 
-For `per_subject` mode: nanmeans per-subject R² maps first, then computes maps.
+Interactive visualisation notebook.  Edit `ROI_A`, `ROI_B`, `MODE` in the
+CONFIG cell and run all.  Produces:
 
-### `summary.py`
+- **1D flatmaps** — all R² maps with individual colourbars (`vicsompy.vis.basic_plot`)
+- **2D flatmap** — ROI_A (dim 1) × ROI_B (dim 2) dual-colorbar
+  (`vicsompy.vis.Plot.uber_plot`)
+- **2D integration flatmap** — modality balance × integration score
+- **CIFTI multimap** — all maps in `all_maps_viz.dscalar.nii` for wb_view
 
-**group_average**: Spatial overlap with PE-AV searchlight RSA maps.
-Spearman rho + 95% CI (bootstrap) for audio/video/joint RSA;
-overlap map = min(integration_norm, rsa_joint_norm); results JSON.
-
-**per_subject**: Group statistics (one-sample t-test, Cohen's d, FDR
-Benjamini-Hochberg q<0.05) across subjects for R²_a_nc, R²_b_nc, and
-per-subject integration score. Saves `.npy` + `.dscalar.nii` stat maps.
-
-## Configuration
-
-All parameters are set in `run_analysis.sh`:
-
-| Variable | Default | Description |
-|---|---|---|
-| `STREAM` | `false` | Streaming mode — preprocess raw CIFTIs on-the-fly |
-| `SG_FILTER` | `true` | Savitzky-Golay high-pass filter (streaming mode) |
-| `PSC` | `true` | Percent signal change normalization (streaming mode) |
-| `GSR` | `true` | Global signal regression (streaming mode) |
-| `FMRI_SUFFIX` | `sg_psc_gsr` | Preprocessing suffix matching `preprocess_individual.py` output |
-| `BATCH_SIZE` | `8` | Parallel jobs for per-subject pipeline |
-
-## Vertex indexing — sphere vs grayordinate space
+## Data space
 
 The HCP 59k_fs_LR sphere has **59292 vertices per hemisphere** (118584 bilateral),
-but only **59412 are grayordinates** (medial wall excluded). Subsurface vertex
-indices live in full sphere space (L: 0..59291, R: 59292..118583).
+but CIFTI stores only **59412 grayordinates** (medial wall excluded).
 
-`shared/ridge_utils.py::build_sphere_to_grayord_lut(bm_axis)` builds a
-118584-element array mapping sphere indices → CIFTI rows (-1 for medial wall).
-This LUT is applied before LBOE projection and null-model mean computation so
-that only valid grayordinate rows are indexed.
+Subsurface vertex indices are in full-sphere space (L: 0..59291, R: 59292..118583).
+`lib/data_adapter.py::grayord_to_sphere_space()` maps CIFTI 59412→sphere 118584,
+filling medial-wall positions with zero.  This matches vicsompy's
+`CiftiHandler.decompose_data()` exactly.
+
+For pycortex visualisation, the template CIFTI uses **32k_fs_LR** (32492 verts/hem).
+`viz_cf_modeling.ipynb` converts grayordinate → bilateral 32k vertex arrays using
+the same BrainModelAxis approach.
 
 ## Output layout
 
 ```
 outputs/cf_modeling/
+├── masks/                         # optional CSV masks (00_make_roi_masks.py)
+│   ├── {roi}_L_mask.csv
+│   └── {roi}_R_mask.csv
 ├── group_average/
 │   └── {ROI_A}_{ROI_B}/
-│       ├── subsurfaces/     # sub_{roi}.pkl caches (extract_geometry.py)
-│       ├── prep/            # R²/R²_nc/null .npy + band_sizes + run_onsets
-│       ├── cifti_maps/      # .dscalar.nii + bimodal_map.dlabel.nii
-│       └── results/         # rsa_overlap_*.json (summary.py)
+│       ├── subsurfaces/           # sub_{roi}.pkl + {roi}_subsurface.pickle
+│       ├── prep/                  # R²/R²_nc/null .npy + band_sizes.npy
+│       ├── cifti_maps/            # all_maps.dscalar.nii + individual .dscalar.nii
+│       └── results/               # rsa_overlap_*.json (overlap.py)
 └── per_subject/
     └── {ROI_A}_{ROI_B}/
-        ├── subsurfaces/     # sub_{roi}.pkl caches (extract_geometry.py)
+        ├── subsurfaces/           # sub_{roi}.pkl + {roi}_subsurface.pickle
         ├── subjects/
-        │   └── {sub_id}/    # per-subject R²/R²_nc .npy (run_cfmodeling.py)
+        │   └── {sub_id}/          # per-subject R²/R²_nc .npy + pipeline.log
         └── group/
-            ├── cifti_maps/  # group avg + integration + stat CIFTIs
-            └── stats/       # t/d/p/fdr .npy + stats_summary.json
+            ├── cifti_maps/        # group avg + integration + stat CIFTIs
+            └── stats/             # t/d/p/fdr .npy + stats_summary.json
 ```
 
 ## Viewing in Connectome Workbench
 
 ```bash
+# Open the combined multimap in wb_view
+wb_view \
+    /path/to/group_average_sg_psc_gsr_cortex_59k.dtseries.nii \
+    /path/to/outputs/cf_modeling/group_average/3b_V1/cifti_maps/all_maps.dscalar.nii
+
+# Or individual maps:
 wb_view \
     group_average_sg_psc_gsr_cortex_59k.dtseries.nii \
-    cifti_maps/R2_{ROI_B}_nc.dscalar.nii \
-    cifti_maps/R2_{ROI_A}_nc.dscalar.nii \
-    cifti_maps/bimodal_map.dlabel.nii
+    cifti_maps/R2_V1_nc.dscalar.nii \
+    cifti_maps/R2_3b_nc.dscalar.nii
 ```
 
-Load R²_B (e.g. visual) as blue overlay and R²_A (e.g. auditory) as red,
+Load `R2_V1_nc` (visual) as blue and `R2_3b_nc` (somatosensory) as red,
 both transparent below 0, for a Figure 3a-style dual-colour display.
+
+## Configuration reference (`run_analysis.sh`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `VICSOMPY_REPO` | `/path/to/Vicarious_somatotopy` | vicsompy source repo (direct import) |
+| `CX_SUB` | `hcp_999999_draw_NH` | pycortex subject |
+| `SURF_TYPE` | `fiducial` | pycortex surface type (midthickness) |
+| `N_LBOE` | `200` | Max LBOEs per ROI (auto-capped for small ROIs) |
+| `STREAM` | `false` | Streaming mode (preprocess raw CIFTIs on-the-fly) |
+| `SG_FILTER` | `true` | Savitzky-Golay high-pass filter |
+| `PSC` | `true` | Percent signal change (pre-SG mean used for normalisation) |
+| `GSR` | `true` | Global signal regression |
+| `BACKEND` | `torch_cuda` | himalaya backend (`torch_cuda` / `torch` / `numpy`) |
+| `N_ITER` | `20` | Random-search iterations for α selection |
+| `N_TARGETS_BATCH` | `20000` | Targets per GPU batch |
+| `BATCH_SIZE` | `8` | Parallel jobs for per-subject pipeline |
+| `PERSUBJECT_PAIRS` | `A5:FFC V1:3b TA2:MST` | ROI pairs for per-subject analysis |
+| `AVG_PAIRS` | `3b:V1` | ROI pairs for group-average analysis |

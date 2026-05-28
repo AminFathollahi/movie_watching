@@ -102,8 +102,13 @@ TIMING_CSV="${DATA_BASE}/movie_timing.csv"
 # Convention: {EMBEDDINGS_DIR}/{model_name}/{bin_sec}s/{model_name}_{modality}.npy
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
 
-# CIFTI template (59k grayordinate space)
-TEMPLATE_CIFTI="${PREPROCESSED_DIR}/group_average_${PREPROCESSING_FLAG}_cortex_59k.dtseries.nii"
+# CIFTI template (59k grayordinate space).
+# Must be a 59k cortex-only file (29696 L + 29716 R = 59412 vertices).
+# The preprocessed group-average dtseries has 108441 grayordinates (full
+# subcortical + cortical) and cannot be used as a template — nibabel will
+# raise a shape mismatch error at save time.  Use the static HCP curvature
+# dscalar which always exists and has the correct BrainModelAxis.
+TEMPLATE_CIFTI="/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
 
 # Output root
 OUTPUT_DIR="${OUTPUTS_BASE}/encoding"

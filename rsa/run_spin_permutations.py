@@ -60,7 +60,7 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 from scipy.spatial import cKDTree
-from statsmodels.stats.multitest import fdrcorrection
+from scipy.stats import false_discovery_control
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -339,8 +339,7 @@ def main():
     )
 
     # ── BH-FDR correction ────────────────────────────────────────────────────
-    _, p_fdr = fdrcorrection(p_uncorr)
-    p_fdr = p_fdr.astype(np.float32)
+    p_fdr = false_discovery_control(p_uncorr, method='bh').astype(np.float32)
 
     n_sig_uncorr = int((p_uncorr < args.alpha).sum())
     n_sig_fdr    = int((p_fdr    < args.alpha).sum())

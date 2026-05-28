@@ -6,20 +6,26 @@ Vertex-wise searchlight RSA and Glasser parcel RSA comparing cortical fMRI repre
 
 ```
 rsa/
-├── run_analysis.sh          # master runner — all config lives here
-├── environment.yml          # conda env: analysis
-├── run_searchlight.py       # geodesic neighbourhood RSA → .dscalar.nii
-├── run_glasser.py           # Glasser parcel RSA → .dscalar.nii + ranked_report.csv
-├── run_group_stats.py       # aggregate per-subject maps → group stats CIFTI
+├── run_analysis.sh                  # master runner — all config lives here
+├── environment.yml                  # conda env: movie
+├── run_searchlight.py               # geodesic neighbourhood RSA → .dscalar.nii
+├── run_glasser.py                   # Glasser parcel RSA → .dscalar.nii + ranked_report.csv
+├── run_group_stats.py               # aggregate per-subject maps → group stats CIFTI
+├── run_partial_rsa.py               # partial RSA controlling for individual modalities
+├── run_multimodal_decomposition.py  # variance decomposition across RSA modalities
+├── run_rdm_diagonal.py              # off-diagonal control for fMRI autocorrelation
+├── run_spin_permutations.py         # spin-test spatial null permutations
+├── precompute_neighbors.py          # pre-build geodesic neighbourhood lookup
 ├── shared/
-│   ├── rsa_utils.py         # fMRI extraction, embedding processing, RDM utilities
-│   └── cifti_io.py          # CIFTI load/save helpers
+│   ├── __init__.py
+│   ├── rsa_utils.py                 # fMRI extraction, embedding processing, RDM utilities
+│   └── model_registry.py            # model name / path registry
 ```
 
 ## Usage
 
 ```bash
-conda activate analysis
+conda activate movie
 cd movie_watching   # run from repo root
 
 bash rsa/run_analysis.sh avg                         # group-average, all methods

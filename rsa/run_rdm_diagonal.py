@@ -151,7 +151,7 @@ def build_segment_labels(
     labels = []
     for run_idx, (_, run_df) in enumerate(groups):
         run_tr_count = run_trs_list[run_idx]
-        run_start_sec = sum(run_trs_list[:run_idx]) * tr if run_trs is not None else 0.0
+        run_start_sec = sum(run_trs_list[:run_idx]) * tr
 
         for _, row in run_df.iterrows():
             n_bins = int(np.floor(row["duration_sec"] / bin_sec))
@@ -211,12 +211,29 @@ def main():
     log.info(f"Embeddings: {emb_file}")
     log.info(f"Timing CSV: {args.timing_csv}  ({len(timing_df)} clips)")
 
-    # For embeddings we do not apply run-level boundary truncation;
-    # pass run_trs=None to use simple floor-binning aligned with embedding file.
+    # For embeddings we do not apply run-level boundary truncation.
+    # Build run_trs from actual per-run durations so that the within-run onset
+    # conversion in process_model_embeddings is correct and no clips are dropped.
+    # +1 padding matches build_segment_labels so both functions produce identical
+    # per-run run_start_sec values and therefore identical bin counts.
+    run_col_local = (
+        "run" if "run" in timing_df.columns
+        else ("run_id" if "run_id" in timing_df.columns else None)
+    )
+    if run_col_local is None:
+        _emb_run_trs = np.array(
+            [int(timing_df["duration_sec"].sum() / args.tr) + 1], dtype=np.int64
+        )
+    else:
+        _groups_local = list(timing_df.groupby(run_col_local, sort=False))
+        _emb_run_trs = np.array(
+            [int(g["duration_sec"].sum() / args.tr) + 1 for _, g in _groups_local],
+            dtype=np.int64,
+        )
     emb = process_model_embeddings(
         str(emb_file), timing_df,
         bin_sec=args.bin_sec, tr=args.tr,
-        run_trs=np.array([int(timing_df["duration_sec"].sum() / args.tr) + 999]),
+        run_trs=_emb_run_trs,
         delay_sec=0.0,    # embeddings are not delayed — they are stimulus-aligned
     )
     n_bins = emb.shape[0]

@@ -20,7 +20,7 @@ Control via run_analysis.sh: `BACKEND="torch_cuda"`.
 ```
 encoding/
 ├── run_analysis.sh          # master runner — all config lives here
-├── environment.yml          # conda env: analysis
+├── environment.yml          # conda env: movie
 ├── run_encoding.py          # per-model/modality encoding script
 └── shared/
     └── encoding_utils.py    # fMRI + embedding array builders, CV helpers, model runner
@@ -29,7 +29,7 @@ encoding/
 ## Usage
 
 ```bash
-conda activate analysis
+conda activate movie
 cd movie_watching   # run from repo root
 
 bash encoding/run_analysis.sh                       # group-average, all models

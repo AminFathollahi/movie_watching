@@ -181,7 +181,7 @@ def fit_banded_projection(
         Projection operator: y_hat = X_nuis @ (C @ y), residual = y - y_hat.
     alphas : list[float] — best alpha per nuisance band
     """
-    from himalaya.ridge import RidgeCV
+    from sklearn.linear_model import RidgeCV
     from sklearn.model_selection import KFold
 
     alpha_grid = np.logspace(0, 20, n_alphas).astype(np.float64)
@@ -194,7 +194,7 @@ def fit_banded_projection(
         x_i = X_nuis[:, i : i + 1].astype(np.float64)
         ridge = RidgeCV(alphas=alpha_grid, cv=cv, fit_intercept=False)
         ridge.fit(x_i, y_target.astype(np.float64))
-        best_alphas.append(float(ridge.best_alpha_))
+        best_alphas.append(float(ridge.alpha_))
         log.info(f"  Band {i}: best alpha = {best_alphas[-1]:.2e}")
 
     # Build the combined banded projection matrix.
@@ -448,7 +448,6 @@ def run_partial_searchlight(
         denom = np.linalg.norm(eb_c) * np.linalg.norm(et_c)
         return float(np.dot(eb_c, et_c) / denom) if denom > 1e-10 else 0.0
 
-    n_jobs = int(import_or_default("os.cpu_count", fallback=8))
     results = Parallel(n_jobs=-1, prefer="threads")(
         delayed(_partial_vertex)(v) for v in range(n_verts)
     )

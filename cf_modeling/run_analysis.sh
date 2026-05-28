@@ -437,11 +437,11 @@ run_persubject_pair() {
     log "[03] Aggregating subjects → integration maps ..."
     run_python "${SCRIPT_DIR}/integration_maps.py" \
         --mode           per_subject \
-        --roi_a          "$ROI_A" \
-        --roi_b          "$ROI_B" \
-        --pycortex_store "$PYCORTEX_STORE" \
-        --output_base    "$OUTPUT_BASE" \
-        --template_cifti "$FMRI_GROUP_CIFTI"
+        --roi-a          "$ROI_A" \
+        --roi-b          "$ROI_B" \
+        --pycortex-store "$PYCORTEX_STORE" \
+        --output-base    "$OUTPUT_BASE" \
+        --template-cifti "$FMRI_GROUP_CIFTI"
     log "[03] Done"
 
     # ── Group statistics ──────────────────────────────────────────────────────
@@ -504,11 +504,11 @@ run_avg_pair() {
     log "[03] Integration maps ..."
     run_python "${SCRIPT_DIR}/integration_maps.py" \
         --mode           group_average \
-        --roi_a          "$ROI_A" \
-        --roi_b          "$ROI_B" \
-        --pycortex_store "$PYCORTEX_STORE" \
-        --output_base    "$OUTPUT_BASE" \
-        --template_cifti "$FMRI_GROUP_CIFTI"
+        --roi-a          "$ROI_A" \
+        --roi-b          "$ROI_B" \
+        --pycortex-store "$PYCORTEX_STORE" \
+        --output-base    "$OUTPUT_BASE" \
+        --template-cifti "$FMRI_GROUP_CIFTI"
     log "[03] Done"
 
     # ── RSA spatial overlap ───────────────────────────────────────────────────

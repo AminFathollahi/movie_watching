@@ -6,11 +6,17 @@ Derive continuous 2D dual-overlay maps and comprehensive CIFTI outputs.
 For group_average mode: loads all R2 components from the prep directory.
 For per_subject mode: aggregates all R² maps across subjects (nanmean).
 
-Outputs:
-  1. CIFTI dscalar.nii: A combined multi-map CIFTI containing the full model, 
-     raw splits, null models, and null-corrected maps with dynamic ROI names.
-  2. Pycortex Flatmap (PNG): A 2D colormap (Vertex2D) flatmap using the 
-     null-corrected maps, reproducing the dual-overlay style of Hedger et al.
+Outputs (all in {out_cifti_dir}):
+  1.  R2_audio_{roi_a}.dscalar.nii       — unique audio variance
+  2.  R2_video_{roi_b}.dscalar.nii       — unique video variance
+  3.  R2_shared.dscalar.nii             — shared variance
+  4.  R2_full.dscalar.nii               — full-model R²
+  5.  integration_score.dscalar.nii     — geometric mean IS = sqrt(R2_a * R2_b), clipped >0
+  6.  modality_balance.dscalar.nii      — signed preference (R2_a-R2_b)/(R2_a+R2_b+ε)
+  7.  bimodal_mask.dscalar.nii          — binary mask of bimodal vertices
+  8.  bimodal_map.dlabel.nii            — 4-class discrete label
+  9.  bimodal_continuous_2d.dscalar.nii — 2-map CIFTI: audio_R2 + video_R2 for 2D overlay
+  10. cf_result_combined.dscalar.nii    — all maps in one file
 """
 
 import argparse
@@ -27,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 # Import from root cifti_io
-from cifti_io import get_bm_axis, save_cifti_multimap
+from cifti_io import save_cifti_multimap
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)s  %(message)s",
@@ -126,7 +132,6 @@ def main():
     os.environ["PYCORTEX_FILESTORE"] = args.pycortex_store
 
     roi_root = f"{args.output_base}/{args.mode}/{args.roi_a}_{args.roi_b}"
-    bm_axis  = get_bm_axis(args.template_cifti)
 
     log.info("=" * 60)
     log.info(f"Integration maps — Combined CIFTIs & Bimodal dlabel ({args.mode})")
@@ -187,7 +192,7 @@ def main():
         R2_b_nc   = np.nanmean(maps_b_nc, axis=0).astype(np.float32)
         product_map = np.nanmean(maps_product, axis=0).astype(np.float32)
 
-        # Save group average .npy 
+        # Save group average .npy
         for name, arr in [
             ("R2_full_avg", R2_full),
             (f"R2_{args.roi_a}_avg", R2_a),
@@ -199,15 +204,7 @@ def main():
             ("product_map_avg", product_map),
         ]:
             np.save(os.path.join(group_dir, f"{name}.npy"), arr)
-        
-        R2_a_pos = np.clip(R2_a_nc, 0, None)
-        R2_b_pos = np.clip(R2_b_nc, 0, None)
-    
-        # 2. Calculate the square root of the product
-        integration_score = np.sqrt(R2_a_pos * R2_b_pos)
-        
-        # 3. Save it as a pure numpy array so summary.py can read it
-        np.save(os.path.join(group_dir, "integration_score.npy"), integration_score)
+
         map_names = [
             "R2_full_avg",
             f"R2_{args.roi_a}_avg",
@@ -219,8 +216,33 @@ def main():
             "product_map_avg",
         ]
 
-    # Save Combined Multi-Map CIFTI
-    combined_cifti_name = f"cf_result_{args.roi_a.lower()}_{args.roi_b.lower()}.dscalar.nii"
+    # ── Derived maps (shared across both modes) ───────────────────────────────
+    roi_a = args.roi_a
+    roi_b = args.roi_b
+
+    # null-corrected maps (clipped to 0 for derived metrics)
+    R2_a_pos = np.clip(R2_a_nc, 0, None)
+    R2_b_pos = np.clip(R2_b_nc, 0, None)
+
+    # Integration score: geometric mean of null-corrected R²
+    integration_score = np.sqrt(R2_a_pos * R2_b_pos).astype(np.float32)
+
+    # Modality balance: signed preference index in [-1, +1]
+    modality_balance = ((R2_a_nc - R2_b_nc) /
+                        (np.abs(R2_a_nc) + np.abs(R2_b_nc) + 1e-8)).astype(np.float32)
+
+    # Bimodal mask: vertices where both null-corrected R² > 0
+    bimodal_mask = ((R2_a_nc > 0) & (R2_b_nc > 0)).astype(np.float32)
+
+    # Shared R² — available in group_average mode directly; derive for per_subject
+    if args.mode == "group_average":
+        shared_r2 = Shared_R2
+    else:
+        # R2_a + R2_b - R2_full (standard variance-partition shared term)
+        shared_r2 = (R2_a + R2_b - R2_full).astype(np.float32)
+
+    # ── Save Combined Multi-Map CIFTI ─────────────────────────────────────────
+    combined_cifti_name = f"cf_result_{roi_a.lower()}_{roi_b.lower()}.dscalar.nii"
     combined_cifti_path = os.path.join(out_cifti_dir, combined_cifti_name)
 
     if args.mode == "group_average":
@@ -234,10 +256,44 @@ def main():
     log.info(f"\nSaved combined CIFTI: {combined_cifti_path}")
     log.info(f"  Maps included: {map_names}")
 
-    # Bimodal integration classification dlabel
-    if args.mode == "group_average":
-        _save_bimodal_dlabel_standalone(R2_a_nc, R2_b_nc, args.roi_a, args.roi_b,
-                                        args.template_cifti, out_cifti_dir)
+    # ── Save individual CIFTI dscalar files (items 1–7) ──────────────────────
+    import nibabel as nib
+    bm_ax = nib.load(args.template_cifti).header.get_axis(1)
+
+    def _save_dscalar(arr, name, out_dir):
+        scalar_ax = nib.cifti2.ScalarAxis([name])
+        hdr = nib.cifti2.Cifti2Header.from_axes((scalar_ax, bm_ax))
+        img = nib.Cifti2Image(arr.reshape(1, -1).astype(np.float32), header=hdr)
+        path = os.path.join(out_dir, f"{name}.dscalar.nii")
+        nib.save(img, path)
+        log.info("  Saved: %s", os.path.basename(path))
+
+    _save_dscalar(R2_a_nc,          f"R2_audio_{roi_a}",   out_cifti_dir)
+    _save_dscalar(R2_b_nc,          f"R2_video_{roi_b}",   out_cifti_dir)
+    _save_dscalar(shared_r2,        "R2_shared",           out_cifti_dir)
+    _save_dscalar(R2_full,          "R2_full",             out_cifti_dir)
+    _save_dscalar(integration_score,"integration_score",   out_cifti_dir)
+    _save_dscalar(modality_balance, "modality_balance",    out_cifti_dir)
+    _save_dscalar(bimodal_mask,     "bimodal_mask",        out_cifti_dir)
+
+    # Save integration_score as npy for downstream scripts
+    np.save(os.path.join(out_cifti_dir, "integration_score.npy"), integration_score)
+
+    # ── Item 8: bimodal_map.dlabel.nii (4-class discrete label) ─────────────
+    _save_bimodal_dlabel_standalone(R2_a_nc, R2_b_nc, roi_a, roi_b,
+                                    args.template_cifti, out_cifti_dir)
+
+    # ── Item 9: bimodal_continuous_2d.dscalar.nii (2-map CIFTI) ─────────────
+    # Two scalar maps: audio_R2 and video_R2 (null-corrected), enabling
+    # per-dimension loading in wb_view and 2D colormap rendering in pycortex.
+    scalar_ax_2d = nib.cifti2.ScalarAxis([f"audio_R2_{roi_a}", f"video_R2_{roi_b}"])
+    hdr_2d = nib.cifti2.Cifti2Header.from_axes((scalar_ax_2d, bm_ax))
+    data_2d_cont = np.stack([R2_a_nc.astype(np.float32),
+                             R2_b_nc.astype(np.float32)], axis=0)
+    img_2d = nib.Cifti2Image(data_2d_cont, header=hdr_2d)
+    cont_path = os.path.join(out_cifti_dir, "bimodal_continuous_2d.dscalar.nii")
+    nib.save(img_2d, cont_path)
+    log.info("  Saved: bimodal_continuous_2d.dscalar.nii  (maps: audio_R2, video_R2)")
 
     log.info("\nintegration_maps.py complete.")
 

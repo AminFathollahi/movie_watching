@@ -262,19 +262,18 @@ def build_subsurface(
     # hours and are only needed for CF profile splicing, which we do not do.
 
     n_L = len(sub.subsurface_verts_L)
-    n_R = len(sub.subsurface_verts_R) - N_VERTS_PER_HEM  # remove offset
-    # The actual number of RIGHT hemisphere vertices (subsurface_verts_R already
-    # has the +59292 offset; we use n_R for capping n_lboe):
-    n_R = len(sub.subsurface_verts_R)  # raw count (indices already offset)
-    log.info("  [%s]  L verts: %d   R verts: %d (raw offset-inclusive count)",
-             name, n_L, n_R)
+    # subsurface_verts_R contains indices in full bilateral sphere space, so the
+    # right hemisphere indices are offset by +N_VERTS_PER_HEM.  The actual vertex
+    # count for the right ROI is therefore len(...) not len(...) - N_VERTS_PER_HEM.
+    n_R = len(sub.subsurface_verts_R)
+    log.info("  [%s]  L verts: %d   R verts: %d", name, n_L, n_R)
 
-    # Cap n_lboe to be safely below the number of vertices.
-    n_lboe = min(n_lboe_max, n_L - 2, len(sub.subsurface_verts_R) - 2)
+    # Cap n_lboe to be safely below the number of vertices in each hemisphere.
+    n_lboe = min(n_lboe_max, n_L - 2, n_R - 2)
     if n_lboe < n_lboe_max:
         log.warning(
             "  [%s] Capping LBOEs to %d (ROI has only %d/%d verts; need n_lboe < n_verts).",
-            name, n_lboe, n_L, len(sub.subsurface_verts_R),
+            name, n_lboe, n_L, n_R,
         )
     if n_lboe < 2:
         raise ValueError(

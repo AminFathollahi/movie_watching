@@ -397,6 +397,10 @@ class CfModel(MssCf):
         # ── Save CIFTI multimap ─────────────────────────────────────────────
         if cifti_dir and template_cifti:
             _save_cifti_multimap(maps, template_cifti, cifti_dir)
+            # Bimodal integration classification dlabel
+            _save_bimodal_dlabel(
+                R2_a_nc, R2_b_nc, roi_a, roi_b, template_cifti, cifti_dir
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -408,6 +412,73 @@ class CfModel(MssCf):
             raise RuntimeError(
                 "Call inject_subsurfaces() before make_dm_grayord() or test_xval_grayord()."
             )
+
+
+# ---------------------------------------------------------------------------
+# Bimodal dlabel CIFTI helper
+# ---------------------------------------------------------------------------
+
+def _save_bimodal_dlabel(
+    R2_a_nc: np.ndarray,
+    R2_b_nc: np.ndarray,
+    roi_a: str,
+    roi_b: str,
+    template_cifti: str,
+    cifti_dir: str,
+) -> None:
+    """Save a 4-class bimodal integration dlabel CIFTI map.
+
+    Labels:
+        0 — Neither        (both R²_nc ≤ 0, grey)
+        1 — {roi_a} only   (R²_a_nc > 0, R²_b_nc ≤ 0, red)
+        2 — {roi_b} only   (R²_b_nc > 0, R²_a_nc ≤ 0, blue)
+        3 — Bimodal        (both R²_nc > 0, purple)
+
+    Parameters
+    ----------
+    R2_a_nc        : (n_grayord,) float32 — null-corrected R² for ROI A
+    R2_b_nc        : (n_grayord,) float32 — null-corrected R² for ROI B
+    roi_a, roi_b   : str — ROI names (used in label names and filename)
+    template_cifti : str — reference CIFTI for BrainModelAxis
+    cifti_dir      : str — output directory
+    """
+    import nibabel as nib
+
+    a_pos = R2_a_nc > 0
+    b_pos = R2_b_nc > 0
+
+    label_map = np.zeros(len(R2_a_nc), dtype=np.int32)
+    label_map[a_pos & ~b_pos] = 1   # ROI_A only
+    label_map[~a_pos & b_pos] = 2   # ROI_B only
+    label_map[a_pos & b_pos]  = 3   # Bimodal
+
+    bm_axis = nib.load(template_cifti).header.get_axis(1)
+
+    label_table = nib.cifti2.Cifti2LabelTable()
+    for key, (name, r, g, b, a) in {
+        0: ("Neither",                  0.6, 0.6, 0.6, 1.0),
+        1: (f"{roi_a}_dominant",        0.85, 0.15, 0.15, 1.0),
+        2: (f"{roi_b}_dominant",        0.15, 0.15, 0.85, 1.0),
+        3: (f"Bimodal_{roi_a}_{roi_b}", 0.65, 0.10, 0.75, 1.0),
+    }.items():
+        lbl = nib.cifti2.Cifti2Label(key, name, r, g, b, a)
+        label_table[key] = lbl
+
+    map_name = f"bimodal_{roi_a}_{roi_b}"
+    label_axis = nib.cifti2.LabelAxis([map_name], [label_table])
+    header = nib.cifti2.Cifti2Header.from_axes((label_axis, bm_axis))
+    img = nib.Cifti2Image(label_map.reshape(1, -1).astype(np.int32), header=header)
+    out_path = os.path.join(cifti_dir, f"{map_name}.dlabel.nii")
+    nib.save(img, out_path)
+
+    bimodal_frac = float(np.mean(label_map == 3))
+    log.info(
+        "  Saved bimodal dlabel: %s  (bimodal=%.1f%%  %s_only=%.1f%%  %s_only=%.1f%%)",
+        os.path.basename(out_path),
+        100.0 * bimodal_frac,
+        roi_a, 100.0 * float(np.mean(label_map == 1)),
+        roi_b, 100.0 * float(np.mean(label_map == 2)),
+    )
 
 
 # ---------------------------------------------------------------------------

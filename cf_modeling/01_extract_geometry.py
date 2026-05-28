@@ -61,7 +61,10 @@ import scipy as sp
 # ---------------------------------------------------------------------------
 # Vicsompy import (direct from source repo, no installation)
 # ---------------------------------------------------------------------------
-VICSOMPY_REPO = "/home/amin/Research/Representation/Movie/Vicarious_somatotopy"
+VICSOMPY_REPO = os.environ.get(
+    "VICSOMPY_REPO",
+    "/home/amin/Research/Representation/Movie/Vicarious_somatotopy",
+)
 if VICSOMPY_REPO not in sys.path:
     sys.path.insert(0, VICSOMPY_REPO)
 

@@ -118,7 +118,6 @@ NORMALIZE=true  # per-run z-score normalization of embeddings
 ALPHA_MIN=-2
 ALPHA_MAX=9
 N_ALPHAS=23
-CHUNK_SIZE=2000
 
 # ── himalaya backend ───────────────────────────────────────────────────────
 # torch_cuda uses GPU if CUDA is available (auto-detected); falls back to torch.
@@ -247,7 +246,6 @@ run_avg() {
                 --alpha-min        "$ALPHA_MIN" \
                 --alpha-max        "$ALPHA_MAX" \
                 --n-alphas         "$N_ALPHAS" \
-                --chunk-size       "$CHUNK_SIZE" \
                 --backend          "$BACKEND" \
                 --test-video-ids   "$TEST_VIDEO_IDS" \
                 $(_hrf_flag) $(_normalize_flag)
@@ -327,7 +325,6 @@ _run_one_subject() {
                 --alpha-min      "$_ENC_ALPHA_MIN" \
                 --alpha-max      "$_ENC_ALPHA_MAX" \
                 --n-alphas       "$_ENC_N_ALPHAS" \
-                --chunk-size     "$_ENC_CHUNK_SIZE" \
                 --backend        "$_ENC_BACKEND" \
                 --test-video-ids "$_ENC_TEST_VIDEO_IDS" \
                 $HRF_FLAG $NORM_FLAG \
@@ -379,7 +376,6 @@ run_persubject() {
     export _ENC_ALPHA_MIN="$ALPHA_MIN"
     export _ENC_ALPHA_MAX="$ALPHA_MAX"
     export _ENC_N_ALPHAS="$N_ALPHAS"
-    export _ENC_CHUNK_SIZE="$CHUNK_SIZE"
     export _ENC_TEST_VIDEO_IDS="$TEST_VIDEO_IDS"
     export _ENC_HRF="$HRF"
     export _ENC_NORMALIZE="$NORMALIZE"

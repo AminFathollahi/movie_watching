@@ -33,7 +33,7 @@ Usage (disk mode):
       --output-dir <path> --subject group_average \\
       --model pe-av-small-16-frame --modality av \\
       --bin-sec 2.0 --delay-sec 5.0 --tr 1.0 \\
-      --alpha-min -2 --alpha-max 9 --n-alphas 23 --chunk-size 2000 \\
+      --alpha-min -2 --alpha-max 9 --n-alphas 23 \\
       --test-video-ids video5,video9,video14,video18
 
 Usage (streaming mode):
@@ -44,7 +44,7 @@ Usage (streaming mode):
       --model pe-av-small-16-frame --modality av \\
       --bin-sec 2.0 --delay-sec 5.0 --tr 1.0 \\
       [--sg-filter] [--psc] [--no-gsr] [--no-z-score] \\
-      --alpha-min -2 --alpha-max 9 --n-alphas 23 --chunk-size 2000 \\
+      --alpha-min -2 --alpha-max 9 --n-alphas 23 \\
       --test-video-ids video5,video9,video14,video18
 """
 
@@ -124,8 +124,6 @@ def parse_args():
                    help="Log10 of maximum ridge alpha.")
     p.add_argument("--n-alphas", type=int, required=True,
                    help="Number of alpha values on the log scale.")
-    p.add_argument("--chunk-size", type=int, required=True,
-                   help="Vertices per batch for Pearson r computation.")
     p.add_argument("--backend", default="torch_cuda", dest="backend",
                    help="himalaya backend for ridge fitting: torch_cuda | torch | numpy. "
                         "torch_cuda uses GPU if available, falls back to torch automatically.")
@@ -184,7 +182,7 @@ def _run_modalities(args, timing_df, test_ids, alphas, config,
 
         r_vals = run_encoding_model(
             X_train, Y_train, X_test, Y_test,
-            run_onsets=run_onsets, alphas=alphas, chunk_size=args.chunk_size,
+            run_onsets=run_onsets, alphas=alphas,
             backend=args.backend,
         )
         save_cifti(r_vals, args.template_cifti, str(out_path),

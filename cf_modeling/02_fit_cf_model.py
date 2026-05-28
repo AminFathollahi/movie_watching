@@ -94,7 +94,10 @@ from scipy.stats import zscore
 # ---------------------------------------------------------------------------
 # Vicsompy import — must be before lib imports that re-export vicsompy classes
 # ---------------------------------------------------------------------------
-VICSOMPY_REPO = "/home/amin/Research/Representation/Movie/Vicarious_somatotopy"
+VICSOMPY_REPO = os.environ.get(
+    "VICSOMPY_REPO",
+    "/home/amin/Research/Representation/Movie/Vicarious_somatotopy",
+)
 if VICSOMPY_REPO not in sys.path:
     sys.path.insert(0, VICSOMPY_REPO)
 

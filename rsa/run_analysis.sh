@@ -151,6 +151,12 @@ TEMPLATE_CIFTI="${DATA_BASE}/preprocessed/average_sub/sg_psc/group_average_sg_ps
 LEFT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
 RIGHT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
 
+# Sphere registration surfaces — required for spin permutation significance testing.
+# These are the 32k_fs_LR sphere surfaces (not midthickness); HCP provides them under
+# the same GroupAverage_59k directory.  Update paths if your HCP layout differs.
+LEFT_SPHERE="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.sphere.59k_fs_LR.surf.gii"
+RIGHT_SPHERE="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.sphere.59k_fs_LR.surf.gii"
+
 # Per-subject midthickness surfaces (used when available for the searchlight loop)
 MIDTHICKNESS_DIR="${DATA_BASE}/midthickness_1.6"
 
@@ -173,7 +179,8 @@ TR=1.0
 BIN_SEC=5.0
 HRF=false
 METHOD="spearman"
-K=100 
+K=100
+N_SPIN=1000   # spin permutations for group-average significance maps
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
@@ -187,10 +194,9 @@ MODELS=(
 )
 
 # ── GPU acceleration ─────────────────────────────────────────────────────
-# true  → GPU-batched searchlight (full-k vertices on CUDA; partial-k on CPU)
-# false → CPU joblib parallelism (use when GPU unavailable or for per-subject parallel)
-USE_GPU=true
-GPU_BATCH_SIZE=512   # vertices per GPU batch; reduce if OOM
+# GPU is attempted automatically when CUDA is available; OOM falls back to CPU.
+# Reduce GPU_BATCH_SIZE if GPU runs out of memory.
+GPU_BATCH_SIZE=512   # vertices per GPU batch (default 512)
 
 # ── Parallelisation ─────────────────────────────────────────────────────────
 CONDA_ENV="movie"
@@ -315,7 +321,6 @@ _run_avg_one_model() {
         local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${METHOD}_maps.dscalar.nii"
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; then
-            local GPU_FLAG="--no-gpu"; [ "$USE_GPU" = "true" ] && GPU_FLAG="--gpu"
             run_python "${SCRIPT_DIR}/run_searchlight.py" \
                 --preprocessed-dir   "$PREPROCESSED_DIR" \
                 --fmri-suffix        "$FMRI_SUFFIX" \
@@ -336,7 +341,7 @@ _run_avg_one_model() {
                 --workbench          "$WORKBENCH" \
                 --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
                 --combined-output    "$COMBINED_OUT" \
-                $GPU_FLAG --gpu-batch-size "$GPU_BATCH_SIZE" \
+                --gpu-batch-size "$GPU_BATCH_SIZE" \
                 $(_hrf_flag)
         fi
 
@@ -358,6 +363,24 @@ _run_avg_one_model() {
                 --glasser-dlabel   "$GLASSER_DLABEL" \
                 --combined-output  "$COMBINED_OUT" \
                 $(_hrf_flag)
+        fi
+
+        # Spin permutation significance test — group-average only.
+        # Appends 4 maps (p_uncorr, p_fdr, sig_uncorr_mask, sig_fdr_mask) to
+        # COMBINED_OUT in-place.  Runs only when the combined CIFTI and sphere
+        # surfaces exist; skips silently otherwise so the pipeline stays robust
+        # when sphere files have not yet been placed in HCP_DIR.
+        if [ -f "$COMBINED_OUT" ] && [ -f "$LEFT_SPHERE" ] && [ -f "$RIGHT_SPHERE" ]; then
+            run_python "${SCRIPT_DIR}/run_spin_permutations.py" \
+                --combined-cifti "$COMBINED_OUT" \
+                --left-sphere    "$LEFT_SPHERE" \
+                --right-sphere   "$RIGHT_SPHERE" \
+                --template-cifti "$TEMPLATE_CIFTI" \
+                --map-name       "searchlight_${METHOD}_rho" \
+                --n-spin         "$N_SPIN" \
+                --seed           42
+        else
+            log "  skip spin test for ${MODEL_NAME}/${MOD}: combined CIFTI or sphere surfaces not found"
         fi
     done
 }
@@ -469,7 +492,6 @@ _run_one_subject() {
                     echo "[$(date +%H:%M:%S)] ${SUB}: searchlight ${MODEL_NAME}/${MOD} already complete; skipping" \
                         | tee -a "$LOG"
                 else
-                    local GPU_FLAG="--no-gpu"   # per-subject: disable GPU to allow parallel CPU jobs
                     # shellcheck disable=SC2086
                     conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
                         "${_RSA_SCRIPT_DIR}/run_searchlight.py" \
@@ -491,7 +513,7 @@ _run_one_subject() {
                         --workbench          "$_RSA_WORKBENCH" \
                         --geodesic-cache-dir "$_RSA_GEODESIC_CACHE_DIR" \
                         --combined-output    "$COMBINED_OUT" \
-                        $GPU_FLAG --gpu-batch-size 512 \
+                        --gpu-batch-size 512 \
                         $HRF_FLAG \
                         >> "$LOG" 2>&1 || STATUS=$?
                 fi

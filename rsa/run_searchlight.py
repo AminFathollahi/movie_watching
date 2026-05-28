@@ -143,9 +143,6 @@ def parse_args():
                         "All analysis variants should point here so the k_max derivation "
                         "logic works across preprocessing configs.")
 
-    p.add_argument("--gpu", default=False, action=argparse.BooleanOptionalAction,
-                   help="Use GPU-batched searchlight (requires CUDA). "
-                        "Full-k vertices computed on GPU; partial-k fall back to CPU.")
     p.add_argument("--gpu-batch-size", type=int, default=512, dest="gpu_batch_size",
                    help="Vertices per GPU batch (default 512; reduce if GPU OOM).")
 
@@ -419,9 +416,11 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                     vertex_to_col: np.ndarray,
                     method: str = "spearman",
                     n_jobs: int = -1,
-                    use_gpu: bool = False,
                     batch_size: int = 512) -> np.ndarray:
     """Searchlight RSA across all grayordinate vertices.
+
+    GPU is attempted unconditionally when CUDA is available; CUDA OOM triggers
+    automatic fallback to CPU joblib.  Pass ``batch_size`` to tune GPU memory use.
 
     Parameters
     ----------
@@ -431,32 +430,32 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
     surface_indices: (n_hem_verts,) int32 — surface vertex index per grayordinate
     vertex_to_col  : (n_surf_verts,) int32 — surface vertex → fmri column (-1=medial)
     method         : "spearman" | "pearson"
-    n_jobs         : joblib parallel workers (-1 = all CPUs)
-    use_gpu        : bool — use GPU-batched computation (requires CUDA).
-                     Full-k vertices are processed in batches on GPU; partial-k
-                     (near medial wall) fall back to CPU.
+    n_jobs         : joblib parallel workers (-1 = all CPUs; for CPU fallback)
     batch_size     : int — vertices per GPU batch (default 512; reduce if OOM).
     """
     n_verts = fmri.shape[1]
     n_bins = fmri.shape[0]
     tril_idx = np.tril_indices(n_bins, k=-1)
 
-    # Try GPU dispatch first
-    if use_gpu:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                log.info(f"  Using GPU searchlight (device=cuda, batch_size={batch_size})")
+    # Always attempt GPU when CUDA is available; fall back to CPU on OOM
+    try:
+        import torch as _torch
+        if _torch.cuda.is_available():
+            log.info(f"  Using GPU searchlight (device=cuda, batch_size={batch_size})")
+            try:
                 return run_searchlight_gpu(
                     fmri, model_emb, neighbors, surface_indices,
                     vertex_to_col, method, batch_size=batch_size, device="cuda",
                 )
-            else:
-                log.warning("  use_gpu=True but CUDA not available — falling back to CPU")
-        except ImportError:
-            log.warning("  use_gpu=True but torch not installed — falling back to CPU")
+            except _torch.cuda.OutOfMemoryError:
+                log.warning("  GPU OOM — falling back to CPU searchlight")
+                _torch.cuda.empty_cache()
+        else:
+            log.info("  CUDA not available — using CPU searchlight")
+    except ImportError:
+        log.info("  torch not installed — using CPU searchlight")
 
-    # CPU joblib path (existing implementation)
+    # CPU joblib path
     log.info(f"  Precomputing model RDM ({method}) ...")
     _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
 
@@ -710,7 +709,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
             surface_indices=surf_indices,
             vertex_to_col=vertex_to_col,
             method=args.method, n_jobs=N_JOBS,
-            use_gpu=args.gpu, batch_size=args.gpu_batch_size,
+            batch_size=args.gpu_batch_size,
         )
 
         n_hem = corr_hem.shape[0]
@@ -724,13 +723,13 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     gc.collect()
 
     out_root.mkdir(parents=True, exist_ok=True)
-    # save_cifti_multimap(
-    #     corr_full.reshape(1, -1),
-    #     [f"{args.method}_rho"],
-    #     args.template_cifti,
-    #     str(maps_out),
-    # )
-    # log.info(f"  Saved: {maps_out.name}  max_r={corr_full.max():.4f}")
+    save_cifti_multimap(
+        corr_full.reshape(1, -1),
+        [map_name],
+        args.template_cifti,
+        str(maps_out),
+    )
+    log.info(f"  Saved: {maps_out.name}  mean_r={corr_full.mean():.4f}  max_r={corr_full.max():.4f}")
 
     # ── Merge into combined output ────────────────────────────────────────────
     if combined_path is not None:

@@ -330,7 +330,6 @@ def make_loro_splitter(n_train: int, run_onsets: list) -> PredefinedSplit:
 def run_encoding_model(X_train: np.ndarray, Y_train: np.ndarray,
                         X_test: np.ndarray, Y_test: np.ndarray,
                         run_onsets: list, alphas: np.ndarray,
-                        chunk_size: int = 2000,
                         backend: str = "torch_cuda") -> np.ndarray:
     """Fit a ridge encoding model with LORO-CV alpha selection.
 
@@ -344,7 +343,6 @@ def run_encoding_model(X_train: np.ndarray, Y_train: np.ndarray,
         Y_test: (n_test, n_vertices) float32
         run_onsets: list[int] — run boundary indices for LORO-CV
         alphas: (n_alphas,) array — regularisation strengths to search
-        chunk_size: deprecated, ignored — vectorized computation used instead
         backend: str — himalaya backend for ridge fitting: torch_cuda | torch | numpy.
                  torch_cuda uses GPU if available, falls back to torch automatically.
 

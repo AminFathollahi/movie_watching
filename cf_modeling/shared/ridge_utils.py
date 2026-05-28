@@ -24,7 +24,10 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 # Ensure vicsompy is importable from the source repo (no pip install required)
-_DEFAULT_VICSOMPY_REPO = "/home/amin/Research/Representation/Movie/Vicarious_somatotopy"
+_DEFAULT_VICSOMPY_REPO = os.environ.get(
+    "VICSOMPY_REPO",
+    "/home/amin/Research/Representation/Movie/Vicarious_somatotopy",
+)
 if _DEFAULT_VICSOMPY_REPO not in sys.path:
     sys.path.insert(0, _DEFAULT_VICSOMPY_REPO)
 

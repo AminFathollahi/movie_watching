@@ -51,7 +51,6 @@ Usage (see 02_fit_cf_model.py)
 import logging
 import os
 import sys
-from pathlib import Path
 
 import numpy as np
 
@@ -61,8 +60,7 @@ import numpy as np
 # is imported.  We guard with a try/except to give a clear error message.
 # ---------------------------------------------------------------------------
 try:
-    from vicsompy.modeling import MssCf          # noqa: E402 (import after sys.path)
-    from himalaya.scoring import r2_score_split  # noqa: E402
+    from vicsompy.modeling import MssCf  # noqa: E402 (import after sys.path)
 except ImportError as exc:
     raise ImportError(
         "Cannot import vicsompy.modeling or himalaya.  "
@@ -355,10 +353,16 @@ class CfModel(MssCf):
 
         R2_a_nc = (R2_a - R2_null_a).astype(np.float32)
         R2_b_nc = (R2_b - R2_null_b).astype(np.float32)
-        Shared  = (R2_a + R2_b - R2_full).astype(np.float32)
 
-        # √(clip(R²_A_nc, 0) × clip(R²_B_nc, 0)) — Hedger et al. integration score
+        # product_map: geometric mean of raw R² — measures joint prediction
+        # independent of the null-model baseline.
         product_map = np.sqrt(
+            np.clip(R2_a, 0, None) * np.clip(R2_b, 0, None)
+        ).astype(np.float32)
+
+        # product_map_nc: geometric mean of null-corrected R² — measures joint
+        # topographic response above the global-signal baseline.
+        product_map_nc = np.sqrt(
             np.clip(R2_a_nc, 0, None) * np.clip(R2_b_nc, 0, None)
         ).astype(np.float32)
 
@@ -366,12 +370,12 @@ class CfModel(MssCf):
             "R2_full":              R2_full,
             f"R2_{roi_a}":          R2_a,
             f"R2_{roi_b}":          R2_b,
-            "Shared_R2":            Shared,
             f"R2_null_{roi_a}":     R2_null_a,
             f"R2_null_{roi_b}":     R2_null_b,
             f"R2_{roi_a}_nc":       R2_a_nc,
             f"R2_{roi_b}_nc":       R2_b_nc,
             "product_map":          product_map,
+            "product_map_nc":       product_map_nc,
         }
 
         # ── Log summary stats ───────────────────────────────────────────────

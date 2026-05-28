@@ -1,5 +1,5 @@
 """
-cf_modeling/summary.py
+cf_modeling/overlap.py
 ======================
 Mode-specific summary analysis.
 
@@ -398,26 +398,25 @@ def parse_args():
         description="Phase 6: RSA overlap (group_average) or group stats (per_subject).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--mode",        required=True, choices=["group_average", "per_subject"])
-    p.add_argument("--roi_a",       default="A1")
-    p.add_argument("--roi_b",       default="V1")
-    p.add_argument("--output_base", default=_OUT_BASE)
-    p.add_argument("--template_cifti", default=None,
-                   help="59k preprocessed CIFTI used as template for BrainModelAxis "
-                        "and grayordinate indices (required). Pass the group-average "
-                        "dtseries from preprocess_individual.py.")
+    p.add_argument("--mode",          required=True, choices=["group_average", "per_subject"])
+    p.add_argument("--roi-a",         dest="roi_a",          default="A1")
+    p.add_argument("--roi-b",         dest="roi_b",          default="V1")
+    p.add_argument("--output-base",   dest="output_base",    default=_OUT_BASE)
+    p.add_argument("--template-cifti", dest="template_cifti", default=None,
+                   help="59k cortex-only CIFTI template (required).")
     # group_average
-    p.add_argument("--rsa_base",    default=_RSA_BASE,
+    p.add_argument("--rsa-base",      dest="rsa_base",       default=_RSA_BASE,
                    help="Root directory of searchlight RSA outputs (group_average mode).")
-    p.add_argument("--rsa_model",   default=RSA_MODEL,
+    p.add_argument("--rsa-model",     dest="rsa_model",      default=RSA_MODEL,
                    help="RSA model directory name (group_average mode).")
-    p.add_argument("--rsa_config",  default="notnormalized_nohrf_global_2s",
+    p.add_argument("--rsa-config",    dest="rsa_config",
+                   default="notnormalized_nohrf_global_2s",
                    choices=list(RSA_CONFIGS.keys()),
                    help="RSA config to run (group_average mode).")
-    p.add_argument("--all_configs", action="store_true",
-                   help="Run all RSA configs instead of --rsa_config (group_average mode).")
+    p.add_argument("--all-configs",   dest="all_configs",    action="store_true",
+                   help="Run all RSA configs instead of --rsa-config (group_average mode).")
     # per_subject
-    p.add_argument("--min_subjects", type=int, default=1,
+    p.add_argument("--min-subjects",  dest="min_subjects",   type=int, default=1,
                    help="Minimum subjects required (per_subject mode).")
     return p.parse_args()
 

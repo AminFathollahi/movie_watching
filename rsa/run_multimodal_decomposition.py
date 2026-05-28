@@ -73,20 +73,23 @@ Model Recommendations for Future Runs
 Usage
 -----
   # Both Glasser parcels and searchlight (default):
-  python rsa/run_multimodal_decomposition.py \\
-      --embeddings-dir /path/to/model_embeddings \\
-      --timing-csv     /path/to/movie_timing.csv \\
-      --fmri-cifti     /path/to/group_average_raw_cortex_59k.dtseries.nii \\
-      --run-trs        /path/to/group_average_raw_run_trs.npy \\
-      --glasser-dlabel /path/to/Q1-Q6_RelatedParcellation210_...dlabel.nii \\
-      --template-cifti /path/to/template.dscalar.nii \\
-      --left-surface   /path/to/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \\
-      --right-surface  /path/to/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \\
-      --workbench      /opt/workbench/bin_linux64/wb_command \\
-      --geodesic-cache-dir /path/to/rsa/_geodesic_cache \\
-      --output-dir     /path/to/outputs/multimodal_decomp \\
-      --target-model   pe-av-small-16-frame \\
-      --method         both
+python rsa/run_multimodal_decomposition.py \
+    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
+    --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \
+    --fmri-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
+    --run-trs /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy \
+    --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
+    --output-dir /home/amin/Research/Representation/Movie/outputs/multimodal_decomp \
+    --method both \
+    --glasser-dlabel /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii \
+    --left-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
+    --right-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
+    --workbench /opt/workbench/bin_linux64/wb_command \
+    --geodesic-cache-dir /home/amin/Research/Representation/Movie/outputs/rsa/_geodesic_cache \
+    --target-model pe-av-small-16-frame \
+    --target-modality av \
+    --unimodal-models "audiomae:a" "videomaev2-large:v" \
+    --bin-sec 5.0 --delay-sec 5.0 --tr 1.0
 
   # Glasser parcels only (no surface/workbench/cache args needed):
   python rsa/run_multimodal_decomposition.py ... --method glasser
@@ -269,16 +272,20 @@ def compute_interaction_residual(
 # Glasser parcel helpers
 # =============================================================================
 
-def load_glasser_parcels(dlabel_path: str, n_grayords: int) -> np.ndarray:
+def load_glasser_parcels(dlabel_path: str, n_grayords: int, lh_verts: np.ndarray, rh_verts: np.ndarray) -> np.ndarray:
     """Return (n_grayords,) int32 parcel labels (0 = medial wall / background)."""
     img    = nib.load(dlabel_path)
     labels = img.get_fdata(dtype=np.float32).squeeze().astype(np.int32)
-    if len(labels) != n_grayords:
-        raise ValueError(
-            f"Glasser dlabel has {len(labels)} grayordinates, expected {n_grayords}."
-        )
-    return labels
-
+    
+    if len(labels) == n_grayords:
+        return labels
+    elif len(labels) == 118584:  # Full 59k left + right meshes
+        # Slice left (first 59292) and right (second 59292) using cortex indices
+        lh_labels = labels[:59292][lh_verts]
+        rh_labels = labels[59292:][rh_verts]
+        return np.concatenate([lh_labels, rh_labels])
+    else:
+        raise ValueError(f"Glasser dlabel has {len(labels)} vertices, expected {n_grayords} or 118584.")
 
 def _run_glasser_cka(
     fmri_binned: np.ndarray,
@@ -287,9 +294,11 @@ def _run_glasser_cka(
     K_interaction: np.ndarray,
     glasser_dlabel: str,
     n_grayords: int,
+    lh_verts: np.ndarray,      
+    rh_verts: np.ndarray,      
 ) -> tuple[list[dict], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-Glasser-parcel CKA.  Returns (results_list, cka_j, cka_u, cka_i, si) maps."""
-    parcel_labels = load_glasser_parcels(glasser_dlabel, n_grayords)
+    parcel_labels = load_glasser_parcels(glasser_dlabel, n_grayords, lh_verts, rh_verts) 
     parcel_ids    = sorted(set(parcel_labels.tolist()) - {0})
     log.info(f"  [Glasser] {len(parcel_ids)} parcels")
 
@@ -715,7 +724,7 @@ def main():
         log.info("  Running Glasser parcel CKA ...")
         glasser_results, cka_j, cka_u, cka_i, si = _run_glasser_cka(
             fmri_binned, K_joint, K_unimodal, K_interaction,
-            args.glasser_dlabel, n_grayords,
+            args.glasser_dlabel, n_grayords, lh_verts, rh_verts  # <-- UPDATE THIS
         )
         all_maps[f"glasser_cka_joint_{target_short}"]       = cka_j
         all_maps[f"glasser_cka_unimodal_{target_short}"]    = cka_u

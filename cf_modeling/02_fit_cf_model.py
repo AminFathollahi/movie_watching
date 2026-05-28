@@ -84,7 +84,6 @@ import os
 import pickle
 import sys
 import types
-import tempfile
 from pathlib import Path
 
 import nibabel as nib
@@ -171,7 +170,7 @@ def parse_args():
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
     prep.add_argument("--sg-filter", default=False, action="store_true", dest="sg_filter")
     prep.add_argument("--psc",       default=False, action="store_true")
-    prep.add_argument("--gsr", default=True, action=argparse.BooleanOptionalAction)
+    prep.add_argument("--gsr", default=False, action=argparse.BooleanOptionalAction)
 
     return p.parse_args()
 

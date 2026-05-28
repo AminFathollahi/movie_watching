@@ -96,7 +96,7 @@ CIFTI_DIR="${DATA_BASE}/7T_fMRI"   # set to actual raw CIFTI dir if STREAM=true
 # Applied per run: SG high-pass → PSC (with pre-SG mean) → GSR
 SG_FILTER=true    # Savitzky-Golay high-pass filter
 PSC=true          # Percent signal change (uses pre-SG mean for normalisation)
-GSR=true          # Global signal regression
+GSR=false          # Global signal regression
 
 # Automatically build PREPROCESSING_FLAG from SG_FILTER/PSC/GSR
 PREP_PARTS=()
@@ -239,6 +239,7 @@ _run_geometry_for_pair() {
         --cx-sub         "$CX_SUB" \
         --surf-type      "$SURF_TYPE" \
         --glasser-dlabel "$GLASSER_DLABEL" \
+        --masks-dir      "$MASKS_DIR" \
         --output-base    "$OUTPUT_BASE" \
         --vicsompy-repo  "$VICSOMPY_REPO"
     log "  [01] ${CF_MODE} ${ROI_A}×${ROI_B}: done"
@@ -447,11 +448,11 @@ run_persubject_pair() {
     # ── Group statistics ──────────────────────────────────────────────────────
     log "[04] Group statistics ..."
     run_python "${SCRIPT_DIR}/overlap.py" \
-        --mode          per_subject \
-        --roi_a         "$ROI_A" \
-        --roi_b         "$ROI_B" \
-        --output_base   "$OUTPUT_BASE" \
-        --template_cifti "$FMRI_GROUP_CIFTI"
+        --mode           per_subject \
+        --roi-a          "$ROI_A" \
+        --roi-b          "$ROI_B" \
+        --output-base    "$OUTPUT_BASE" \
+        --template-cifti "$FMRI_GROUP_CIFTI"
     log "[04] Done"
 
     log "Per-subject ${ROI_A}×${ROI_B} complete → ${OUT}"
@@ -514,12 +515,12 @@ run_avg_pair() {
     # ── RSA spatial overlap ───────────────────────────────────────────────────
     log "[04] RSA spatial overlap ..."
     run_python "${SCRIPT_DIR}/overlap.py" \
-        --mode          group_average \
-        --roi_a         "$ROI_A" \
-        --roi_b         "$ROI_B" \
-        --output_base   "$OUTPUT_BASE" \
-        --template_cifti "$FMRI_GROUP_CIFTI" \
-        --rsa_base      "$RSA_BASE"
+        --mode           group_average \
+        --roi-a          "$ROI_A" \
+        --roi-b          "$ROI_B" \
+        --output-base    "$OUTPUT_BASE" \
+        --template-cifti "$FMRI_GROUP_CIFTI" \
+        --rsa-base       "$RSA_BASE"
     log "[04] Done"
 
     log "Group-average ${ROI_A}×${ROI_B} complete → ${OUT}"

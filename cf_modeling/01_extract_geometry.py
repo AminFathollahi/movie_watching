@@ -56,6 +56,7 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+import pandas as pd
 import scipy as sp
 
 # ---------------------------------------------------------------------------
@@ -149,13 +150,43 @@ class StableSubsurface(Subsurface):
 # ROI mask loading from Glasser dlabel
 # =============================================================================
 
-def load_dlabel_masks(glasser_dlabel: str, roi_a: str, roi_b: str) -> dict:
+def _load_csv_masks(roi: str, masks_dir: str) -> tuple:
+    """Load {roi}_{L/R}_mask.csv from masks_dir (vicsompy format).
+
+    Returns
+    -------
+    mask_L : (59292,) bool
+    mask_R : (59292,) bool
+    """
+    for hem in ("L", "R"):
+        path = os.path.join(masks_dir, f"{roi}_{hem}_mask.csv")
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"CSV mask not found: {path}\n"
+                f"Run 03_functional_masks.py (or 00_make_roi_masks.py) first, "
+                f"or check --masks-dir."
+            )
+    mask_L = pd.read_csv(os.path.join(masks_dir, f"{roi}_L_mask.csv"))["mask"].to_numpy(dtype=bool)
+    mask_R = pd.read_csv(os.path.join(masks_dir, f"{roi}_R_mask.csv"))["mask"].to_numpy(dtype=bool)
+    log.info("  %-20s  L=%4d verts (CSV)  R=%4d verts (CSV)",
+             roi, int(mask_L.sum()), int(mask_R.sum()))
+    return mask_L, mask_R
+
+
+def load_dlabel_masks(glasser_dlabel: str, roi_a: str, roi_b: str,
+                      masks_dir: str = None) -> dict:
     """Load Boolean vertex masks from the 59k_fs_LR Glasser dlabel.
+
+    If an ROI name is not found in the dlabel (e.g. a functional ROI like
+    'auditory_cx'), falls back to loading {roi}_{L/R}_mask.csv from masks_dir.
+    Raises FileNotFoundError if the CSV is also missing.
 
     Parameters
     ----------
     glasser_dlabel : str — path to the dlabel.nii file.
-    roi_a, roi_b   : str — Glasser short names (e.g. '3b', 'V1').
+    roi_a, roi_b   : str — ROI names (Glasser short names, or functional names
+                           with CSV fallback).
+    masks_dir      : str | None — directory of CSV masks for fallback.
 
     Returns
     -------
@@ -173,15 +204,26 @@ def load_dlabel_masks(glasser_dlabel: str, roi_a: str, roi_b: str) -> dict:
     for roi in [roi_a, roi_b]:
         lk = n2k.get(f"L_{roi}_ROI")
         rk = n2k.get(f"R_{roi}_ROI")
+
         if lk is None or rk is None:
-            available = sorted(
-                n.replace("L_", "").replace("_ROI", "")
-                for n in n2k
-                if n.startswith("L_") and n.endswith("_ROI")
-            )
-            raise ValueError(
-                f"ROI '{roi}' not found in dlabel. Available:\n  {available}"
-            )
+            if masks_dir is not None:
+                log.info(
+                    "  '%s' not found in dlabel — loading CSV from %s",
+                    roi, masks_dir,
+                )
+                masks[roi] = _load_csv_masks(roi, masks_dir)
+            else:
+                available = sorted(
+                    n.replace("L_", "").replace("_ROI", "")
+                    for n in n2k
+                    if n.startswith("L_") and n.endswith("_ROI")
+                )
+                raise ValueError(
+                    f"ROI '{roi}' not found in dlabel and --masks-dir not set. "
+                    f"Available Glasser names:\n  {available}"
+                )
+            continue
+
         mask_L = (data[:N_VERTS_PER_HEM] == lk)
         mask_R = (data[N_VERTS_PER_HEM:] == rk)
         masks[roi] = (mask_L, mask_R)
@@ -337,6 +379,9 @@ def parse_args():
                    help="Pycortex surface type ('fiducial', 'sphere', …).")
     p.add_argument("--glasser-dlabel", default=_GLASSER_DLABEL, dest="glasser_dlabel",
                    help="59k_fs_LR Glasser HCP-MMP1 dlabel.nii.")
+    p.add_argument("--masks-dir", default=None, dest="masks_dir",
+                   help="Directory of CSV mask files (fallback when ROI name is not "
+                        "found in the Glasser dlabel, e.g. for functional ROIs).")
     p.add_argument("--output-base", default=_OUT_BASE, dest="output_base",
                    help="CF modeling output root directory.")
     p.add_argument("--vicsompy-repo", default=VICSOMPY_REPO, dest="vicsompy_repo",
@@ -369,9 +414,12 @@ def main():
     log.info("  Surface    : %s (%s)", args.surf_type, args.cx_sub)
     log.info("  Vicsompy   : %s", args.vicsompy_repo)
     log.info("  Cache dir  : %s", cache_dir)
+    if args.masks_dir:
+        log.info("  Masks dir  : %s (CSV fallback enabled)", args.masks_dir)
     log.info("=" * 60)
 
-    masks = load_dlabel_masks(args.glasser_dlabel, args.roi_a, args.roi_b)
+    masks = load_dlabel_masks(args.glasser_dlabel, args.roi_a, args.roi_b,
+                               masks_dir=args.masks_dir)
 
     log.info("\nBuilding '%s' subsurface …", args.roi_a)
     build_subsurface(

@@ -26,15 +26,16 @@ Outputs
 
 Usage
 -----
-  python rsa/run_rdm_diagonal.py \\
-      --embeddings-dir /path/to/model_embeddings \\
-      --timing-csv     /path/to/movie_timing.csv  \\
-      --output-dir     /path/to/outputs/rsa/rdm_diagonal \\
-      --model          pe-av-small-16-frame \\
-      --modality       av \\
-      --bin-sec        5.0 \\
-      --delay-sec      5.0 \\
-      --tr             1.0
+python rsa/run_rdm_diagonal.py \
+    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
+    --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \
+    --output-dir /home/amin/Research/Representation/Movie/outputs/rsa/rdm_diagonal \
+    --model pe-av-small-16-frame \
+    --modality av \
+    --bin-sec 5.0 \
+    --delay-sec 5.0 \
+    --tr 1.0 \
+    --rdm-metric correlation
 """
 
 import argparse
@@ -89,7 +90,7 @@ def parse_args():
     p.add_argument("--delay-sec", type=float, default=DELAY_SEC_DEFAULT)
     p.add_argument("--tr",        type=float, default=TR_DEFAULT)
     p.add_argument("--rdm-metric",
-                   default="cosine",
+                   default="correlation",
                    choices=["cosine", "correlation", "euclidean"],
                    help="Pairwise distance metric for RDM construction.")
     return p.parse_args()

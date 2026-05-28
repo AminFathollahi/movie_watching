@@ -36,8 +36,6 @@ other purposes (e.g., sharing ROI masks or using force_new=True subsurfaces).
 import argparse
 import logging
 import os
-import sys
-from pathlib import Path
 
 import nibabel as nib
 import numpy as np

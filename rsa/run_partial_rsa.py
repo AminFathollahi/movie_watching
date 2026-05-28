@@ -32,20 +32,21 @@ Default run: run_A (PE-AV joint controlling for AudioMAE + VideoMAE).
 
 Usage
 -----
-  python rsa/run_partial_rsa.py \\
-      --run run_A \\
-      --preprocessed-dir /path/to/preprocessed --fmri-suffix raw \\
-      --timing-csv /path/to/movie_timing.csv \\
-      --embeddings-dir /path/to/model_embeddings \\
-      --template-cifti /path/to/template.dscalar.nii \\
-      --output-dir /path/to/outputs/rsa/partial \\
-      --subject group_average \\
-      --bin-sec 5.0 --delay-sec 5.0 --tr 1.0 \\
-      --k 100 --method spearman \\
-      --left-surface /path/to/L.midthickness.surf.gii \\
-      --right-surface /path/to/R.midthickness.surf.gii \\
-      --workbench /opt/workbench/bin_linux64/wb_command \\
-      --geodesic-cache-dir /path/to/geodesic_cache
+python rsa/run_partial_rsa.py \
+    --run run_A \
+    --preprocessed-dir /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw \
+    --fmri-suffix raw \
+    --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \
+    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
+    --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
+    --output-dir /home/amin/Research/Representation/Movie/outputs/rsa/partial \
+    --subject group_average \
+    --bin-sec 5.0 --delay-sec 5.0 --tr 1.0 \
+    --k 100 --method spearman \
+    --left-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
+    --right-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
+    --workbench /opt/workbench/bin_linux64/wb_command \
+    --geodesic-cache-dir /home/amin/Research/Representation/Movie/outputs/rsa/_geodesic_cache
 """
 
 import argparse

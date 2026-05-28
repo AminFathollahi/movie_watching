@@ -38,12 +38,15 @@ Algorithm
 
 Usage
 -----
-  python rsa/run_spin_permutations.py \\
-      --combined-cifti /path/to/rsa_59k_*_maps.dscalar.nii \\
-      --left-sphere    /path/to/CohortAvg.L.sphere.59k_fs_LR.surf.gii \\
-      --right-sphere   /path/to/CohortAvg.R.sphere.59k_fs_LR.surf.gii \\
-      --template-cifti /path/to/template.dscalar.nii \\
-      --n-spin 1000 --seed 42
+python rsa/run_spin_permutations.py \
+    --combined-cifti /home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average/pe-av-small-16-frame/rsa_59k_raw_k100_delay5s_bin5_spearman_maps.dscalar.nii \
+    --map-name searchlight_spearman_rho \
+    --left-sphere /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/L.sphere.59k_fs_LR.surf.gii \
+    --right-sphere /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/R.sphere.59k_fs_LR.surf.gii \
+    --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
+    --n-spin 1000 \
+    --alpha 0.05 \
+    --output-dir /home/amin/Research/Representation/Movie/outputs/rsa/spin_tests
 
 Reference
 ---------

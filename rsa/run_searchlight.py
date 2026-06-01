@@ -62,12 +62,12 @@ import pandas as pd
 from joblib import Parallel, delayed
 from scipy.stats import rankdata
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 from rsa.shared.rsa_utils import (
     load_fmri_cifti, preprocess_fmri,
     process_model_embeddings, align_and_assert_bins
 )
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
 from cifti_io import (
     get_bm_axis, save_cifti_multimap, get_cortex_vertex_indices,
     get_combined_map_names, merge_into_combined,
@@ -362,10 +362,10 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
                                vertex_to_col: np.ndarray,
                                tril_idx: tuple,
                                method: str) -> float:
-    """Optimised per-vertex RSA: float64 matmul RDM + Spearman via argsort.
+    """Optimised per-vertex RSA: float32 matmul RDM + Spearman via argsort.
 
     Replaces squareform(pdist) + spearmanr with:
-      - float64 row-normalised matmul for the fMRI RDM (full precision, no artificial ties)
+      - float32 row-normalised matmul for the fMRI RDM (matches GPU path precision)
       - Pre-ranked model (scipy.rankdata, tie-safe) + argsort rank of fMRI RDM
       - Pearson dot product on ranks (= Spearman)
 
@@ -385,7 +385,7 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
     if len(neighbor_cols) < 2:
         return 0.0
 
-    hood = fmri[:, neighbor_cols].astype(np.float64)   # float64: full precision, no artificial ties
+    hood = fmri[:, neighbor_cols]   # float32, matching GPU path
 
     # Row-normalise to get unit correlation vectors (fast RDM via matmul)
     mu = hood.mean(axis=1, keepdims=True)
@@ -393,7 +393,7 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
     norms = np.sqrt((hc ** 2).sum(axis=1, keepdims=True))
     norms[norms < 1e-10] = 1.0
     hn = hc / norms
-    fmri_flat = (1.0 - hn @ hn.T)[tril_idx].astype(np.float32)  # condensed RDM
+    fmri_flat = (1.0 - hn @ hn.T)[tril_idx]   # float32 condensed RDM
 
     if method == "spearman":
         # Rank-order the fMRI distances; Pearson on ranks = Spearman
@@ -440,6 +440,14 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
     # Always attempt GPU when CUDA is available; fall back to CPU on OOM
     try:
         import torch as _torch
+        # Collect all GPU OOM exception types across PyTorch versions.
+        # Older PyTorch raises cuda.OutOfMemoryError; newer versions may
+        # raise torch.AcceleratorError instead.
+        _oom_types = [_torch.cuda.OutOfMemoryError]
+        if hasattr(_torch, "AcceleratorError"):
+            _oom_types.append(_torch.AcceleratorError)
+        _oom_types = tuple(_oom_types)
+
         if _torch.cuda.is_available():
             log.info(f"  Using GPU searchlight (device=cuda, batch_size={batch_size})")
             try:
@@ -447,8 +455,8 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                     fmri, model_emb, neighbors, surface_indices,
                     vertex_to_col, method, batch_size=batch_size, device="cuda",
                 )
-            except _torch.cuda.OutOfMemoryError:
-                log.warning("  GPU OOM — falling back to CPU searchlight")
+            except _oom_types as e:
+                log.warning(f"  GPU OOM ({type(e).__name__}) — falling back to CPU searchlight")
                 _torch.cuda.empty_cache()
         else:
             log.info("  CUDA not available — using CPU searchlight")

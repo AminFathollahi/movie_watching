@@ -86,6 +86,24 @@ def get_combined_map_names(combined_path) -> list:
         return []
 
 
+def _save_cifti_atomic(img, path: str) -> None:
+    """Write a nibabel CIFTI image atomically (temp file → rename).
+
+    Prevents partial/corrupt writes if the process is killed mid-write:
+    the destination is only replaced once the full write succeeds.
+    """
+    import os
+    import tempfile
+    from pathlib import Path
+    tmp = Path(path).with_suffix(".tmp.nii")
+    try:
+        nib.save(img, str(tmp))
+        os.replace(str(tmp), path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def merge_into_combined(new_map: np.ndarray, map_name: str,
                          combined_path, template_cifti: str) -> None:
     """Add or overwrite one scalar map in a combined CIFTI dscalar file.
@@ -93,6 +111,10 @@ def merge_into_combined(new_map: np.ndarray, map_name: str,
     If *combined_path* does not exist a new file is created.
     If it already contains *map_name* that map is replaced in-place.
     Otherwise the new map is appended.
+
+    Corrupt existing files (readable header, unreadable data) are detected
+    and silently replaced rather than crashing. All writes are atomic
+    (temp file → rename) so a killed process never leaves a partial file.
 
     Parameters
     ----------
@@ -103,35 +125,60 @@ def merge_into_combined(new_map: np.ndarray, map_name: str,
                      a new combined file from scratch
     """
     import logging
+    import os
     log = logging.getLogger(__name__)
 
     combined_path = str(combined_path)
     existing = get_combined_map_names(combined_path)
 
+    # Try to load existing data; treat any read failure as a corrupt file.
+    loaded_img = None
+    loaded_data = None
     if existing:
-        img = nib.load(combined_path)
-        data = img.get_fdata(dtype=np.float32)          # (n_maps, n_verts)
+        try:
+            loaded_img  = nib.load(combined_path)
+            loaded_data = loaded_img.get_fdata(dtype=np.float32)   # (n_maps, n_verts)
+        except Exception as exc:
+            log.warning(f"  Combined file unreadable ({exc.__class__.__name__}: {exc}) "
+                        f"— discarding and recreating: {os.path.basename(combined_path)}")
+            if loaded_img is not None:
+                del loaded_img
+            try:
+                os.unlink(combined_path)
+            except OSError:
+                pass
+            existing     = []
+            loaded_img   = None
+            loaded_data  = None
+
+    if existing and loaded_data is not None:
         if map_name in existing:
-            log.info(f"  Replacing map '{map_name}' in {combined_path}")
-            data[existing.index(map_name)] = new_map.astype(np.float32)
+            log.info(f"  Replacing map '{map_name}' in {os.path.basename(combined_path)}")
+            loaded_data[existing.index(map_name)] = new_map.astype(np.float32)
             names = existing
         else:
-            log.info(f"  Appending map '{map_name}' to {combined_path} "
+            log.info(f"  Appending map '{map_name}' to {os.path.basename(combined_path)} "
                      f"(existing: {existing})")
-            data  = np.vstack([data, new_map.reshape(1, -1).astype(np.float32)])
+            loaded_data = np.vstack([loaded_data,
+                                     new_map.reshape(1, -1).astype(np.float32)])
             names = existing + [map_name]
-        bm_axis     = img.header.get_axis(1)
+        bm_axis     = loaded_img.header.get_axis(1)
         scalar_axis = nib.cifti2.ScalarAxis(names)
         header      = nib.cifti2.Cifti2Header.from_axes((scalar_axis, bm_axis))
-        nib.save(nib.Cifti2Image(data, header=header), combined_path)
+        new_img     = nib.Cifti2Image(loaded_data, header=header)
+        del loaded_img, loaded_data                      # release file handle before overwriting
+        _save_cifti_atomic(new_img, combined_path)
     else:
-        log.info(f"  Creating combined file '{map_name}': {combined_path}")
-        save_cifti_multimap(
-            new_map.reshape(1, -1).astype(np.float32),
-            [map_name], template_cifti, combined_path,
-        )
+        log.info(f"  Creating combined file '{map_name}': {os.path.basename(combined_path)}")
+        bm_axis     = get_bm_axis(template_cifti)
+        scalar_axis = nib.cifti2.ScalarAxis([map_name])
+        header      = nib.cifti2.Cifti2Header.from_axes((scalar_axis, bm_axis))
+        new_img     = nib.Cifti2Image(
+            new_map.reshape(1, -1).astype(np.float32), header=header)
+        _save_cifti_atomic(new_img, combined_path)
 
-    log.info(f"  Combined saved: {combined_path}  maps={get_combined_map_names(combined_path)}")
+    log.info(f"  Combined saved: {os.path.basename(combined_path)}  "
+             f"maps={get_combined_map_names(combined_path)}")
 
 
 def get_cortex_vertex_indices(bm_axis):

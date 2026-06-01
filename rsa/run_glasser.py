@@ -235,7 +235,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     """Run Glasser RSA on pre-loaded continuous fMRI data."""
     bin_sec_int   = int(args.bin_sec)
     delay_tag     = f"delay{int(args.delay_sec)}s"
-    maps_out      = out_root / f"glasser_rsa_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_glasser.dscalar.nii"
+    maps_out      = out_root / f"rsa_59k_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_glasser.dscalar.nii"
     report_out    = out_root / "ranked_report.csv"
     map_name      = f"glasser_{args.method}_rho"
     combined_path = Path(args.combined_output) if args.combined_output else None
@@ -266,7 +266,8 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     emb = process_model_embeddings(
         str(emb_file), timing_df,
         bin_sec=args.bin_sec,
-        tr=args.tr,run_trs=run_trs
+        tr=args.tr, run_trs=run_trs,
+        delay_sec=args.delay_sec,
     )
 
     # Enforce exact temporal alignment
@@ -282,18 +283,13 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     )
 
     out_root.mkdir(parents=True, exist_ok=True)
-    # save_cifti_multimap(
-    #     corr_map.reshape(1, -1),
-    #     [f"{args.method}_rho"],
-    #     args.template_cifti,
-    #     str(maps_out),
-    # )
-    # log.info(f"  Saved: {maps_out.name}")
-
-    # ── Merge into combined output ────────────────────────────────────────────
-    if combined_path is not None:
-        combined_path.parent.mkdir(parents=True, exist_ok=True)
-        merge_into_combined(corr_map, map_name, combined_path, args.template_cifti)
+    save_cifti_multimap(
+        corr_map.reshape(1, -1),
+        [map_name],
+        args.template_cifti,
+        str(maps_out),
+    )
+    log.info(f"  Saved: {maps_out.name}")
 
     rows = []
     for name, indices in parcels.items():
@@ -311,6 +307,11 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     report.to_csv(str(report_out), index=False)
     log.info(f"  Ranked report: {report_out}")
     log.info(f"  Top-5 parcels:\n{report.head(5).to_string(index=False)}")
+
+    # ── Merge into combined output (after report, so a merge failure doesn't lose results)
+    if combined_path is not None:
+        combined_path.parent.mkdir(parents=True, exist_ok=True)
+        merge_into_combined(corr_map, map_name, combined_path, args.template_cifti)
 
 
 # =============================================================================
@@ -356,7 +357,7 @@ def _run_streaming(args):
 
     bin_sec_int = int(args.bin_sec)
     delay_tag   = f"delay{int(args.delay_sec)}s"
-    maps_out    = out_root / f"glasser_rsa_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_glasser.dscalar.nii"
+    maps_out    = out_root / f"rsa_59k_{fmri_tag}_{delay_tag}_bin{bin_sec_int}_{args.method}_glasser.dscalar.nii"
     report_out  = out_root / "ranked_report.csv"
     
     if maps_out.exists() and report_out.exists():

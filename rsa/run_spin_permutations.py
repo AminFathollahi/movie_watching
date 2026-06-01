@@ -13,9 +13,9 @@ cortical map on the sphere; the resulting null maps preserve the spatial
 autocorrelation structure of the empirical data.
 
 For each vertex the one-tailed p-value is estimated as the fraction of
-1 000 random rotations that produce a value ≥ the empirical value at that
-location.  Benjamini-Hochberg FDR is then applied across all 59 412
-grayordinate vertices.
+n_spin random rotations that produce a value ≥ the empirical value at that
+location (plus a pseudo-count of 1 for a proper Monte Carlo estimate).
+Benjamini-Hochberg FDR is then applied across all grayordinate vertices.
 
 Algorithm
 ---------
@@ -30,11 +30,14 @@ Algorithm
     index permutation.
 5.  Build the null distribution:
       null[s, v] = empirical[spin_indices[s, v]]
-6.  Compute one-tailed p_uncorr[v] = fraction(null[:, v] >= empirical[v]).
-7.  Apply BH-FDR across all vertices.
-8.  Produce binary significance masks at alpha threshold.
-9.  Append four maps (spin_p_uncorr, spin_p_fdr, spin_sig_uncorr, spin_sig_fdr)
-    to the existing combined CIFTI via merge_into_combined().
+6.  Compute one-tailed p_uncorr[v] = (count(null[:, v] >= empirical[v]) + 1) / (n_spin + 1)
+7.  Apply BH-FDR (Benjamini-Hochberg) across all vertices.
+8.  Produce output maps:
+      sigmap_uncorr      : sign(rho) × −log10(p_uncorr)
+      sigmap_fdr         : sign(rho) × −log10(p_fdr)
+      cluster_mask_fdr   : significant FDR vertices in clusters ≥ min_cluster_size
+      cluster_borders_fdr: borders around those clusters
+9.  Append four maps to the existing combined CIFTI via merge_into_combined().
 
 Usage
 -----
@@ -43,6 +46,8 @@ python rsa/run_spin_permutations.py \
     --map-name searchlight_spearman_rho \
     --left-sphere /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/L.sphere.59k_fs_LR.surf.gii \
     --right-sphere /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/R.sphere.59k_fs_LR.surf.gii \
+    --left-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
+    --right-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
     --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
     --n-spin 1000 \
     --alpha 0.05 \
@@ -62,6 +67,8 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 from scipy.stats import false_discovery_control
 
@@ -101,12 +108,18 @@ def parse_args():
                         "(*.sphere.59k_fs_LR.surf.gii).")
     p.add_argument("--right-sphere",    required=True, dest="right_sphere",
                    help="Right hemisphere sphere registration .surf.gii.")
+    p.add_argument("--left-surface",    required=True, dest="left_surface",
+                   help="Left hemisphere midthickness .surf.gii (for cluster adjacency).")
+    p.add_argument("--right-surface",   required=True, dest="right_surface",
+                   help="Right hemisphere midthickness .surf.gii (for cluster adjacency).")
     p.add_argument("--template-cifti",  required=True, dest="template_cifti",
                    help="59k CIFTI whose BrainModelAxis defines grayordinate space.")
     p.add_argument("--n-spin",          type=int,   default=1000, dest="n_spin",
                    help="Number of spin permutations (≥1000 recommended).")
     p.add_argument("--alpha",           type=float, default=0.05,
-                   help="Significance threshold for binary masks.")
+                   help="Significance threshold for cluster detection.")
+    p.add_argument("--min-cluster-size", type=int,  default=10, dest="min_cluster_size",
+                   help="Minimum cluster size (vertices) to include in masks.")
     p.add_argument("--seed",            type=int,   default=42)
     p.add_argument("--output-dir",      default=None, dest="output_dir",
                    help="Optional: also save a standalone significance dscalar here.")
@@ -118,25 +131,16 @@ def parse_args():
 # =============================================================================
 
 def _load_sphere_coords(surf_path: str) -> np.ndarray:
-    """Return (n_verts, 3) float64 unit-sphere vertex coordinates.
-
-    GIFTI sphere surfaces have their coordinates on a sphere (typically radius
-    100 mm).  We project to the unit sphere so that rotation operates
-    irrespective of scale.
-    """
+    """Return (n_verts, 3) float64 unit-sphere vertex coordinates."""
     img    = nib.load(surf_path)
-    coords = img.darrays[0].data.astype(np.float64)     # (n_verts, 3)
+    coords = img.darrays[0].data.astype(np.float64)
     norms  = np.linalg.norm(coords, axis=1, keepdims=True)
     norms[norms < 1e-10] = 1.0
-    return coords / norms                                # unit sphere
+    return coords / norms
 
 
 def _random_rotation(rng: np.random.Generator) -> np.ndarray:
-    """Generate a uniformly random SO(3) rotation matrix.
-
-    Uses the QR decomposition of a random 3×3 Gaussian matrix.  The determinant
-    is corrected to ensure a proper rotation (det = +1).
-    """
+    """Generate a uniformly random SO(3) rotation matrix via QR decomposition."""
     A = rng.standard_normal((3, 3))
     Q, _ = np.linalg.qr(A)
     if np.linalg.det(Q) < 0:
@@ -155,9 +159,6 @@ def generate_spin_indices(
 ) -> np.ndarray:
     """Generate spin permutation index arrays for one hemisphere.
 
-    For each rotation, every vertex is mapped to the nearest vertex in the
-    original sphere (by Euclidean distance on the unit sphere) after rotation.
-
     Parameters
     ----------
     coords : (n_verts, 3) float64 — unit-sphere vertex coordinates
@@ -167,7 +168,6 @@ def generate_spin_indices(
     Returns
     -------
     spin_indices : (n_spin, n_verts) int32
-        spin_indices[s, v] = original vertex nearest to v after rotation s.
     """
     rng   = np.random.default_rng(seed)
     n     = coords.shape[0]
@@ -176,7 +176,7 @@ def generate_spin_indices(
 
     for s in range(n_spin):
         R         = _random_rotation(rng)
-        rotated   = (R @ coords.T).T               # (n_verts, 3) — still on unit sphere
+        rotated   = (R @ coords.T).T
         _, idx    = tree.query(rotated, k=1)
         spins[s]  = idx.astype(np.int32)
 
@@ -196,11 +196,11 @@ def compute_spin_pvalues(
     spin_indices_rh: np.ndarray,
     n_left: int,
 ) -> np.ndarray:
-    """Compute one-tailed spin permutation p-values.
+    """Compute one-tailed spin permutation p-values with pseudo-count.
 
-    p[v] = fraction of spins where null_map[v] >= empirical[v].
-    Left and right hemispheres are permuted independently (rotation is
-    hemisphere-specific to avoid mirror-flip artefacts).
+    p[v] = (count(null[:, v] >= empirical[v]) + 1) / (n_spin + 1)
+
+    The +1 pseudo-count gives an unbiased Monte Carlo estimate and avoids p=0.
 
     Parameters
     ----------
@@ -220,23 +220,92 @@ def compute_spin_pvalues(
     emp_lh = empirical[:n_left]
     emp_rh = empirical[n_left:]
 
-    # Count exceedances: null[s, v] >= empirical[v] for each spin s
-    exceed_lh = np.zeros(n_left,  dtype=np.float64)
-    exceed_rh = np.zeros(n_right, dtype=np.float64)
+    # Initialise with pseudo-count of 1
+    exceed_lh = np.ones(n_left,  dtype=np.float64)
+    exceed_rh = np.ones(n_right, dtype=np.float64)
 
-    # Process in chunks to limit memory: each chunk is (chunk_size, n_hem_verts)
     chunk = 100
     for start in range(0, n_spin, chunk):
-        sl         = spin_indices_lh[start : start + chunk]     # (c, n_left)
-        sr         = spin_indices_rh[start : start + chunk]     # (c, n_right)
-        null_lh_c  = emp_lh[sl]                                 # (c, n_left)
-        null_rh_c  = emp_rh[sr]                                 # (c, n_right)
+        sl         = spin_indices_lh[start : start + chunk]
+        sr         = spin_indices_rh[start : start + chunk]
+        null_lh_c  = emp_lh[sl]
+        null_rh_c  = emp_rh[sr]
         exceed_lh += (null_lh_c >= emp_lh[None, :]).sum(axis=0)
         exceed_rh += (null_rh_c >= emp_rh[None, :]).sum(axis=0)
 
-    p_lh = (exceed_lh / n_spin).astype(np.float32)
-    p_rh = (exceed_rh / n_spin).astype(np.float32)
+    denom = float(n_spin + 1)
+    p_lh = (exceed_lh / denom).astype(np.float32)
+    p_rh = (exceed_rh / denom).astype(np.float32)
     return np.concatenate([p_lh, p_rh])
+
+
+# =============================================================================
+# Surface adjacency and cluster analysis
+# =============================================================================
+
+def _load_faces(surf_path: str) -> np.ndarray:
+    """Return (n_faces, 3) int32 face array from a GIFTI surface file."""
+    surf = nib.load(surf_path)
+    return surf.darrays[1].data.astype(np.int32)
+
+
+def _surface_adjacency(faces: np.ndarray,
+                        vertex_idx: np.ndarray,
+                        n_cifti_verts: int) -> csr_matrix:
+    """Sparse adjacency matrix in CIFTI grayordinate space."""
+    idx_map = np.full(int(faces.max()) + 1, -1, dtype=np.int32)
+    idx_map[vertex_idx] = np.arange(n_cifti_verts, dtype=np.int32)
+
+    f0 = idx_map[faces[:, 0]]
+    f1 = idx_map[faces[:, 1]]
+    f2 = idx_map[faces[:, 2]]
+    valid = (f0 >= 0) & (f1 >= 0) & (f2 >= 0)
+    fc = np.column_stack([f0[valid], f1[valid], f2[valid]])
+
+    i = np.concatenate([fc[:, 0], fc[:, 1], fc[:, 2],
+                        fc[:, 1], fc[:, 2], fc[:, 0]])
+    j = np.concatenate([fc[:, 1], fc[:, 2], fc[:, 0],
+                        fc[:, 0], fc[:, 1], fc[:, 2]])
+    return csr_matrix(
+        (np.ones(len(i), dtype=np.uint8), (i, j)),
+        shape=(n_cifti_verts, n_cifti_verts),
+    )
+
+
+def _cluster_mask_and_borders(
+    sig_mask: np.ndarray,
+    adj: csr_matrix,
+    min_cluster_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute cluster membership and border masks.
+
+    Returns
+    -------
+    cluster_mask : (n_cifti_verts,) float32 — 1 inside valid clusters, 0 outside
+    border_mask  : (n_cifti_verts,) float32 — 1 at cluster borders, 0 elsewhere
+    """
+    cluster_mask = np.zeros(len(sig_mask), dtype=np.float32)
+    border_mask  = np.zeros(len(sig_mask), dtype=np.float32)
+
+    if not sig_mask.any():
+        return cluster_mask, border_mask
+
+    sig_idx = np.where(sig_mask)[0]
+    sig_adj = adj[sig_idx][:, sig_idx]
+    n_comp, labels = connected_components(sig_adj, directed=False)
+
+    for comp in range(n_comp):
+        comp_local  = np.where(labels == comp)[0]
+        comp_global = sig_idx[comp_local]
+        if len(comp_global) < min_cluster_size:
+            continue
+        cluster_mask[comp_global] = 1.0
+        for v in comp_global:
+            nbrs = adj[v].indices
+            if np.any(~sig_mask[nbrs]):
+                border_mask[v] = 1.0
+
+    return cluster_mask, border_mask
 
 
 # =============================================================================
@@ -254,7 +323,7 @@ def _extract_map(cifti_path: str, map_name: str) -> np.ndarray:
             f"Available maps: {names}"
         )
     idx  = names.index(map_name)
-    return img.get_fdata(dtype=np.float32)[idx]    # (n_grayords,)
+    return img.get_fdata(dtype=np.float32)[idx]
 
 
 # =============================================================================
@@ -270,6 +339,7 @@ def main():
     log.info(f"  Map name      : {args.map_name}")
     log.info(f"  n_spin        : {args.n_spin}")
     log.info(f"  alpha         : {args.alpha}")
+    log.info(f"  min_cluster   : {args.min_cluster_size}")
     log.info("=" * 70)
 
     # ── Load empirical RSA map ───────────────────────────────────────────────
@@ -278,17 +348,17 @@ def main():
     log.info(f"  Empirical map: {empirical.shape}  "
              f"mean={empirical.mean():.4f}  max={empirical.max():.4f}")
 
-    # ── Grayordinate vertex split ────────────────────────────────────────────
-    bm_axis = get_bm_axis(args.template_cifti)
+    # ── Grayordinate vertex split (use SOURCE CIFTI's BM axis) ──────────────
+    # The combined CIFTI and template may have different grayordinate counts
+    # (e.g., if the template includes subcortical structures). Always derive
+    # n_left from the map file itself to guarantee consistent hemisphere slicing.
+    bm_axis = get_bm_axis(args.combined_cifti)
     lh_verts, rh_verts = get_cortex_vertex_indices(bm_axis)
     n_left  = len(lh_verts)
     n_right = n_grays - n_left
     log.info(f"  Grayordinates: L={n_left}  R={n_right}  total={n_grays}")
 
-    # ── Load sphere surfaces and extract unit-sphere coordinates ─────────────
-    # The sphere surface has n_full vertices (e.g. ~59k per hemisphere); only
-    # n_left of them are grayordinates (medial wall excluded).  We spin ALL
-    # vertices and then index back to the grayordinate subset.
+    # ── Load sphere surfaces ─────────────────────────────────────────────────
     log.info("  Loading sphere surfaces ...")
     sphere_coords_lh = _load_sphere_coords(args.left_sphere)
     sphere_coords_rh = _load_sphere_coords(args.right_sphere)
@@ -298,15 +368,9 @@ def main():
     log.info(f"  Generating {args.n_spin} spin permutations per hemisphere ...")
     spin_full_lh = generate_spin_indices(sphere_coords_lh, args.n_spin, seed=args.seed)
     spin_full_rh = generate_spin_indices(sphere_coords_rh, args.n_spin, seed=args.seed + 1)
-    # spin_full_*: (n_spin, n_full_hem) — full-sphere permutation
 
-    # Restrict to grayordinate vertices:
-    # The grayordinate empirical map is indexed by lh_verts / rh_verts within
-    # the full sphere.  Applying spin_full_lh[s, lh_verts] gives the full-sphere
-    # index of the rotated neighbour for each grayordinate vertex; we then look
-    # up where that full-sphere vertex sits in the grayordinate ordering.
-
-    # Map: full-sphere vertex → grayordinate column (-1 if medial wall)
+    # Restrict full-sphere spin indices to grayordinate vertex space.
+    # lut_*[full_sphere_vertex] → grayordinate column (-1 = medial wall)
     n_full_lh = sphere_coords_lh.shape[0]
     n_full_rh = sphere_coords_rh.shape[0]
     lut_lh = np.full(n_full_lh, -1, dtype=np.int32)
@@ -314,15 +378,10 @@ def main():
     lut_lh[lh_verts] = np.arange(n_left,  dtype=np.int32)
     lut_rh[rh_verts] = np.arange(n_right, dtype=np.int32)
 
-    # For each spin s and grayordinate v, find the grayordinate column of the
-    # spun neighbour.  If the spun neighbour is in the medial wall, fall back
-    # to the nearest non-medial-wall vertex (handled by clamping).
-    # In practice, medial-wall neighbours are rare and the effect is negligible.
     spin_gray_lh = lut_lh[spin_full_lh[:, lh_verts]]  # (n_spin, n_left)
     spin_gray_rh = lut_rh[spin_full_rh[:, rh_verts]]  # (n_spin, n_right)
 
-    # Replace any medial-wall hits (value -1) with the vertex index itself
-    # (identity mapping — conservative: preserves the empirical value there)
+    # Replace medial-wall hits with identity (conservative: preserves empirical)
     bad_lh = spin_gray_lh < 0
     bad_rh = spin_gray_rh < 0
     if bad_lh.any():
@@ -351,18 +410,51 @@ def main():
     log.info(f"  FDR q<{args.alpha}:        {n_sig_fdr:,} / {n_grays:,} vertices "
              f"({100*n_sig_fdr/n_grays:.1f}%)")
 
-    # ── Significance masks ───────────────────────────────────────────────────
-    sig_uncorr = (p_uncorr < args.alpha).astype(np.float32)
-    sig_fdr    = (p_fdr    < args.alpha).astype(np.float32)
+    # ── Sigmaps: sign(rho) × −log₁₀(p) ──────────────────────────────────────
+    eps = np.finfo(np.float32).tiny
+    sigmap_uncorr = (np.sign(empirical) *
+                     (-np.log10(np.maximum(p_uncorr, eps)))).astype(np.float32)
+    sigmap_fdr    = (np.sign(empirical) *
+                     (-np.log10(np.maximum(p_fdr,    eps)))).astype(np.float32)
 
-    # ── Append to combined CIFTI ─────────────────────────────────────────────
+    # ── Surface adjacency for cluster analysis ────────────────────────────────
+    # Template CIFTI BM axis gives correct vertex indices for each hemisphere
+    bm_tmpl = get_bm_axis(args.template_cifti)
+    lh_verts_tmpl, rh_verts_tmpl = get_cortex_vertex_indices(bm_tmpl)
+    n_left_tmpl  = len(lh_verts_tmpl)
+    n_right_tmpl = n_grays - n_left_tmpl
+
+    log.info(f"Building surface adjacency ...")
+    faces_lh = _load_faces(args.left_surface)
+    faces_rh = _load_faces(args.right_surface)
+    adj_lh   = _surface_adjacency(faces_lh, lh_verts_tmpl,  n_left_tmpl)
+    adj_rh   = _surface_adjacency(faces_rh, rh_verts_tmpl, n_right_tmpl)
+    log.info("  Adjacency built.")
+
+    # ── Cluster masks (FDR) ───────────────────────────────────────────────────
+    sig_lh_fdr = p_fdr[:n_left_tmpl]  < args.alpha
+    sig_rh_fdr = p_fdr[n_left_tmpl:]  < args.alpha
+
+    cm_lh, cb_lh = _cluster_mask_and_borders(sig_lh_fdr, adj_lh, args.min_cluster_size)
+    cm_rh, cb_rh = _cluster_mask_and_borders(sig_rh_fdr, adj_rh, args.min_cluster_size)
+
+    cluster_mask_fdr    = np.concatenate([cm_lh, cm_rh])
+    cluster_borders_fdr = np.concatenate([cb_lh, cb_rh])
+
+    n_cluster = int(cluster_mask_fdr.sum())
+    n_border  = int(cluster_borders_fdr.sum())
+    log.info(f"  FDR clusters (≥{args.min_cluster_size} verts): "
+             f"{n_cluster:,} verts  borders: {n_border:,}")
+
+    # ── Build output maps ─────────────────────────────────────────────────────
     new_maps = {
-        f"{args.map_name}_spin_p_uncorr": p_uncorr,
-        f"{args.map_name}_spin_p_fdr":    p_fdr,
-        f"{args.map_name}_spin_sig_uncorr": sig_uncorr,
-        f"{args.map_name}_spin_sig_fdr":    sig_fdr,
+        f"{args.map_name}_sigmap_uncorr":      sigmap_uncorr,
+        f"{args.map_name}_sigmap_fdr":         sigmap_fdr,
+        f"{args.map_name}_cluster_mask_fdr":   cluster_mask_fdr,
+        f"{args.map_name}_cluster_borders_fdr": cluster_borders_fdr,
     }
 
+    # ── Append to combined CIFTI ─────────────────────────────────────────────
     for name, arr in new_maps.items():
         merge_into_combined(arr, name, args.combined_cifti, args.template_cifti)
 
@@ -373,7 +465,7 @@ def main():
         out_dir = Path(args.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        stem = Path(args.combined_cifti).stem.replace("_maps", "")
+        stem     = Path(args.combined_cifti).stem.replace("_maps", "")
         out_path = out_dir / f"{stem}_spin{args.n_spin}_significance.dscalar.nii"
         data_2d  = np.stack(list(new_maps.values()), axis=0)
         save_cifti_multimap(
@@ -382,15 +474,20 @@ def main():
         log.info(f"  Standalone significance CIFTI: {out_path.name}")
 
         summary = {
-            "map_name":       args.map_name,
-            "n_spin":         args.n_spin,
-            "alpha":          args.alpha,
-            "seed":           args.seed,
-            "n_grayords":     n_grays,
-            "n_sig_uncorr":   n_sig_uncorr,
-            "n_sig_fdr":      n_sig_fdr,
-            "pct_sig_uncorr": float(100 * n_sig_uncorr / n_grays),
-            "pct_sig_fdr":    float(100 * n_sig_fdr    / n_grays),
+            "map_name":          args.map_name,
+            "n_spin":            args.n_spin,
+            "alpha":             args.alpha,
+            "min_cluster_size":  args.min_cluster_size,
+            "seed":              args.seed,
+            "n_grayords":        n_grays,
+            "n_sig_uncorr":      n_sig_uncorr,
+            "n_sig_fdr":         n_sig_fdr,
+            "n_cluster_verts_fdr": n_cluster,
+            "n_border_verts_fdr":  n_border,
+            "pct_sig_uncorr":    float(100 * n_sig_uncorr / n_grays),
+            "pct_sig_fdr":       float(100 * n_sig_fdr    / n_grays),
+            "sigmap_uncorr_max": float(sigmap_uncorr.max()),
+            "sigmap_fdr_max":    float(sigmap_fdr.max()),
         }
         (out_dir / f"{stem}_spin{args.n_spin}_summary.json").write_text(
             json.dumps(summary, indent=2)

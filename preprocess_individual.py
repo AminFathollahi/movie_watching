@@ -26,7 +26,7 @@ Use --save-average to compute and save a continuous group-average CIFTI
 
 Usage (saving individual continuous maps to disk):
   python preprocess_individual.py \
-      --raw-dir /media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI \
+      --raw-dir /home/amin/Research/Representation/Movie/data/individual-59k\
       --out-dir /home/amin/Research/Representation/Movie/data/preprocessed \
       --subjects-list /home/amin/Research/Representation/Movie/data/subjects.txt \
       --sg-filter --psc --gsr \
@@ -74,7 +74,7 @@ def parse_args():
                       help=f"Savitzky-Golay high-pass (window={SG_WINDOW}, order={SG_ORDER}).")
     prep.add_argument("--psc", default=False, action=argparse.BooleanOptionalAction,
                       help="Percent signal change normalization (per run).")
-    prep.add_argument("--gsr", default=True, action=argparse.BooleanOptionalAction,
+    prep.add_argument("--gsr", default=False, action=argparse.BooleanOptionalAction,
                       help="Global signal regression.")
 
     out = p.add_argument_group("output control (default: no saving — streaming mode)")

@@ -9,34 +9,31 @@ vicsompy **cannot be pip-installed** with modern PyTorch (≥ 2.6) due to a hard
 on an older torch version. All CF modeling scripts import it directly from source.
 
 ```bash
-cd /path/to/your/workspace
-git clone https://github.com/nicholashedger/vicsompy.git
+git clone https://github.com/nicholashedger/vicsompy.git /path/to/Vicarious_somatotopy
 # Note the full path — you'll set VICSOMPY_REPO below
-```
-
-If a specific vicsompy commit is needed for exact reproducibility, pin it:
-```bash
-cd vicsompy
-git checkout <commit_sha>   # see NOTICE in cf_modeling/ for the version used
 ```
 
 ## 2. Set up the Conda environment
 
 ```bash
-# Clone from an existing vicsompy_av environment (recommended — preserves the
-# CUDA-enabled torch build that conda/pip cannot recreate correctly):
-conda create --clone vicsompy_av --name movie -y
-
-# Or create from the reference spec (manual torch CUDA build required):
 conda env create -f cf_modeling/environment.yml
+conda activate movie
+
+# Install CUDA-enabled torch manually (required for GPU acceleration):
+pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+
+# Install remaining pip packages:
+pip install himalaya==0.3.5 pycortex "mne>=1.9"
 ```
 
 The `movie` environment includes:
 - `torch 2.11.0+cu128` (CUDA 12.8, RTX 5070Ti compatible)
 - `himalaya 0.3.5`
-- `pycortex` (for flatmap visualisation)
-- `nibabel`, `scipy`, `scikit-learn`, `pandas`, `tqdm`, `joblib`, `statsmodels`
-- `mne ≥ 1.9` (Savitzky-Golay filter in preprocessing)
+- `pycortex 1.3.0` (for flatmap visualisation)
+- `nibabel 5.4.0`, `scipy 1.15.2`, `scikit-learn 1.3.2`, `pandas 2.3.3`
+- `numpy 1.26.2` (< 2.0 required by himalaya)
+- `mne 1.9.0` (Savitzky-Golay filter in preprocessing)
+- `joblib`, `tqdm`, `h5py`, `matplotlib`
 - GNU `parallel` (per-subject batch processing)
 
 ## 3. Configure paths
@@ -46,7 +43,7 @@ Two environment variables control key paths. Set them in your shell profile
 
 ```bash
 # Path to the cloned vicsompy repository (CF modeling only)
-export VICSOMPY_REPO=/path/to/vicsompy
+export VICSOMPY_REPO=/path/to/Vicarious_somatotopy
 
 # Path to the pycortex filestore (flat maps; CF modeling only)
 export PYCORTEX_FILESTORE=/path/to/hedger2026
@@ -66,6 +63,9 @@ conda activate movie
 
 # Verify torch + CUDA
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+
+# Verify himalaya
+python -c "import himalaya; print('himalaya', himalaya.__version__)"
 
 # Verify vicsompy importable (CF modeling only)
 python -c "import sys; sys.path.insert(0, '$VICSOMPY_REPO'); from vicsompy.modeling import MssCf; print('vicsompy OK')"

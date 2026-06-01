@@ -90,7 +90,7 @@ N_LBOE=200
 STREAM=false
 
 # Raw CIFTI directory (streaming mode only)
-CIFTI_DIR="${DATA_BASE}/7T_fMRI"   # set to actual raw CIFTI dir if STREAM=true
+CIFTI_DIR="${DATA_BASE}/individual-59k"   #  raw CIFTI dir 
 
 # ── Preprocessing flags ───────────────────────────────────────────────────────
 # Applied per run: SG high-pass → PSC (with pre-SG mean) → GSR
@@ -150,9 +150,10 @@ PERSUBJECT_PAIRS=(
 )
 # Group-average pairs
 AVG_PAIRS=(
-    # "A1:V1"
-    # "A5:FFC"
     "3b:V1"
+    "A1:V1"
+    "A5:FFC"
+    
 )
 
 # All unique ROIs across all pairs — used for geometry + mask steps

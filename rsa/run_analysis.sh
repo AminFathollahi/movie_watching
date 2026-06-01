@@ -97,7 +97,8 @@ HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
 OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
 
 # Raw 7T CIFTI files (used in streaming mode — preprocess on-the-fly)
-CIFTI_DIR="/media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI"
+CIFTI_DIR="${DATA_BASE}/individual-59k" 
+
 
 # Streaming toggle
 #   true  → preprocess raw CIFTIs from CIFTI_DIR on-the-fly
@@ -155,12 +156,6 @@ TEMPLATE_CIFTI="/home/amin/Research/Representation/Movie/data/preprocessed/avera
 LEFT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
 RIGHT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
 
-# Sphere registration surfaces — required for spin permutation significance testing.
-# These are the 32k_fs_LR sphere surfaces (not midthickness); HCP provides them under
-# the same GroupAverage_59k directory.  Update paths if your HCP layout differs.
-LEFT_SPHERE="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.sphere.59k_fs_LR.surf.gii"
-RIGHT_SPHERE="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.sphere.59k_fs_LR.surf.gii"
-
 # Per-subject midthickness surfaces (used when available for the searchlight loop)
 MIDTHICKNESS_DIR="${DATA_BASE}/midthickness_1.6"
 
@@ -184,7 +179,7 @@ BIN_SEC=5.0
 HRF=false
 METHOD="spearman"
 K=100
-N_SPIN=1000   # spin permutations for group-average significance maps
+N_PERM_TFCE=5000   # sign-flip permutations for TFCE group-stats FWE correction
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
@@ -244,7 +239,7 @@ export NUMEXPR_NUM_THREADS=1
 # =============================================================================
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
-run_python() { conda run -n "$CONDA_ENV" python "$@"; }
+run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 
 _hrf_flag() { [ "$HRF" = "true" ] && echo "--hrf" || echo ""; }
 
@@ -369,23 +364,6 @@ _run_avg_one_model() {
                 $(_hrf_flag)
         fi
 
-        # Spin permutation significance test — group-average only.
-        # Appends 4 maps (p_uncorr, p_fdr, sig_uncorr_mask, sig_fdr_mask) to
-        # COMBINED_OUT in-place.  Runs only when the combined CIFTI and sphere
-        # surfaces exist; skips silently otherwise so the pipeline stays robust
-        # when sphere files have not yet been placed in HCP_DIR.
-        if [ -f "$COMBINED_OUT" ] && [ -f "$LEFT_SPHERE" ] && [ -f "$RIGHT_SPHERE" ]; then
-            run_python "${SCRIPT_DIR}/run_spin_permutations.py" \
-                --combined-cifti "$COMBINED_OUT" \
-                --left-sphere    "$LEFT_SPHERE" \
-                --right-sphere   "$RIGHT_SPHERE" \
-                --template-cifti "$TEMPLATE_CIFTI" \
-                --map-name       "searchlight_${METHOD}_rho" \
-                --n-spin         "$N_SPIN" \
-                --seed           42
-        else
-            log "  skip spin test for ${MODEL_NAME}/${MOD}: combined CIFTI or sphere surfaces not found"
-        fi
     done
 }
 
@@ -734,7 +712,7 @@ run_precompute_neighbors_avg() {
     [[ "$STATUS_R" == "missing" ]] && MISSING_HEMS+=("right")
     log "  Computing missing hemisphere(s): ${MISSING_HEMS[*]}"
 
-    conda run -n "$CONDA_ENV" python "${SCRIPT_DIR}/precompute_neighbors.py" \
+    conda run --no-capture-output -n "$CONDA_ENV" python "${SCRIPT_DIR}/precompute_neighbors.py" \
         --subject       "group_average" \
         --left-surface  "$LEFT_SURFACE" \
         --right-surface "$RIGHT_SURFACE" \
@@ -883,17 +861,19 @@ run_group_stats() {
         for MOD in "${MODS[@]}"; do
             log "  Group stats: ${MODEL_NAME} / ${MOD}"
             run_python "${SCRIPT_DIR}/run_group_stats.py" \
-                --output-dir    "$OUTPUT_DIR" \
-                --model         "$MODEL_NAME" \
-                --modality      "$MOD" \
-                --k             "$K" \
-                --bin-sec       "$BIN_SEC" \
-                --delay-sec     "$DELAY_SEC" \
-                --method        "$METHOD" \
-                --fmri-tag      "$PREPROCESSING_FLAG" \
-                --template-cifti "$TEMPLATE_CIFTI" \
-                --left-surface  "$LEFT_SURFACE" \
-                --right-surface "$RIGHT_SURFACE"
+                --output-dir      "$OUTPUT_DIR" \
+                --model           "$MODEL_NAME" \
+                --modality        "$MOD" \
+                --k               "$K" \
+                --bin-sec         "$BIN_SEC" \
+                --delay-sec       "$DELAY_SEC" \
+                --method          "$METHOD" \
+                --fmri-tag        "$PREPROCESSING_FLAG" \
+                --template-cifti  "$TEMPLATE_CIFTI" \
+                --left-surface    "$LEFT_SURFACE" \
+                --right-surface   "$RIGHT_SURFACE" \
+                --n-permutations  "$N_PERM_TFCE" \
+                --n-jobs          "$N_CPUS"
         done
     done
 

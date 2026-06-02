@@ -74,7 +74,7 @@ def parse_args():
     inp = p.add_argument_group("input (choose one)")
     inp.add_argument("--preprocessed-dir", default=None, dest="preprocessed_dir",
                      help="[disk mode] Directory of continuous, cleaned CIFTIs.")
-    inp.add_argument("--fmri-suffix", default="sg_psc_gsr", dest="fmri_suffix",
+    inp.add_argument("--fmri-suffix", default="raw", dest="fmri_suffix",
                      help="[disk mode] Filename suffix that encodes preprocessing.")
     inp.add_argument("--raw-dir", default=None,
                      help="[streaming mode] Root directory of raw 7T CIFTI files.")
@@ -118,7 +118,7 @@ def parse_args():
                       help="Savitzky-Golay high-pass filter.")
     prep.add_argument("--psc", default=False, action="store_true",
                       help="Percent signal change normalization.")
-    prep.add_argument("--gsr", default=True, action=argparse.BooleanOptionalAction,
+    prep.add_argument("--gsr", default=False, action=argparse.BooleanOptionalAction,
                       help="Global signal regression.")
 
     return p.parse_args()
@@ -267,7 +267,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
         str(emb_file), timing_df,
         bin_sec=args.bin_sec,
         tr=args.tr, run_trs=run_trs,
-        delay_sec=args.delay_sec,
+        delay_sec=args.delay_sec, hrf=args.hrf,
     )
 
     # Enforce exact temporal alignment

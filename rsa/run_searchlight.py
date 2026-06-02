@@ -33,7 +33,7 @@ Slow path: compute/load dconn → chunk-extract k-NN → save .npy → delete dc
 
 Usage (disk mode):
   python run_searchlight.py \
-      --preprocessed-dir <path> --fmri-suffix sg_psc_gsr \
+      --preprocessed-dir <path> --fmri-suffix raw \
       --subject group_average --timing-csv <path> \
       --embeddings-dir <path> --template-cifti <path> \
       --left-surface <path> --right-surface <path> \
@@ -106,7 +106,7 @@ def parse_args():
     inp.add_argument("--preprocessed-dir", default=None, dest="preprocessed_dir",
                      help="[disk mode] Directory of continuous cleaned CIFTIs. "
                           "File: {dir}/{subject}_{fmri-suffix}_cortex_59k.dtseries.nii")
-    inp.add_argument("--fmri-suffix", default="sg_psc_gsr", dest="fmri_suffix",
+    inp.add_argument("--fmri-suffix", default="raw", dest="fmri_suffix",
                      help="[disk mode] Filename suffix encoding preprocessing.")
     inp.add_argument("--raw-dir", default=None,
                      help="[streaming mode] Root directory of raw 7T CIFTI files.")
@@ -149,7 +149,7 @@ def parse_args():
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
     prep.add_argument("--sg-filter", default=False, action="store_true")
     prep.add_argument("--psc", default=False, action="store_true")
-    prep.add_argument("--gsr", default=True, action=argparse.BooleanOptionalAction)
+    prep.add_argument("--gsr", default=False, action=argparse.BooleanOptionalAction)
 
     return p.parse_args()
 
@@ -671,7 +671,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
 
     emb = process_model_embeddings(
         str(emb_file), timing_df, bin_sec=args.bin_sec, tr=args.tr,
-        run_trs=run_trs, delay_sec=args.delay_sec
+        run_trs=run_trs, delay_sec=args.delay_sec, hrf=args.hrf,
     )
     log.info(f"  Model binned & z-scored: {emb.shape}")
 

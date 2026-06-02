@@ -66,7 +66,7 @@ STREAM=false
 # Preprocessing flags
 SG_FILTER=false   # Savitzky-Golay high-pass filter
 PSC=false         # Percent signal change normalization
-GSR=true          # Global signal regression
+GSR=false         # Global signal regression
 Z_SCORE=true      # Z-score per vertex (applied inside run_encoding.py; not by preprocess_individual.py)
 
 # Automatically build PREPROCESSING_FLAG from SG_FILTER/PSC/GSR

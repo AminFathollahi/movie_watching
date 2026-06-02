@@ -127,7 +127,7 @@ def parse_args():
     fmri.add_argument("--preprocessed-dir", default=None, dest="preprocessed_dir",
                       help="Directory of continuous, cleaned CIFTIs "
                            "({dir}/{subject}_{fmri_suffix}_cortex_59k.dtseries.nii).")
-    fmri.add_argument("--fmri-suffix", default="sg_psc_gsr", dest="fmri_suffix",
+    fmri.add_argument("--fmri-suffix", default="raw", dest="fmri_suffix",
                       help="Preprocessing suffix in CIFTI filenames.")
     fmri.add_argument("--subject", default="group_average",
                       help="Subject ID (used to locate preprocessed CIFTI).")

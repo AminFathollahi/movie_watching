@@ -101,7 +101,7 @@ def parse_args():
              "and matching _run_trs.npy files.",
     )
     p.add_argument(
-        "--fmri-suffix", default="sg_psc_gsr",
+        "--fmri-suffix", default="raw",
         help="Filename infix that encodes the preprocessing pipeline.",
     )
     p.add_argument("--raw-dir", default=None,

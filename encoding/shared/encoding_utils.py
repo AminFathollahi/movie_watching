@@ -9,11 +9,11 @@ or parameters. Configure everything in run_analysis.sh and pass via CLI.
 fMRI preprocessing convention
 ------------------------------
 The input CIFTI is the output of preprocess_individual.py in continuous mode
-(SG → PSC → GSR per run, all 4 runs concatenated, 59412 grayordinates).
-No separate filtering step is needed; build_fmri_arrays() uses the global
-onset_sec from timing_df and run_trs to locate each clip, applies the
-haemodynamic delay, bins to bin_sec resolution, z-scores per run (training
-statistics applied to both train and test), and splits by video_id.
+(all 4 runs concatenated, 59412 grayordinates). Default preprocessing is raw
+(no SG, no PSC, no GSR). build_fmri_arrays() uses the global onset_sec from
+timing_df and run_trs to locate each clip, applies the haemodynamic delay,
+bins to bin_sec resolution, z-scores per run (training statistics applied to
+both train and test), and splits by video_id.
 
 This matches the convention used in rsa/shared/rsa_utils.py (preprocess_fmri).
 """
@@ -159,8 +159,8 @@ def build_fmri_arrays(cifti_path: str, run_trs_path: str,
                        delay_sec: float = 0.0) -> tuple:
     """Load continuous preprocessed CIFTI and build binned train/test arrays.
 
-    Loads the full-run CIFTI (SG→PSC→GSR, all 4 runs concatenated) produced
-    by preprocess_individual.py, then calls _bin_and_split_fmri() to extract
+    Loads the full-run CIFTI (all 4 runs concatenated) produced by
+    preprocess_individual.py, then calls _bin_and_split_fmri() to extract
     movie segments using global onset_sec from timing_df.
 
     Args:

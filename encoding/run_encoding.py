@@ -10,7 +10,8 @@ per vertex via leave-one-run-out cross-validation on the training set.
 Input modes
 -----------
 DISK MODE (--preprocessed-dir + --fmri-suffix):
-  Reads a pre-filtered, pre-z-scored CIFTI from disk. The file is expected at:
+  Reads a continuous, cleaned CIFTI produced by preprocess_individual.py.
+  The file is expected at:
     {preprocessed_dir}/{subject}_{fmri_suffix}_cortex_59k.dtseries.nii
 
 STREAMING MODE (--raw-dir):
@@ -28,7 +29,7 @@ Outputs one CIFTI dscalar.nii per modality containing Pearson r on the test set.
 
 Usage (disk mode):
   python run_encoding.py \\
-      --preprocessed-dir <path> --fmri-suffix gsr_zscore_delay5s \\
+      --preprocessed-dir <path> --fmri-suffix raw \\
       --timing-csv <path> --embeddings-dir <path> --template-cifti <path> \\
       --output-dir <path> --subject group_average \\
       --model pe-av-small-16-frame --modality av \\
@@ -86,9 +87,9 @@ def parse_args():
                      help="[disk mode] Directory of pre-filtered, pre-z-scored CIFTIs "
                           "(output of preprocess_individual.py --timing-csv). "
                           "File: {dir}/{subject}_{fmri-suffix}_cortex_59k.dtseries.nii")
-    inp.add_argument("--fmri-suffix", default="gsr_zscore_delay5s", dest="fmri_suffix",
+    inp.add_argument("--fmri-suffix", default="raw", dest="fmri_suffix",
                      help="[disk mode] Filename suffix that encodes preprocessing "
-                          "(e.g. 'gsr_zscore_delay5s').")
+                          "(e.g. 'raw', 'sg_psc_gsr'). Must match preprocess_individual.py output.")
     inp.add_argument("--raw-dir", default=None, dest="raw_dir",
                      help="[streaming mode] Root directory of raw 7T CIFTI dtseries files. "
                           "The subject is preprocessed on-the-fly; no CIFTI is saved.")
@@ -110,8 +111,8 @@ def parse_args():
     p.add_argument("--bin-sec", type=float, required=True,
                    help="Temporal bin size in seconds.")
     p.add_argument("--delay-sec", type=float, default=5.0,
-                   help="Hemodynamic delay in seconds. Disk mode: config label only. "
-                        "Streaming mode: applied when filtering movie TPs.")
+                   help="Hemodynamic delay in seconds (applied in both disk and streaming "
+                        "modes when slicing stimulus blocks from continuous fMRI).")
     p.add_argument("--hrf", action="store_true",
                    help="Convolve embeddings with SPM HRF (use with delay-sec 0).")
     p.add_argument("--normalize", action="store_true",
@@ -133,7 +134,7 @@ def parse_args():
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
     prep.add_argument("--sg-filter", default=False, action="store_true")
     prep.add_argument("--psc",       default=False, action="store_true")
-    prep.add_argument("--gsr",    default=True, action=argparse.BooleanOptionalAction)
+    prep.add_argument("--gsr",    default=False, action=argparse.BooleanOptionalAction)
     prep.add_argument("--z-score", default=True, action=argparse.BooleanOptionalAction,
                       dest="z_score")
 

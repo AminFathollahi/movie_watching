@@ -58,7 +58,7 @@ All parameters are set in `run_analysis.sh`:
 
 ## Streaming vs Disk Mode
 
-**Streaming (default, `STREAM=true`):** Raw 7T CIFTIs are loaded and preprocessed on-the-fly (SG→PSC→GSR per run). No preprocessed CIFTI is saved. Movie segment extraction, hemodynamic delay, binning, and z-scoring all happen at analysis time using `movie_timing.csv`.
+**Streaming (default, `STREAM=true`):** Raw 7T CIFTIs are loaded on-the-fly with no signal preprocessing by default (SG/PSC/GSR all off). Movie segment extraction, hemodynamic delay, binning, and z-scoring happen at analysis time using `movie_timing.csv`.
 
 **Disk mode (`STREAM=false`):** Reads pre-saved CIFTIs from `PREPROCESSED_DIR`. Use after running `preprocess_individual.py --save-individual`. The preprocessing suffix (`FMRI_SUFFIX`) must match what `preprocess_individual.py` used.
 
@@ -66,7 +66,7 @@ All parameters are set in `run_analysis.sh`:
 
 ## fMRI Preprocessing Convention
 
-- **Continuous full-run CIFTIs** — `preprocess_individual.py` applies SG→PSC→GSR per run and concatenates all 4 runs. No timing filtering is done during preprocessing.
+- **Continuous full-run CIFTIs** — `preprocess_individual.py` concatenates all 4 runs. Default is raw (no SG/PSC/GSR). No timing filtering is done during preprocessing.
 - **Timing applied at analysis time** — `run_searchlight.py` and `run_glasser.py` load `movie_timing.csv`, compute within-run onset TRs from global `onset_sec`, apply hemodynamic delay, bin to `BIN_SEC` resolution, z-score per run (training stats applied to test), and split train/test.
 - **Z-scoring** — per run on training time bins; same mean/std applied to test bins from the same run (no leakage).
 
@@ -86,12 +86,12 @@ Any model whose embedding file is absent is silently skipped. Add a new model by
 ## Outputs
 
 ```
-{OUTPUT_DIR}/{subject}/{model}/{config_label}/
-    rsa_59k_{prep}_k{K}_delay{D}s_bin{B}_{method}_maps.dscalar.nii   # searchlight
-    glasser_rsa_{prep}_delay{D}s_bin{B}_{method}_maps.dscalar.nii    # Glasser
-    ranked_report.csv                                                   # Glasser only
+{OUTPUT_DIR}/{subject}/{model}_{modality}/{config_label}/
+    rsa_59k_{prep}_k{K}_delay{D}s_bin{B}_{method}_searchlight.dscalar.nii   # searchlight
+    rsa_59k_{prep}_delay{D}s_bin{B}_{method}_glasser.dscalar.nii            # Glasser
+    ranked_report.csv                                                          # Glasser only
 
-{OUTPUT_DIR}/group_stats/{model}/{config_label}/
+{OUTPUT_DIR}/group_stats/{model}_{modality}/{config_label}/
     group_stats_{N}subs.dscalar.nii    # 8-map CIFTI: mean_rho, cohens_d, sigmaps, clusters
     summary.json
 ```

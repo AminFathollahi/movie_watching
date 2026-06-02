@@ -79,10 +79,10 @@ python preprocess_individual.py \
 ```
 
 Output per subject:
-- `{sub}_sg_psc_gsr_cortex_59k.dtseries.nii` — concatenated full-run CIFTI (4 runs)
-- `{sub}_sg_psc_gsr_run_trs.npy` — TRs per run (needed for timing alignment)
+- `{sub}_raw_cortex_59k.dtseries.nii` — concatenated full-run CIFTI (4 runs, no preprocessing)
+- `{sub}_raw_run_trs.npy` — TRs per run (needed for timing alignment)
 
-Set `FMRI_SUFFIX="sg_psc_gsr"` in `run_analysis.sh` to match.
+Set `FMRI_SUFFIX="raw"` in `run_analysis.sh` to match (default). Use `"sg_psc_gsr"` etc. if preprocessing was applied.
 
 ### Streaming mode (`--raw-dir`)
 
@@ -90,7 +90,7 @@ Preprocesses raw 7T CIFTIs on-the-fly via `preprocess_individual.preprocess_subj
 
 ## fMRI Preprocessing Convention
 
-`preprocess_individual.py` applies per-run signal cleaning (SG→PSC→GSR) and concatenates all 4 runs into a single continuous CIFTI. **No timing filtering happens at preprocessing time.**
+`preprocess_individual.py` optionally applies per-run signal cleaning (SG→PSC→GSR) and concatenates all 4 runs into a single continuous CIFTI. **Default is raw (no preprocessing). No timing filtering happens at preprocessing time.**
 
 At analysis time, `run_encoding.py` loads `movie_timing.csv`, computes within-run onset TRs from global `onset_sec`, applies hemodynamic delay (`--delay-sec`), bins to `BIN_SEC` resolution, z-scores per run, and splits into train/test by video ID.
 

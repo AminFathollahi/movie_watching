@@ -157,7 +157,8 @@ def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
 
 def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
                              bin_sec: float, tr: float,
-                             run_trs: np.ndarray, delay_sec: float = 0.0) -> np.ndarray:
+                             run_trs: np.ndarray, delay_sec: float = 0.0,
+                             hrf: bool = False) -> np.ndarray:
     """Load and align model embeddings to the fMRI binning scheme.
 
     Parameters
@@ -167,16 +168,19 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
                 onset_sec is GLOBAL time (cumulative across runs). Same format
                 as /data/HCP Data/movie_timing.csv.
     bin_sec   : temporal bin width in seconds
-    hrf       : if True, call process_model_embeddings_with_hrf instead
     tr        : repetition time in seconds
     run_trs   : (n_runs,) int — TRs per run (used only for boundary truncation)
     delay_sec : haemodynamic shift applied to onset_sec (default 0)
+    hrf       : if True, convolve each segment with the SPM canonical HRF at
+                bin_sec resolution. Use with delay_sec=0 (the convolution replaces
+                the boxcar delay). Matches encoding's build_embedding_arrays behaviour.
 
     Returns
     -------
     (total_bins, n_features) float32 — binned + per-run z-scored embeddings
     """
     embeddings = np.load(emb_path)
+    hrf_kernel = spm_hrf(bin_sec) if hrf else None
     bin_trs = max(1, int(np.round(bin_sec / tr)))
     run_col = ('run' if 'run' in timing_df.columns
                else ('run_id' if 'run_id' in timing_df.columns else None))
@@ -216,6 +220,8 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
             # even when only final_bins are used, so the index stays aligned.)
             if final_bins > 0:
                 seg = embeddings[seg_idx : seg_idx + final_bins].astype(np.float64)
+                if hrf_kernel is not None:
+                    seg = _apply_hrf_to_segment(seg, hrf_kernel)
                 run_segments.append(seg)
 
             seg_idx += base_bins

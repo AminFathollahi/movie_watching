@@ -111,6 +111,23 @@ from lib.config_builder  import build_temp_yaml
 from lib.subject_adapter import CfSubjectAdapter
 from lib.cf_model        import CfModel
 
+# ---------------------------------------------------------------------------
+# Himalaya torch_cuda monkey-patch: arange() must default to CUDA device so
+# that boolean masks returned by isin() (CUDA) can index into the arange
+# result without a cross-device error in _random_search.py:304.
+# ---------------------------------------------------------------------------
+try:
+    import torch
+    if torch.cuda.is_available():
+        import himalaya.backend.torch_cuda as _hbc
+        _orig_arange = torch.arange
+        def _cuda_arange(*args, **kwargs):
+            kwargs.setdefault("device", "cuda")
+            return _orig_arange(*args, **kwargs)
+        _hbc.arange = _cuda_arange
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(message)s",
@@ -151,6 +168,10 @@ def parse_args():
                      help="[disk] Directory of pre-saved CIFTI + run_trs.npy.")
     inp.add_argument("--fmri-suffix", default="sg_psc", dest="fmri_suffix",
                      help="[disk] Preprocessing suffix in the CIFTI filename.")
+    inp.add_argument("--fmri-fullbrain-path", default=None, dest="fmri_fullbrain_path",
+                     help="[disk] Full-brain CIFTI (170494 grayords) for fitting. "
+                          "When set, fitting uses all grayords; output maps are sliced "
+                          "to cortex-only. Companion run_trs.npy derived from this path.")
     inp.add_argument("--raw-dir", default=None, dest="raw_dir",
                      help="[streaming] Directory of raw 7T CIFTI files. Per-subject only.")
 
@@ -264,20 +285,21 @@ def _run_pipeline(
     run_trs: list,
     bm_axis,
     out_dir: str,
-    cifti_dir: str | None,
     subject_tag: str = "",
+    n_cortex: int = None,
 ) -> None:
     """Run the full CF modeling pipeline on pre-loaded grayordinate data.
 
     Parameters
     ----------
-    cortex_data : (n_grayord, T_total) float32 — CIFTI grayordinate data
-                  (59412 for HCP 59k_fs_LR, medial wall excluded, runs concatenated).
+    cortex_data : (n_grayord, T_total) float32 — CIFTI grayordinate data.
+                  May be cortex-only (59412) or full-brain (170494 grayords).
     run_trs     : list of int — TRs per run (4 entries for HCP movie).
     bm_axis     : nibabel BrainModelAxis — from the CIFTI header.
     out_dir     : str — directory for npy files.
-    cifti_dir   : str | None — directory for CIFTI maps (group_average only).
     subject_tag : str — label for log messages.
+    n_cortex    : int or None — when not None, output maps are sliced to the
+                  first n_cortex grayords (for full-brain fitting mode).
     """
     prefix = f"[{subject_tag}] " if subject_tag else ""
 
@@ -363,6 +385,10 @@ def _run_pipeline(
     log.info("%sPreparing pipeline (backend=%s, n_iter=%d) …",
              prefix, backend, args.n_iter)
     nm.prep_pipeline(run_durations=np.array(run_onsets, dtype=int))
+    # Keep Y on CPU; himalaya batches it to GPU via n_targets_batch.
+    # Prevents CUDA OOM when fitting full-brain Y (170494 targets × 3243 TRs = 2 GB).
+    if hasattr(nm, 'pipeline') and len(nm.pipeline) > 0:
+        nm.pipeline[-1].Y_in_cpu = True
 
     # ── Fit on grayordinate targets ───────────────────────────────────────
     log.info("%sFitting model …", prefix)
@@ -392,10 +418,8 @@ def _run_pipeline(
         null_r2=null_r2,
         roi_a=args.roi_a,
         roi_b=args.roi_b,
-        bm_axis=bm_axis,
         out_dir=out_dir,
-        template_cifti=args.template_cifti,
-        cifti_dir=cifti_dir,
+        n_cortex=n_cortex,
     )
 
     # ── Clean up temp YAML ────────────────────────────────────────────────
@@ -418,32 +442,50 @@ def _run_disk(args) -> None:
     out_dir  = (os.path.join(roi_root, "prep")
                 if args.mode == "group_average"
                 else os.path.join(roi_root, "subjects", subject))
-    cifti_dir = (os.path.join(roi_root, "cifti_maps")
-                 if args.mode == "group_average" else None)
-
-    cifti_path = os.path.join(
-        args.preprocessed_dir,
-        f"{subject}_{args.fmri_suffix}_cortex_59k.dtseries.nii",
-    )
-    trs_path = os.path.join(
-        args.preprocessed_dir,
-        f"{subject}_{args.fmri_suffix}_run_trs.npy",
-    )
-
-    if not os.path.exists(cifti_path):
-        log.error("CIFTI not found: %s", cifti_path)
-        sys.exit(1)
 
     log.info("=" * 60)
     log.info("02 — CF modeling (%s)  %s × %s", args.mode, args.roi_a, args.roi_b)
-    log.info("  CIFTI   : %s", os.path.basename(cifti_path))
     log.info("  Output  : %s", out_dir)
     log.info("=" * 60)
 
-    img         = nib.load(cifti_path)
-    bm_axis     = img.header.get_axis(1)
-    cortex_data = img.get_fdata(dtype=np.float32).T   # (n_grayord, T)
-    del img
+    n_cortex = None
+    if getattr(args, 'fmri_fullbrain_path', None):
+        # Full-brain mode: fit on all 170494 grayords (matches Hedger exactly),
+        # then slice output maps to cortex-only before saving.
+        fb_path = args.fmri_fullbrain_path
+        if not os.path.exists(fb_path):
+            log.error("Full-brain CIFTI not found: %s", fb_path)
+            sys.exit(1)
+        trs_path = fb_path.replace("_fullbrain.dtseries.nii", "_run_trs.npy")
+        log.info("  CIFTI (full-brain): %s", os.path.basename(fb_path))
+        img = nib.load(fb_path)
+        bm_axis     = img.header.get_axis(1)
+        cortex_data = img.get_fdata(dtype=np.float32).T   # (170494, T)
+        del img
+        n_cortex = sum(
+            len(model.vertex)
+            for name, _, model in bm_axis.iter_structures()
+            if "CORTEX" in name
+        )
+        log.info("  n_cortex=%d (output maps will be sliced here)", n_cortex)
+    else:
+        cifti_path = os.path.join(
+            args.preprocessed_dir,
+            f"{subject}_{args.fmri_suffix}_cortex_59k.dtseries.nii",
+        )
+        trs_path = os.path.join(
+            args.preprocessed_dir,
+            f"{subject}_{args.fmri_suffix}_run_trs.npy",
+        )
+        if not os.path.exists(cifti_path):
+            log.error("CIFTI not found: %s", cifti_path)
+            sys.exit(1)
+        log.info("  CIFTI: %s", os.path.basename(cifti_path))
+        img = nib.load(cifti_path)
+        bm_axis     = img.header.get_axis(1)
+        cortex_data = img.get_fdata(dtype=np.float32).T   # (n_grayord, T)
+        del img
+
     log.info("  Loaded: %s", cortex_data.shape)
 
     run_trs = np.load(trs_path).tolist() if os.path.exists(trs_path) else None
@@ -454,9 +496,9 @@ def _run_disk(args) -> None:
     log.info("  run_trs: %s  (total: %d TRs)", run_trs, sum(run_trs))
 
     _run_pipeline(
-        args, cortex_data, run_trs, bm_axis,
-        out_dir, cifti_dir,
+        args, cortex_data, run_trs, bm_axis, out_dir,
         subject_tag=subject if args.mode == "per_subject" else "",
+        n_cortex=n_cortex,
     )
 
 
@@ -501,8 +543,7 @@ def _run_streaming(args) -> None:
     log.info("  Preprocessed: %s  run_trs: %s", cortex_data.shape, run_trs)
 
     _run_pipeline(
-        args, cortex_data, run_trs, bm_axis,
-        out_dir, cifti_dir=None,
+        args, cortex_data, run_trs, bm_axis, out_dir,
         subject_tag=sub,
     )
     del cortex_data

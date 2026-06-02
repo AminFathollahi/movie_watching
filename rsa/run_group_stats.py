@@ -11,7 +11,8 @@ For each vertex across subjects:
   5. Cohen's d = mean(Z) / std(Z, ddof=1)
   6. TFCE + sign-flipping permutation test (n_permutations, default 5000)
      → FWE-corrected significance mask at p < α (95th percentile of null)
-  7. Cluster border mask: significant vertices adjacent to non-significant neighbours
+  7. Cluster border: wb_command -metric-rois-to-border traces the contour of
+     surviving clusters on the midthickness surface → per-hemisphere .border files
 
 TFCE is computed via mne.stats.permutation_cluster_1samp_test with
 threshold=dict(start=0, step=0.2), using full surface adjacency from the
@@ -19,9 +20,11 @@ threshold=dict(start=0, step=0.2), using full surface adjacency from the
 maximum TFCE statistic per sign-flip permutation; the FWE threshold is the
 (1-α)-th percentile of that distribution.
 
-Output: multi-map CIFTI dscalar with 7 maps:
-  mean_rho | cohens_d | t_stat | sigmap_uncorr |
-  tfce_stat | tfce_fwe_mask | tfce_fwe_borders
+Output: multi-map CIFTI dscalar with 6 maps:
+  mean_rho | cohens_d | t_stat | sigmap_uncorr | tfce_stat | tfce_fwe_mask
+
+Border contours of the FWE-significant clusters are written as separate
+Workbench .border files (one per hemisphere) alongside the dscalar.
 
 Also writes summary.json to the same directory.
 
@@ -41,6 +44,7 @@ Usage:
     --template-cifti /path/to/group_average_sg_psc_cortex_59k.dtseries.nii \\
     --left-surface   /path/to/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \\
     --right-surface  /path/to/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \\
+    --workbench      /opt/workbench/bin_linux64/wb_command \\
     --n-permutations 5000 \\
     --n-jobs -1
 """
@@ -48,12 +52,14 @@ Usage:
 import argparse
 import json
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 from mne.stats import permutation_cluster_1samp_test
+from nibabel.gifti import GiftiDataArray, GiftiImage
 from scipy import stats
 from scipy.sparse import block_diag as sp_block_diag
 from scipy.sparse import csr_matrix
@@ -101,10 +107,14 @@ def parse_args():
                    help="Left 59k midthickness .surf.gii (for TFCE adjacency).")
     p.add_argument("--right-surface",    required=True,
                    help="Right 59k midthickness .surf.gii (for TFCE adjacency).")
+    p.add_argument("--workbench",        default=None,
+                   help="Path to wb_command. Used to create .border files from the "
+                        "FWE-significant cluster mask. If omitted, border files are "
+                        "skipped.")
     p.add_argument("--alpha",            type=float, default=0.05,
                    help="FWE significance threshold (p < alpha).")
     p.add_argument("--min-cluster-size", type=int, default=10,
-                   help="Minimum cluster size (vertices) to include in border mask.")
+                   help="Minimum cluster size (vertices) to include in FWE mask.")
     p.add_argument("--n-permutations",   type=int, default=5000,
                    help="Number of sign-flip permutations for TFCE null distribution.")
     p.add_argument("--n-jobs",           type=int, default=-1,
@@ -113,13 +123,18 @@ def parse_args():
 
 
 # =============================================================================
-# Surface adjacency
+# Surface helpers
 # =============================================================================
 
-def _load_faces(surf_path: str) -> np.ndarray:
-    """Return (n_faces, 3) int32 face array from a GIFTI surface file."""
+def _load_surface(surf_path: str) -> tuple[np.ndarray, int]:
+    """Return (faces, n_verts) from a GIFTI surface file.
+
+    darrays[0] = (n_verts, 3) coordinates; darrays[1] = (n_faces, 3) indices.
+    """
     surf = nib.load(surf_path)
-    return surf.darrays[1].data.astype(np.int32)
+    n_verts = surf.darrays[0].data.shape[0]
+    faces   = surf.darrays[1].data.astype(np.int32)
+    return faces, n_verts
 
 
 def _surface_adjacency(faces: np.ndarray,
@@ -162,38 +177,29 @@ def _surface_adjacency(faces: np.ndarray,
 
 
 # =============================================================================
-# Cluster borders
+# Cluster filtering
 # =============================================================================
 
-def _cluster_borders(sig_mask: np.ndarray,
+def _filter_clusters(sig_mask: np.ndarray,
                      adj: csr_matrix,
-                     min_cluster_size: int) -> tuple[np.ndarray, np.ndarray]:
-    """Compute cluster membership mask and border mask from a binary significance mask.
+                     min_cluster_size: int) -> np.ndarray:
+    """Filter a binary significance mask to retain only clusters ≥ min_cluster_size.
 
-    Two-pass algorithm:
-      Pass 1 — connected components on sig_mask; retain only those with
-               ≥ min_cluster_size vertices → cluster_mask.
-      Pass 2 — border_mask via sparse matmul: a cluster vertex is a border
-               iff at least one of its surface neighbours is outside cluster_mask.
-               Using the fully-built cluster_mask (not sig_mask) ensures that
-               the shared edge between two large adjacent clusters is correctly
-               treated as interior (not a border).
+    Connected components are computed in the subgraph of significant vertices;
+    components with fewer than min_cluster_size vertices are zeroed out.
 
     Args:
-        sig_mask:         (n_cifti_verts,) bool — significant vertices
+        sig_mask:         (n_cifti_verts,) bool — TFCE-FWE significant vertices
         adj:              (n_cifti_verts × n_cifti_verts) symmetric CSR adjacency
         min_cluster_size: minimum vertices per cluster to retain
 
     Returns:
-        cluster_mask:  (n_cifti_verts,) float32 — 1 inside valid clusters, 0 outside
-        border_mask:   (n_cifti_verts,) float32 — 1 at cluster borders, 0 elsewhere
+        cluster_mask: (n_cifti_verts,) float32 — 1 inside valid clusters, 0 outside
     """
     cluster_mask = np.zeros(len(sig_mask), dtype=np.float32)
-
     if not sig_mask.any():
-        return cluster_mask, cluster_mask.copy()
+        return cluster_mask
 
-    # Pass 1: label connected components among significant vertices only
     sig_idx = np.where(sig_mask)[0]
     sig_adj = adj[sig_idx][:, sig_idx]
     n_comp, labels = connected_components(sig_adj, directed=False)
@@ -203,14 +209,63 @@ def _cluster_borders(sig_mask: np.ndarray,
         if len(comp_verts) >= min_cluster_size:
             cluster_mask[comp_verts] = 1.0
 
-    # Pass 2: border via sparse matmul.
-    # For each vertex, count how many neighbours are outside cluster_mask.
-    # A cluster vertex with any non-cluster neighbour → border.
-    not_cluster = (cluster_mask == 0).astype(np.float32)
-    nbr_noncluster = np.asarray(adj.dot(not_cluster)).ravel()
-    border_mask = ((cluster_mask > 0) & (nbr_noncluster > 0)).astype(np.float32)
+    return cluster_mask
 
-    return cluster_mask, border_mask
+
+# =============================================================================
+# Workbench border file
+# =============================================================================
+
+def _write_border_file(
+    cluster_mask: np.ndarray,
+    cifti_vertex_indices: np.ndarray,
+    n_full_verts: int,
+    surface_path: str,
+    out_border_path: str,
+    workbench: str,
+) -> None:
+    """Trace the cluster boundary on the surface and write a Workbench .border file.
+
+    Expands cluster_mask from CIFTI grayordinate space back to the full surface
+    vertex space (medial-wall vertices = 0), saves it as a temporary GIFTI metric,
+    then calls:
+        wb_command -metric-rois-to-border <surface> <roi-metric> <border-out>
+    The temporary metric is deleted whether or not wb_command succeeds.
+
+    Args:
+        cluster_mask:          (n_cifti_verts,) float32 — 1 inside cluster, 0 outside
+        cifti_vertex_indices:  (n_cifti_verts,) int — maps CIFTI rows → surface vertices
+        n_full_verts:          total vertices in the full surface (incl. medial wall)
+        surface_path:          .surf.gii to trace the border on
+        out_border_path:       output .border file path
+        workbench:             path to wb_command executable
+
+    Command used: wb_command -metric-rois-to-border <surface> <metric> <class-name> <border-out>
+    Finds all mesh edges that cross the ROI boundary and draws borders through them.
+    """
+    # Expand to full surface space; medial-wall vertices stay 0
+    full_mask = np.zeros(n_full_verts, dtype=np.float32)
+    full_mask[cifti_vertex_indices] = cluster_mask
+
+    tmp_metric = Path(out_border_path).with_suffix('.tmp.func.gii')
+    arr = GiftiDataArray(data=full_mask, intent=0, datatype='NIFTI_TYPE_FLOAT32')
+    nib.save(GiftiImage(darrays=[arr]), str(tmp_metric))
+
+    try:
+        subprocess.run(
+            [workbench, '-metric-rois-to-border',
+             surface_path, str(tmp_metric), 'tfce_fwe', out_border_path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        log.warning(
+            f"wb_command border creation failed for {out_border_path}:\n"
+            f"  {e.stderr.strip()}"
+        )
+    finally:
+        tmp_metric.unlink(missing_ok=True)
 
 
 # =============================================================================
@@ -225,16 +280,17 @@ def main():
     config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_{args.method}"
 
     out_dir = (Path(args.output_dir) / "group_stats" /
-               args.model / config)
+               f"{args.model}_{args.modality}" / config)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Collect per-subject ρ maps ────────────────────────────────────────────
     fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
                      f"_bin{bin_sec_int}_{args.method}_maps.dscalar.nii")
 
+    model_mod_dir = f"{args.model}_{args.modality}"
     subject_rho_files = sorted([
         f for f in Path(args.output_dir).glob(
-            f"*/{args.model}/{fname_pattern}"
+            f"*/{model_mod_dir}/{fname_pattern}"
         )
         if f.parent.parent.name not in ("group_stats", "group_average")
     ])
@@ -242,7 +298,7 @@ def main():
     if not subject_rho_files:
         log.error(
             f"No per-subject ρ maps found matching:\n"
-            f"  {Path(args.output_dir)}/*/{args.model}/{fname_pattern}\n"
+            f"  {Path(args.output_dir)}/*/{model_mod_dir}/{fname_pattern}\n"
             f"Run per-subject RSA first (run_analysis.sh persubject)."
         )
         sys.exit(1)
@@ -301,12 +357,13 @@ def main():
     left_indices, right_indices = get_cortex_vertex_indices(bm_axis)
     n_left = len(left_indices)
 
+    faces_lh, n_verts_lh = _load_surface(args.left_surface)
+    faces_rh, n_verts_rh = _load_surface(args.right_surface)
+
     log.info(f"Building surface adjacency (LH: {n_left} verts, "
              f"RH: {n_grays - n_left} verts) ...")
-    faces_lh = _load_faces(args.left_surface)
-    faces_rh = _load_faces(args.right_surface)
-    adj_lh   = _surface_adjacency(faces_lh, left_indices,  n_left)
-    adj_rh   = _surface_adjacency(faces_rh, right_indices, n_grays - n_left)
+    adj_lh = _surface_adjacency(faces_lh, left_indices,  n_left)
+    adj_rh = _surface_adjacency(faces_rh, right_indices, n_grays - n_left)
     log.info("  Adjacency built.")
 
     # Block-diagonal adjacency spanning both hemispheres
@@ -350,27 +407,54 @@ def main():
     n_sig_tfce = int((tfce_stat_f64 >= tfce_thresh).sum())
     log.info(f"TFCE-FWE significant vertices: {n_sig_tfce:,} / {n_grays:,}")
 
-    # ── Cluster mask & borders from TFCE FWE significance ────────────────────
+    # ── Cluster mask: filter out small clusters ───────────────────────────────
     sig_lh_tfce = tfce_stat_f64[:n_left] >= tfce_thresh
     sig_rh_tfce = tfce_stat_f64[n_left:] >= tfce_thresh
 
-    cm_lh, cb_lh = _cluster_borders(sig_lh_tfce, adj_lh, args.min_cluster_size)
-    cm_rh, cb_rh = _cluster_borders(sig_rh_tfce, adj_rh, args.min_cluster_size)
+    cm_lh = _filter_clusters(sig_lh_tfce, adj_lh, args.min_cluster_size)
+    cm_rh = _filter_clusters(sig_rh_tfce, adj_rh, args.min_cluster_size)
 
-    tfce_fwe_mask    = np.concatenate([cm_lh, cm_rh])
-    tfce_fwe_borders = np.concatenate([cb_lh, cb_rh])
+    tfce_fwe_mask = np.concatenate([cm_lh, cm_rh])
 
     # Float32 for storage (CIFTI maps)
     tfce_stat = tfce_stat_f64.astype(np.float32)
 
     log.info(f"TFCE-FWE clusters (≥{args.min_cluster_size} verts): "
-             f"{int(tfce_fwe_mask.sum()):,} verts  "
-             f"borders: {int(tfce_fwe_borders.sum()):,}")
+             f"{int(tfce_fwe_mask.sum()):,} verts")
+
+    # ── Workbench border files ────────────────────────────────────────────────
+    # wb_command -metric-rois-to-border traces the exact surface edges between
+    # significant and non-significant faces, producing a clean contour .border
+    # file per hemisphere (separate from the CIFTI output).
+    border_lh_path = border_rh_path = None
+    n_cluster = int(tfce_fwe_mask.sum())
+    coverage = n_cluster / n_grays if n_grays > 0 else 0.0
+    if not args.workbench:
+        log.info("--workbench not provided; skipping border file creation.")
+    elif n_cluster == 0:
+        log.info("No significant cluster vertices; skipping border file creation.")
+    elif coverage > 0.90:
+        # When >90 % of cortex is significant the only boundary is the medial
+        # wall edge, which traces a misleading diagonal in Workbench's flat map.
+        # Skip border creation and rely on the continuous maps instead.
+        log.warning(
+            f"Cluster covers {coverage*100:.1f}% of cortex ({n_cluster:,}/{n_grays:,} verts). "
+            f"The only boundary is the medial-wall edge, which is not scientifically "
+            f"informative. Skipping .border file creation — use the continuous maps "
+            f"(tfce_stat, mean_rho) for visualisation."
+        )
+    else:
+        log.info("Creating Workbench border files ...")
+        border_lh_path = str(out_dir / f"group_stats_{n_subs}subs_lh.border")
+        border_rh_path = str(out_dir / f"group_stats_{n_subs}subs_rh.border")
+        _write_border_file(cm_lh, left_indices,  n_verts_lh,
+                           args.left_surface,  border_lh_path, args.workbench)
+        _write_border_file(cm_rh, right_indices, n_verts_rh,
+                           args.right_surface, border_rh_path, args.workbench)
+        log.info(f"  LH border: {border_lh_path}")
+        log.info(f"  RH border: {border_rh_path}")
 
     # ── Save multi-map CIFTI ──────────────────────────────────────────────────
-    # Continuous maps (mean_rho, cohens_d, t_stat, sigmap_uncorr, tfce_stat)
-    # provide the surface overlay; tfce_fwe_mask and tfce_fwe_borders draw
-    # the FWE-corrected cluster contours on top.
     out_path = out_dir / f"group_stats_{n_subs}subs.dscalar.nii"
     maps = np.stack([
         mean_rho,
@@ -379,8 +463,7 @@ def main():
         sigmap_uncorr,
         tfce_stat,
         tfce_fwe_mask,
-        tfce_fwe_borders,
-    ], axis=0)   # (7, n_grayords)
+    ], axis=0)   # (6, n_grayords)
 
     map_names = [
         "mean_rho",
@@ -389,7 +472,6 @@ def main():
         "sigmap_uncorr",
         "tfce_stat",
         "tfce_fwe_mask",
-        "tfce_fwe_borders",
     ]
 
     save_cifti_multimap(maps, map_names, args.template_cifti, str(out_path))
@@ -411,12 +493,13 @@ def main():
         "n_sig_uncorr":           int((p_uncorr < args.alpha).sum()),
         "n_sig_tfce_fwe":         n_sig_tfce,
         "n_cluster_verts_tfce":   int(tfce_fwe_mask.sum()),
-        "n_border_verts_tfce":    int(tfce_fwe_borders.sum()),
         "max_cohens_d":           float(cohens_d.max()),
         "max_t_stat":             float(t_vals.max()),
         "max_tfce_stat":          float(tfce_stat.max()),
         "max_sigmap_uncorr":      float(sigmap_uncorr.max()),
         "mean_rho_range":         [float(mean_rho.min()), float(mean_rho.max())],
+        "border_lh":              border_lh_path,
+        "border_rh":              border_rh_path,
         "subjects":               [f.parent.parent.name for f in subject_rho_files],
     }
 

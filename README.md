@@ -56,7 +56,8 @@ python preprocess_individual.py \
     --save-individual --save-average
 ```
 
-Output per subject: `{sub}_sg_psc_gsr_cortex_59k.dtseries.nii` + `{sub}_sg_psc_gsr_run_trs.npy`
+Output per subject: `{sub}_sg_psc_cortex_59k.dtseries.nii` + `{sub}_sg_psc_run_trs.npy`
+(suffix is `sg_psc` with the default `GSR=false`; becomes `sg_psc_gsr` when `GSR=true`)
 
 > **Streaming mode** (default for RSA/encoding per-subject): Set `STREAM=true` in each
 > `run_analysis.sh`. Raw CIFTIs are preprocessed on-the-fly — no saved CIFTI is needed.

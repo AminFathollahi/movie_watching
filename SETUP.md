@@ -98,6 +98,7 @@ conda activate movie
 bash cf_modeling/run_analysis.sh preprocess
 
 # CF modeling (geometry → group-average → per-subject)
+# Default preprocessing: SG high-pass + PSC, no GSR (suffix = sg_psc)
 bash cf_modeling/run_analysis.sh all
 
 # RSA searchlight

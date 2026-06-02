@@ -25,6 +25,14 @@ The main additions are:
 - **No splicing**: `splice_lookups()` is not called (requires lookup-table CSVs
   that do not exist for custom ROI pairs).
 - **GPU acceleration**: himalaya `torch_cuda` backend; controlled by `--backend`.
+- **torch 2.11+ GPU patches** (applied automatically in `02_fit_cf_model.py`):
+  - `torch_cuda.arange` monkey-patched to default `device="cuda"` — fixes a
+    cross-device index crash in himalaya's random-search solver that only
+    manifests with torch ≥ 2.x (Hedger et al. ran CPU-only torch 2.1.1).
+  - `CfModel._offload_fitted_to_cpu()` moves dual weights / deltas / kernel
+    matrices from GPU to CPU + calls `gc.collect()` + `empty_cache()` before
+    `get_params()` / `test_xval()`, which would otherwise OOM trying to
+    allocate ≈5 GB for the `(n_kernels × T × 59k)` split-prediction tensor.
 
 ## Attribution
 
@@ -74,13 +82,24 @@ python preprocess_individual.py \
 
 This produces, for each subject and the group average:
 ```
-{sub}_sg_psc_gsr_cortex_59k.dtseries.nii   — (n_cortex, T_total) continuous CIFTI
-{sub}_sg_psc_gsr_run_trs.npy               — [T_run1, T_run2, T_run3, T_run4]
-group_average_sg_psc_gsr_cortex_59k.dtseries.nii
-group_average_sg_psc_gsr_run_trs.npy
+{sub}_sg_psc_cortex_59k.dtseries.nii        — (n_cortex, T_total) continuous CIFTI
+{sub}_sg_psc_run_trs.npy                    — [T_run1, T_run2, T_run3, T_run4]
+group_average_sg_psc_cortex_59k.dtseries.nii
+group_average_sg_psc_run_trs.npy
 ```
 
-Set `FMRI_SUFFIX="sg_psc_gsr"` in `run_analysis.sh` (this is the default).
+File names are determined by `PREPROCESSING_FLAG` (auto-built from `SG_FILTER`/`PSC`/`GSR`
+in `run_analysis.sh`).  With the current defaults (`SG_FILTER=true PSC=true GSR=false`)
+the suffix is `sg_psc`.  Add `GSR=true` to get `sg_psc_gsr`.
+
+> **Group-average CIFTI location**: `preprocess` mode saves the group-average file to
+> `{PREPROCESSED_INDIV_DIR}/` then moves it to `{PREPROCESSED_DIR}/` (i.e.
+> `data/preprocessed/average_sub/sg_psc/`).  If you have an older file sitting directly
+> in `data/preprocessed/`, move it manually:
+> ```bash
+> mkdir -p data/preprocessed/average_sub/sg_psc
+> mv data/preprocessed/group_average_sg_psc_*.{nii,npy} data/preprocessed/average_sub/sg_psc/
+> ```
 
 ### Streaming mode (`STREAM=true`)
 
@@ -188,9 +207,9 @@ Main modeling script.  One process per (subject, ROI pair).
 ```bash
 python cf_modeling/02_fit_cf_model.py \
     --mode group_average --roi-a 3b --roi-b V1 \
-    --preprocessed-dir /path/to/preprocessed/average_sub/sg_psc_gsr \
-    --fmri-suffix sg_psc_gsr \
-    --template-cifti /path/to/group_average_sg_psc_gsr_cortex_59k.dtseries.nii \
+    --preprocessed-dir /path/to/preprocessed/average_sub/sg_psc \
+    --fmri-suffix sg_psc \
+    --template-cifti /path/to/preprocessed/average_sub/sg_psc/group_average_sg_psc_cortex_59k.dtseries.nii \
     --output-base /path/to/outputs/cf_modeling \
     --vicsompy-repo /path/to/Vicarious_somatotopy
 ```
@@ -300,7 +319,7 @@ both transparent below 0, for a Figure 3a-style dual-colour display.
 | `STREAM` | `false` | Streaming mode (preprocess raw CIFTIs on-the-fly) |
 | `SG_FILTER` | `true` | Savitzky-Golay high-pass filter |
 | `PSC` | `true` | Percent signal change (pre-SG mean used for normalisation) |
-| `GSR` | `true` | Global signal regression |
+| `GSR` | `false` | Global signal regression (add `gsr` to suffix when enabled) |
 | `BACKEND` | `torch_cuda` | himalaya backend (`torch_cuda` / `torch` / `numpy`) |
 | `N_ITER` | `20` | Random-search iterations for α selection |
 | `N_TARGETS_BATCH` | `20000` | Targets per GPU batch |

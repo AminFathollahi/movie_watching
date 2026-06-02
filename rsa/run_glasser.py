@@ -322,7 +322,7 @@ def _run_disk(args):
     timing_df = pd.read_csv(args.timing_csv)
     config    = _config_label(args)
     fmri_tag  = args.fmri_suffix
-    out_root  = Path(args.output_dir) / args.subject / args.model / config
+    out_root  = Path(args.output_dir) / args.subject / f"{args.model}_{args.modality}" / config
 
     cifti = _cifti_path(args)
     trs_path = _run_trs_path(args)
@@ -353,7 +353,7 @@ def _run_streaming(args):
     fmri_tag  = _streaming_fmri_tag(args)
     sub       = args.subject
     raw_dir   = Path(args.raw_dir)
-    out_root  = Path(args.output_dir) / sub / args.model / config
+    out_root  = Path(args.output_dir) / sub / f"{args.model}_{args.modality}" / config
 
     bin_sec_int = int(args.bin_sec)
     delay_tag   = f"delay{int(args.delay_sec)}s"

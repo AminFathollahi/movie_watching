@@ -112,14 +112,27 @@ fi
 
 # fMRI data paths
 FMRI_SUFFIX="${PREPROCESSING_FLAG}"
-# Group-average preprocessed CIFTI (output of preprocess_individual.py --save-average)
-PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/${PREPROCESSING_FLAG}"
 # Per-subject preprocessed CIFTIs (output of preprocess_individual.py --save-individual)
 # File pattern: {PREPROCESSED_INDIV_DIR}/{sub}_{PREPROCESSING_FLAG}_cortex_59k.dtseries.nii
 PREPROCESSED_INDIV_DIR="${DATA_BASE}/preprocessed/${PREPROCESSING_FLAG}"
 
-# Group-average CIFTI — used as fMRI input and CIFTI template for group-average mode
-FMRI_GROUP_CIFTI="${PREPROCESSED_DIR}/group_average_${PREPROCESSING_FLAG}_cortex_59k.dtseries.nii"
+# ── Group-average CIFTI ───────────────────────────────────────────────────────
+# Two options; comment/uncomment to switch:
+#
+#   OUR_AVG   — mean of 175 individually preprocessed subjects (from preprocess mode)
+#   HEDGER    — Hedger et al. pseudo-subject 999999, 4 runs concatenated
+#               (built once by: conda run -n movie python cf_modeling/concat_hedger_average.py)
+#
+# Our own group average (175-subject mean):
+#PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/${PREPROCESSING_FLAG}"
+#FMRI_GROUP_CIFTI="${PREPROCESSED_DIR}/group_average_${PREPROCESSING_FLAG}_cortex_59k.dtseries.nii"
+#
+# Hedger pseudo-subject 999999 (default — matches Hedger et al. 2025 exactly):
+PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/hedger_sg_psc"
+# Cortex-only template (108441 grayords) — used for integration_maps / viz template
+FMRI_GROUP_CIFTI="${PREPROCESSED_DIR}/group_average_hedger_sg_psc_cortex_59k.dtseries.nii"
+# Full-brain CIFTI (170494 grayords) — used for fitting, matches Hedger's pipeline exactly
+FMRI_GROUP_CIFTI_FULLBRAIN="${PREPROCESSED_DIR}/group_average_hedger_sg_psc_fullbrain.dtseries.nii"
 
 # Single authoritative subject list — 175 subjects with full 7T fMRI + midthickness.
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
@@ -127,6 +140,7 @@ SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 # Output and RSA roots
 OUTPUT_BASE="${OUTPUTS_BASE}/cf_modeling"
 RSA_BASE="${OUTPUTS_BASE}/rsa"
+RSA_MODEL="pe-av-small-16-frame"   # RSA model name used in overlap.py output filenames
 
 # ROI CSV masks directory (output of 00_make_roi_masks.py)
 MASKS_DIR="${OUTPUT_BASE}/masks"
@@ -489,17 +503,18 @@ run_avg_pair() {
     # ── Step 02: fit CF model ─────────────────────────────────────────────────
     log "[02] Fit CF model (group_average ${ROI_A}×${ROI_B}) ..."
     run_python "${SCRIPT_DIR}/02_fit_cf_model.py" \
-        --mode             group_average \
-        --roi-a            "$ROI_A" \
-        --roi-b            "$ROI_B" \
-        --preprocessed-dir "$PREPROCESSED_DIR" \
-        --fmri-suffix      "$FMRI_SUFFIX" \
-        --template-cifti   "$FMRI_GROUP_CIFTI" \
-        --output-base      "$OUTPUT_BASE" \
-        --backend          "$BACKEND" \
-        --n-iter           "$N_ITER" \
-        --n-targets-batch  "$N_TARGETS_BATCH" \
-        --vicsompy-repo    "$VICSOMPY_REPO"
+        --mode                  group_average \
+        --roi-a                 "$ROI_A" \
+        --roi-b                 "$ROI_B" \
+        --preprocessed-dir      "$PREPROCESSED_DIR" \
+        --fmri-suffix           "$FMRI_SUFFIX" \
+        --fmri-fullbrain-path   "$FMRI_GROUP_CIFTI_FULLBRAIN" \
+        --template-cifti        "$FMRI_GROUP_CIFTI" \
+        --output-base           "$OUTPUT_BASE" \
+        --backend               "$BACKEND" \
+        --n-iter                "$N_ITER" \
+        --n-targets-batch       "$N_TARGETS_BATCH" \
+        --vicsompy-repo         "$VICSOMPY_REPO"
     log "[02] Done"
 
     # ── Post-processing: integration maps ────────────────────────────────────
@@ -521,7 +536,8 @@ run_avg_pair() {
         --roi-b          "$ROI_B" \
         --output-base    "$OUTPUT_BASE" \
         --template-cifti "$FMRI_GROUP_CIFTI" \
-        --rsa-base       "$RSA_BASE"
+        --rsa-base       "$RSA_BASE" \
+        --rsa-model      "$RSA_MODEL"
     log "[04] Done"
 
     log "Group-average ${ROI_A}×${ROI_B} complete → ${OUT}"

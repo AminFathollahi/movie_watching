@@ -317,32 +317,24 @@ class CfModel(MssCf):
         null_r2: list,
         roi_a: str,
         roi_b: str,
-        bm_axis,
         out_dir: str,
-        template_cifti: str | None = None,
-        cifti_dir: str | None = None,
+        n_cortex: int = None,
     ) -> None:
-        """Save all R² maps as npy files (and optionally CIFTI dscalar).
+        """Save all R² maps as npy files.
 
-        Writes a multimap CIFTI containing ALL maps for easy wb_view inspection.
-        Individual npy files are also saved (for downstream scripts).
+        CIFTI output is handled downstream by integration_maps.py, which
+        writes a single combined dscalar with all scalar and derived maps.
 
         Parameters
         ----------
-        null_r2        : output of compute_null_r2() — list of (n_grayord,) float32.
-        roi_a, roi_b   : str — ROI names (used in file names).
-        bm_axis        : nibabel BrainModelAxis — for CIFTI header.
-        out_dir        : str — directory for npy files (= subject.out_csv).
-        template_cifti : str | None — CIFTI template for CIFTI map headers.
-                         Required for CIFTI output.
-        cifti_dir      : str | None — directory for CIFTI output.
-                         If None, CIFTI maps are not written.
+        null_r2   : output of compute_null_r2() — list of (n_grayord,) float32.
+        roi_a, roi_b : str — ROI names (used in file names).
+        out_dir   : str — directory for npy output.
+        n_cortex  : int or None — when set, slice output arrays to the first
+                    n_cortex grayordinates (used when fitting on full-brain data
+                    to strip subcortex before saving cortex-only maps).
         """
-        import nibabel as nib
-
         os.makedirs(out_dir, exist_ok=True)
-        if cifti_dir:
-            os.makedirs(cifti_dir, exist_ok=True)
 
         # ── Unpack results from test_xval_grayord and get_params ────────────
         R2_full    = np.asarray(self.xval_score,           dtype=np.float32)
@@ -350,6 +342,15 @@ class CfModel(MssCf):
         R2_b       = np.asarray(self.test_split_scores[1], dtype=np.float32)
         R2_null_a  = null_r2[0].astype(np.float32)
         R2_null_b  = null_r2[1].astype(np.float32)
+
+        # Slice to cortex-only when full-brain fitting was used
+        if n_cortex is not None:
+            R2_full   = R2_full[:n_cortex]
+            R2_a      = R2_a[:n_cortex]
+            R2_b      = R2_b[:n_cortex]
+            R2_null_a = R2_null_a[:n_cortex]
+            R2_null_b = R2_null_b[:n_cortex]
+            log.info("  Sliced to cortex-only: %d grayords", n_cortex)
 
         R2_a_nc = (R2_a - R2_null_a).astype(np.float32)
         R2_b_nc = (R2_b - R2_null_b).astype(np.float32)
@@ -398,13 +399,69 @@ class CfModel(MssCf):
 
         log.info("npy maps saved to: %s", out_dir)
 
-        # ── Save CIFTI multimap ─────────────────────────────────────────────
-        if cifti_dir and template_cifti:
-            _save_cifti_multimap(maps, template_cifti, cifti_dir)
-            # Bimodal integration classification dlabel
-            _save_bimodal_dlabel(
-                R2_a_nc, R2_b_nc, roi_a, roi_b, template_cifti, cifti_dir
-            )
+    # ------------------------------------------------------------------
+    # GPU → CPU offload before split-predict (OOM prevention)
+    # ------------------------------------------------------------------
+
+    def _offload_fitted_to_cpu(self) -> None:
+        """Move fitted GPU tensors to CPU and switch himalaya backend to torch.
+
+        Called once before get_params() and test_xval() because those steps
+        call pipeline.predict(split=True) which allocates
+        (n_kernels × T × n_targets) on GPU — too large for 12 GB VRAM.
+        Fitting (the expensive random-search part) was already done on GPU;
+        scoring on CPU costs only a few seconds.
+        """
+        import gc
+        try:
+            import torch
+            from himalaya.backend import set_backend
+
+            if not torch.cuda.is_available():
+                return
+
+            def _to_cpu(obj, _seen=None):
+                """Recursively move CUDA tensors to CPU in any sklearn/himalaya object."""
+                if _seen is None:
+                    _seen = set()
+                oid = id(obj)
+                if oid in _seen:
+                    return
+                _seen.add(oid)
+                for attr, val in list(getattr(obj, '__dict__', {}).items()):
+                    if isinstance(val, torch.Tensor) and val.is_cuda:
+                        setattr(obj, attr, val.cpu())
+                    elif isinstance(val, (list, tuple)):
+                        moved = [
+                            item.cpu() if isinstance(item, torch.Tensor) and item.is_cuda
+                            else item
+                            for item in val
+                        ]
+                        try:
+                            setattr(obj, attr, type(val)(moved))
+                        except TypeError:
+                            pass
+                    elif hasattr(val, '__dict__'):
+                        _to_cpu(val, _seen)
+
+            _to_cpu(self.pipeline)
+            gc.collect()
+            torch.cuda.empty_cache()
+            set_backend("torch")
+            log.info("  Fitted pipeline → CPU; GPU cache cleared; backend → torch.")
+        except Exception as exc:
+            log.warning("  _offload_fitted_to_cpu() failed (%s) — proceeding on GPU.", exc)
+
+    def get_params(self) -> None:
+        """get_params() with GPU→CPU offload to avoid OOM in split prediction."""
+        self._offload_fitted_to_cpu()
+        super().get_params()
+
+    def test_xval(self, surf_data: np.ndarray, data: np.ndarray) -> None:
+        """test_xval() using the CPU backend set by get_params()/_offload_fitted_to_cpu()."""
+        # _offload_fitted_to_cpu() was already called in get_params() so the
+        # pipeline state and himalaya backend are already on CPU here.
+        super().test_xval(surf_data, data)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -418,117 +475,3 @@ class CfModel(MssCf):
             )
 
 
-# ---------------------------------------------------------------------------
-# Bimodal dlabel CIFTI helper
-# ---------------------------------------------------------------------------
-
-def _save_bimodal_dlabel(
-    R2_a_nc: np.ndarray,
-    R2_b_nc: np.ndarray,
-    roi_a: str,
-    roi_b: str,
-    template_cifti: str,
-    cifti_dir: str,
-) -> None:
-    """Save a 4-class bimodal integration dlabel CIFTI map.
-
-    Labels:
-        0 — Neither        (both R²_nc ≤ 0, grey)
-        1 — {roi_a} only   (R²_a_nc > 0, R²_b_nc ≤ 0, red)
-        2 — {roi_b} only   (R²_b_nc > 0, R²_a_nc ≤ 0, blue)
-        3 — Bimodal        (both R²_nc > 0, purple)
-
-    Parameters
-    ----------
-    R2_a_nc        : (n_grayord,) float32 — null-corrected R² for ROI A
-    R2_b_nc        : (n_grayord,) float32 — null-corrected R² for ROI B
-    roi_a, roi_b   : str — ROI names (used in label names and filename)
-    template_cifti : str — reference CIFTI for BrainModelAxis
-    cifti_dir      : str — output directory
-    """
-    import nibabel as nib
-
-    a_pos = R2_a_nc > 0
-    b_pos = R2_b_nc > 0
-
-    label_map = np.zeros(len(R2_a_nc), dtype=np.int32)
-    label_map[a_pos & ~b_pos] = 1   # ROI_A only
-    label_map[~a_pos & b_pos] = 2   # ROI_B only
-    label_map[a_pos & b_pos]  = 3   # Bimodal
-
-    bm_axis = nib.load(template_cifti).header.get_axis(1)
-
-    label_table = nib.cifti2.Cifti2LabelTable()
-    for key, (name, r, g, b, a) in {
-        0: ("Neither",                  0.6, 0.6, 0.6, 1.0),
-        1: (f"{roi_a}_dominant",        0.85, 0.15, 0.15, 1.0),
-        2: (f"{roi_b}_dominant",        0.15, 0.15, 0.85, 1.0),
-        3: (f"Bimodal_{roi_a}_{roi_b}", 0.65, 0.10, 0.75, 1.0),
-    }.items():
-        lbl = nib.cifti2.Cifti2Label(key, name, r, g, b, a)
-        label_table[key] = lbl
-
-    map_name = f"bimodal_{roi_a}_{roi_b}"
-    label_axis = nib.cifti2.LabelAxis([map_name], [label_table])
-    header = nib.cifti2.Cifti2Header.from_axes((label_axis, bm_axis))
-    img = nib.Cifti2Image(label_map.reshape(1, -1).astype(np.int32), header=header)
-    out_path = os.path.join(cifti_dir, f"{map_name}.dlabel.nii")
-    nib.save(img, out_path)
-
-    bimodal_frac = float(np.mean(label_map == 3))
-    log.info(
-        "  Saved bimodal dlabel: %s  (bimodal=%.1f%%  %s_only=%.1f%%  %s_only=%.1f%%)",
-        os.path.basename(out_path),
-        100.0 * bimodal_frac,
-        roi_a, 100.0 * float(np.mean(label_map == 1)),
-        roi_b, 100.0 * float(np.mean(label_map == 2)),
-    )
-
-
-# ---------------------------------------------------------------------------
-# CIFTI I/O helper (standalone, no coupling to cifti_io.py from repo root)
-# ---------------------------------------------------------------------------
-
-def _save_cifti_multimap(
-    maps: dict,
-    template_cifti: str,
-    cifti_dir: str,
-) -> None:
-    """Save a dict of 1-D arrays as a multi-map CIFTI dscalar.nii.
-
-    Also writes each map as an individual dscalar for easy loading in
-    downstream scripts.
-
-    Parameters
-    ----------
-    maps          : dict[str, (n_grayord,) float32]
-    template_cifti: str — CIFTI file whose BrainModelAxis is reused.
-    cifti_dir     : str — output directory.
-    """
-    import nibabel as nib
-
-    log.info("Saving CIFTI maps to: %s", cifti_dir)
-    os.makedirs(cifti_dir, exist_ok=True)
-
-    bm_axis = nib.load(template_cifti).header.get_axis(1)
-
-    map_names = list(maps.keys())
-    data_2d   = np.stack([maps[k].astype(np.float32) for k in map_names], axis=0)
-
-    # Combined multimap CIFTI
-    scalar_axis = nib.cifti2.ScalarAxis(map_names)
-    header = nib.cifti2.Cifti2Header.from_axes((scalar_axis, bm_axis))
-    img = nib.Cifti2Image(data_2d, header=header)
-    combined_path = os.path.join(cifti_dir, "all_maps.dscalar.nii")
-    nib.save(img, combined_path)
-    log.info("  Saved combined: all_maps.dscalar.nii  (%d maps)", len(map_names))
-
-    # Individual dscalar files
-    for name, arr in maps.items():
-        scalar_axis_i = nib.cifti2.ScalarAxis([name])
-        hdr_i = nib.cifti2.Cifti2Header.from_axes((scalar_axis_i, bm_axis))
-        img_i = nib.Cifti2Image(arr.reshape(1, -1).astype(np.float32), header=hdr_i)
-        out_path = os.path.join(cifti_dir, f"{name}.dscalar.nii")
-        nib.save(img_i, out_path)
-
-    log.info("  Individual dscalar files saved.")

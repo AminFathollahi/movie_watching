@@ -783,11 +783,11 @@ def _run_disk(args):
     timing_df = pd.read_csv(args.timing_csv)
     config    = _config_label(args)
     fmri_tag  = args.fmri_suffix
-    out_root  = Path(args.output_dir) / args.subject / args.model / config
+    out_root  = Path(args.output_dir) / args.subject / f"{args.model}_{args.modality}" / config
 
     cifti = _cifti_path(args)
     trs_path = _run_trs_path(args)
-    
+
     log.info(f"Searchlight RSA: {args.model}/{args.modality}/{config}")
     log.info(f"  fMRI: {cifti}")
     
@@ -814,9 +814,9 @@ def _run_streaming(args):
     
     # Delay tag for output naming consistency
     delay_tag   = f"delay{int(args.delay_sec)}s"
-    out_root    = Path(args.output_dir) / sub / args.model / config
+    out_root    = Path(args.output_dir) / sub / f"{args.model}_{args.modality}" / config
     bin_sec_int = int(args.bin_sec)
-    
+
     # CHANGE THIS LINE TO MATCH:
     maps_out    = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_searchlight.dscalar.nii"
 

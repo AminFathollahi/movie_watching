@@ -169,24 +169,26 @@ def _run_one_rsa_config(config_name, integration_score, R2_a_nc, R2_b_nc,
     log.info(f"Config: {config_name}")
     log.info(f"  norm={norm}  hrf={hrf_tag}  method={method}  bin={bin_size}")
 
-    try:
-        rsa_audio = _load_rsa_fullbrain(rsa_base, rsa_model, norm, hrf_tag, method,
-                                         bin_size, "audio", gray_L, gray_R)
-        rsa_video = _load_rsa_fullbrain(rsa_base, rsa_model, norm, hrf_tag, method,
-                                         bin_size, "video", gray_L, gray_R)
-        rsa_joint = _load_rsa_fullbrain(rsa_base, rsa_model, norm, hrf_tag, method,
-                                         bin_size, "joint", gray_L, gray_R)
-    except FileNotFoundError as e:
-        log.error(f"  SKIP — file not found: {e}")
+    rsa_maps = {}
+    for mod_name in ("audio", "video", "joint"):
+        try:
+            rsa_maps[mod_name] = _load_rsa_fullbrain(
+                rsa_base, rsa_model, norm, hrf_tag, method,
+                bin_size, mod_name, gray_L, gray_R)
+        except FileNotFoundError:
+            log.warning(f"  {mod_name} RSA map not found — skipping modality")
+
+    if not rsa_maps:
+        log.error(f"  SKIP — no RSA modality maps found for {rsa_model}")
         return None
 
-    log.info(f"  RSA audio={rsa_audio.mean():.4f}  video={rsa_video.mean():.4f}  "
-             f"joint={rsa_joint.mean():.4f}")
+    for mod_name, rsa_map in rsa_maps.items():
+        log.info(f"  RSA {mod_name}={rsa_map.mean():.4f}")
 
     results  = {}
     rng_seed = BOOTSTRAP_SEED
 
-    for rsa_name, rsa_map in [("audio", rsa_audio), ("video", rsa_video), ("joint", rsa_joint)]:
+    for rsa_name, rsa_map in rsa_maps.items():
         rho, ci_lo, ci_hi = _bootstrap_spearman(
             integration_score, rsa_map, N_BOOTSTRAP, rng_seed)
         results[f"rho_integration_vs_rsa_{rsa_name}"] = rho
@@ -196,31 +198,42 @@ def _run_one_rsa_config(config_name, integration_score, R2_a_nc, R2_b_nc,
                  f"rho={rho:.4f}  95%CI=[{ci_lo:.4f}, {ci_hi:.4f}]")
         rng_seed += 1
 
-    for r2_name, r2_map, rsa_map in [
-        (roi_a.lower(), R2_a_nc, rsa_audio),
-        (roi_b.lower(), R2_b_nc, rsa_video),
+    # R2_a_nc vs audio RSA, R2_b_nc vs video RSA — only when that modality loaded
+    for r2_name, r2_map, rsa_modality in [
+        (roi_a.lower(), R2_a_nc, "audio"),
+        (roi_b.lower(), R2_b_nc, "video"),
     ]:
-        rho, ci_lo, ci_hi = _bootstrap_spearman(r2_map, rsa_map, N_BOOTSTRAP, rng_seed)
-        results[f"rho_r2{r2_name}_vs_rsa_{r2_name}"] = rho
-        results[f"ci_lo_r2{r2_name}_vs_rsa_{r2_name}"] = ci_lo
-        results[f"ci_hi_r2{r2_name}_vs_rsa_{r2_name}"] = ci_hi
-        log.info(f"  Spearman(R2_{r2_name}_nc, rsa_{r2_name}): "
+        if rsa_modality not in rsa_maps:
+            continue
+        rho, ci_lo, ci_hi = _bootstrap_spearman(
+            r2_map, rsa_maps[rsa_modality], N_BOOTSTRAP, rng_seed)
+        results[f"rho_r2{r2_name}_vs_rsa_{rsa_modality}"] = rho
+        results[f"ci_lo_r2{r2_name}_vs_rsa_{rsa_modality}"] = ci_lo
+        results[f"ci_hi_r2{r2_name}_vs_rsa_{rsa_modality}"] = ci_hi
+        log.info(f"  Spearman(R2_{r2_name}_nc, rsa_{rsa_modality}): "
                  f"rho={rho:.4f}  95%CI=[{ci_lo:.4f}, {ci_hi:.4f}]")
         rng_seed += 1
 
     int_norm = _normalise_positive(integration_score)
-    rsa_norm = _normalise_positive(rsa_joint)
-    overlap  = np.minimum(int_norm, rsa_norm)
-    _save_dscalar(overlap, f"overlap_score_{config_name}", bm_axis, cifti_dir)
-    log.info(f"  overlap_score_{config_name}: mean={overlap.mean():.4f}  "
-             f"frac>0.1={np.mean(overlap>0.1):.1%}")
+    overlap_stats = {}
+    for mod_name, rsa_map in rsa_maps.items():
+        rsa_norm   = _normalise_positive(rsa_map)
+        overlap    = np.minimum(int_norm, rsa_norm)
+        map_name   = f"overlap_score_{rsa_model}_{mod_name}_{config_name}"
+        _save_dscalar(overlap, map_name, bm_axis, cifti_dir)
+        log.info(f"  {map_name}: mean={overlap.mean():.4f}  "
+                 f"frac>0.1={np.mean(overlap>0.1):.1%}")
+        overlap_stats[mod_name] = {
+            "mean": float(overlap.mean()),
+            "frac_gt_0.1": float(np.mean(overlap > 0.1)),
+        }
 
     results.update({
+        "rsa_model": rsa_model,
         "config": config_name, "n_verts": 59412, "n_boot": N_BOOTSTRAP,
-        "overlap_mean": float(overlap.mean()),
-        "overlap_frac_gt_0.1": float(np.mean(overlap > 0.1)),
+        "overlap": overlap_stats,
     })
-    json_path = os.path.join(results_dir, f"rsa_overlap_{config_name}.json")
+    json_path = os.path.join(results_dir, f"rsa_overlap_{rsa_model}_{config_name}.json")
     with open(json_path, "w") as fh:
         json.dump(results, fh, indent=2)
     log.info(f"  Results: {json_path}")
@@ -260,11 +273,11 @@ def run_group_average(args):
 
     if len(all_results) > 1:
         log.info("\n" + "=" * 60)
-        log.info("Summary — Spearman rho(product_map, rsa_joint):")
+        log.info("Summary — Spearman rho(integration_score, rsa_joint):")
         for cname, res in all_results.items():
-            rho   = res.get("rho_product_map_vs_rsa_joint", float("nan"))
-            ci_lo = res.get("ci_lo_product_map_vs_rsa_joint", float("nan"))
-            ci_hi = res.get("ci_hi_product_map_vs_rsa_joint", float("nan"))
+            rho   = res.get("rho_integration_vs_rsa_joint", float("nan"))
+            ci_lo = res.get("ci_lo_integration_vs_rsa_joint", float("nan"))
+            ci_hi = res.get("ci_hi_integration_vs_rsa_joint", float("nan"))
             log.info(f"  {cname:45s}  rho={rho:.4f}  [{ci_lo:.4f}, {ci_hi:.4f}]")
 
 

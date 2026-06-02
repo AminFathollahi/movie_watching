@@ -183,8 +183,8 @@ N_PERM_TFCE=5000   # sign-flip permutations for TFCE group-stats FWE correction
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
-    "pe-av-small-16-frame:av"
-    # "pe-av-small-16-frame:v,a,av"
+    # "pe-av-small-16-frame:av"
+    "pe-av-small-16-frame:v,a"
     # "audiomae:a"
     # "videomaev2-large:v"
     # "wavlm-large:a"
@@ -211,6 +211,12 @@ MODE=${1:-avg}
 METHOD_ARG=${2:-all}
 BATCH_SIZE=${3:-$DEFAULT_BATCH_SIZE}
 START_FROM=${4:-""}
+
+# Locate GNU parallel — prefer the copy inside the conda env so the script
+# works even when the caller's shell PATH doesn't include the env's bin dir.
+PARALLEL_BIN=$(conda run --no-capture-output -n "$CONDA_ENV" which parallel 2>/dev/null \
+               || command -v parallel 2>/dev/null \
+               || true)
 
 BIN_SEC_INT="${BIN_SEC%.*}"
 
@@ -317,7 +323,7 @@ _run_avg_one_model() {
         # Combined dscalar accumulating searchlight + Glasser maps for this
         # config; per-k path keeps separate k runs from overwriting each other.
         # Combined dscalar in the parent directory with the full name
-        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${METHOD}_maps.dscalar.nii"
+        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${METHOD}_maps.dscalar.nii"
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; then
             run_python "${SCRIPT_DIR}/run_searchlight.py" \
@@ -463,10 +469,10 @@ _run_one_subject() {
             # Combined dscalar accumulating searchlight + Glasser maps for this
             # subject/model/config; per-k path keeps separate k runs distinct.
             # Combined dscalar in the parent directory with the full name
-            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_maps.dscalar.nii"
+            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_maps.dscalar.nii"
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "searchlight" ]; then
                 # Update SL_OUT to include _searchlight
-                local SL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_searchlight.dscalar.nii"
+                local SL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}_${MOD}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_searchlight.dscalar.nii"
                 # Skip only when both the individual file and the combined file
                 # exist; the individual file alone implies the combined output
                 # still needs updating.
@@ -503,8 +509,8 @@ _run_one_subject() {
 
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "glasser" ]; then
                 # Combined dscalar in the parent directory with the full name
-                local GL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${GL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_glasser.dscalar.nii"
-                local GL_REPORT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}/${GL_CONFIG}/ranked_report.csv"
+                local GL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}_${MOD}/${GL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_glasser.dscalar.nii"
+                local GL_REPORT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}_${MOD}/${GL_CONFIG}/ranked_report.csv"
                 if [ -f "$GL_OUT" ] && [ -f "$GL_REPORT" ] && [ -f "$COMBINED_OUT" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: Glasser ${MODEL_NAME}/${MOD} already complete; skipping" \
                         | tee -a "$LOG"
@@ -762,8 +768,8 @@ run_precompute_neighbors() {
     export _RSA_K="$K"
     export _RSA_MIDTHICKNESS_DIR="$MIDTHICKNESS_DIR"
 
-    if command -v parallel &>/dev/null; then
-        echo "$SUBJECTS" | parallel --jobs "$BATCH_SIZE" --line-buffer \
+    if [ -n "$PARALLEL_BIN" ]; then
+        echo "$SUBJECTS" | "$PARALLEL_BIN" --jobs "$BATCH_SIZE" --line-buffer \
             _run_one_neighbors {}
     else
         log "GNU parallel not found — running sequentially"
@@ -828,8 +834,8 @@ run_persubject() {
     export _RSA_GEODESIC_CACHE_DIR="$GEODESIC_CACHE_DIR"
     export _RSA_N_JOBS="$N_JOBS_PER_SUBJECT"
 
-    if command -v parallel &>/dev/null; then
-        echo "$SUBJECTS" | parallel --jobs "$BATCH_SIZE" --line-buffer \
+    if [ -n "$PARALLEL_BIN" ]; then
+        echo "$SUBJECTS" | "$PARALLEL_BIN" --jobs "$BATCH_SIZE" --line-buffer \
             _run_one_subject {}
     else
         log "GNU parallel not found — running sequentially"
@@ -872,6 +878,7 @@ run_group_stats() {
                 --template-cifti  "$TEMPLATE_CIFTI" \
                 --left-surface    "$LEFT_SURFACE" \
                 --right-surface   "$RIGHT_SURFACE" \
+                --workbench       "$WORKBENCH" \
                 --n-permutations  "$N_PERM_TFCE" \
                 --n-jobs          "$N_CPUS"
         done

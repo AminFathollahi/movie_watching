@@ -53,7 +53,7 @@ If you use this pipeline, please cite:
 ## Environment
 
 ```bash
-conda activate movie   # cloned from vicsompy_av; torch 2.11+cu128, himalaya 0.3.5
+conda activate movie   # torch 2.11+cu128, himalaya 0.4.11
 ```
 
 Do not `pip install vicsompy` — direct import via `sys.path` is intentional.

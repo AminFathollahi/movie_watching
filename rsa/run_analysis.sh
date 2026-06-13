@@ -176,6 +176,7 @@ GEODESIC_CACHE_DIR="${OUTPUTS_BASE}/rsa/_geodesic_cache"
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
 BIN_SEC=5.0
+SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
 HRF=false
 METHOD="spearman"
 K=100
@@ -183,8 +184,13 @@ N_PERM_TFCE=5000   # sign-flip permutations for TFCE group-stats FWE correction
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
-    # "pe-av-small-16-frame:av"
-    "pe-av-small-16-frame:v,a"
+    "omni3b_layer35:av,a,v"
+    "omni3b_layer27:av,a,v"
+    "omni3b_layer18:av,a,v"
+    "omni3b_layer9:av,a,v"
+    "omni3b_layer1:av,a,v"
+    #"imagebind:a,v,av"
+    # "pe-av-small-16-frame:av,v,a,at,vt,avt,t"
     # "audiomae:a"
     # "videomaev2-large:v"
     # "wavlm-large:a"
@@ -219,6 +225,7 @@ PARALLEL_BIN=$(conda run --no-capture-output -n "$CONDA_ENV" which parallel 2>/d
                || true)
 
 BIN_SEC_INT="${BIN_SEC%.*}"
+SKIP_INT="${SKIP_SEC%.*}"
 
 N_CPUS=$(nproc 2>/dev/null || echo 8)
 
@@ -251,7 +258,7 @@ _hrf_flag() { [ "$HRF" = "true" ] && echo "--hrf" || echo ""; }
 
 _emb_exists() {
     local MODEL_NAME="$1" MOD="$2"
-    local EMB="${EMBEDDINGS_DIR}/${MODEL_NAME}/${BIN_SEC_INT}s/${MODEL_NAME}_${MOD}.npy"
+    local EMB="${EMBEDDINGS_DIR}/${MODEL_NAME}/bin${BIN_SEC_INT}s_skip${SKIP_INT}s/${MODEL_NAME}_${MOD}.npy"
     [ -f "$EMB" ]
 }
 
@@ -311,7 +318,7 @@ _run_avg_one_model() {
     IFS=',' read -ra MODS <<< "$MODALITIES_STR"
 
     local DELAY_INT="${DELAY_SEC%.*}"
-    local SL_CONFIG="k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_${METHOD}"
+    local SL_CONFIG="k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}"
 
     for MOD in "${MODS[@]}"; do
         if ! _emb_exists "$MODEL_NAME" "$MOD"; then
@@ -320,10 +327,7 @@ _run_avg_one_model() {
         fi
         log "  ${MODEL_NAME} / ${MOD}"
 
-        # Combined dscalar accumulating searchlight + Glasser maps for this
-        # config; per-k path keeps separate k runs from overwriting each other.
-        # Combined dscalar in the parent directory with the full name
-        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${METHOD}_maps.dscalar.nii"
+        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_maps.dscalar.nii"
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; then
             run_python "${SCRIPT_DIR}/run_searchlight.py" \
@@ -338,6 +342,7 @@ _run_avg_one_model() {
                 --modality           "$MOD" \
                 --k                  "$K" \
                 --bin-sec            "$BIN_SEC" \
+                --skip-sec           "$SKIP_SEC" \
                 --delay-sec          "$DELAY_SEC" \
                 --method             "$METHOD" \
                 --tr                 "$TR" \
@@ -362,6 +367,7 @@ _run_avg_one_model() {
                 --model            "$MODEL_NAME" \
                 --modality         "$MOD" \
                 --bin-sec          "$BIN_SEC" \
+                --skip-sec         "$SKIP_SEC" \
                 --delay-sec        "$DELAY_SEC" \
                 --method           "$METHOD" \
                 --tr               "$TR" \
@@ -393,7 +399,8 @@ _run_one_subject() {
     local SUB="$1"
 
     local BIN_SEC_INT="${_RSA_BIN_SEC%.*}"
-    local LOG_DIR="${_RSA_OUTPUT_DIR}/${SUB}"
+    local SKIP_INT="${_RSA_SKIP_SEC%.*}"
+    local LOG_DIR="${_RSA_OUTPUT_DIR}/subject_data/${SUB}"
     mkdir -p "$LOG_DIR"
     local LOG="${LOG_DIR}/pipeline.log"
 
@@ -413,8 +420,8 @@ _run_one_subject() {
     [ "$_RSA_STREAM" = "false" ] && FMRI_TAG_LOCAL="$_RSA_FMRI_SUFFIX"
 
     local DELAY_INT="${_RSA_DELAY_SEC%.*}"
-    local SL_CONFIG="k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_${_RSA_METHOD}"
-    local GL_CONFIG="delay${DELAY_INT}s_bin${BIN_SEC_INT}s_${_RSA_METHOD}"
+    local SL_CONFIG="k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}"
+    local GL_CONFIG="delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}"
 
     # Per-subject midthickness (fall back to group-average if unavailable).
     local LEFT_SURF="$_RSA_LEFT_SURFACE"
@@ -459,23 +466,17 @@ _run_one_subject() {
         IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
 
         for MOD in "${MODS[@]}"; do
-            local EMB="${_RSA_EMBEDDINGS_DIR}/${MODEL_NAME}/${BIN_SEC_INT}s/${MODEL_NAME}_${MOD}.npy"
+            local EMB="${_RSA_EMBEDDINGS_DIR}/${MODEL_NAME}/bin${BIN_SEC_INT}s_skip${SKIP_INT}s/${MODEL_NAME}_${MOD}.npy"
             if [ ! -f "$EMB" ]; then
                 echo "[$(date +%H:%M:%S)] ${SUB}: skip ${MODEL_NAME}/${MOD}: embedding not found" \
                     | tee -a "$LOG"
                 continue
             fi
 
-            # Combined dscalar accumulating searchlight + Glasser maps for this
-            # subject/model/config; per-k path keeps separate k runs distinct.
-            # Combined dscalar in the parent directory with the full name
-            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_maps.dscalar.nii"
+            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}_maps.dscalar.nii"
+
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "searchlight" ]; then
-                # Update SL_OUT to include _searchlight
-                local SL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}_${MOD}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_searchlight.dscalar.nii"
-                # Skip only when both the individual file and the combined file
-                # exist; the individual file alone implies the combined output
-                # still needs updating.
+                local SL_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}_searchlight.npy"
                 if [ -f "$SL_OUT" ] && [ -f "$COMBINED_OUT" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: searchlight ${MODEL_NAME}/${MOD} already complete; skipping" \
                         | tee -a "$LOG"
@@ -493,6 +494,7 @@ _run_one_subject() {
                         --modality           "$MOD" \
                         --k                  "$_RSA_K" \
                         --bin-sec            "$_RSA_BIN_SEC" \
+                        --skip-sec           "$_RSA_SKIP_SEC" \
                         --delay-sec          "$_RSA_DELAY_SEC" \
                         --method             "$_RSA_METHOD" \
                         --tr                 "$_RSA_TR" \
@@ -508,10 +510,8 @@ _run_one_subject() {
             fi
 
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "glasser" ]; then
-                # Combined dscalar in the parent directory with the full name
-                local GL_OUT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}_${MOD}/${GL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_delay${DELAY_INT}s_bin${BIN_SEC_INT}_${_RSA_METHOD}_glasser.dscalar.nii"
-                local GL_REPORT="${_RSA_OUTPUT_DIR}/${SUB}/${MODEL_NAME}_${MOD}/${GL_CONFIG}/ranked_report.csv"
-                if [ -f "$GL_OUT" ] && [ -f "$GL_REPORT" ] && [ -f "$COMBINED_OUT" ]; then
+                local GL_REPORT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/${GL_CONFIG}/ranked_report.csv"
+                if [ -f "$GL_REPORT" ] && [ -f "$COMBINED_OUT" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: Glasser ${MODEL_NAME}/${MOD} already complete; skipping" \
                         | tee -a "$LOG"
                 else
@@ -527,6 +527,7 @@ _run_one_subject() {
                         --model            "$MODEL_NAME" \
                         --modality         "$MOD" \
                         --bin-sec          "$_RSA_BIN_SEC" \
+                        --skip-sec         "$_RSA_SKIP_SEC" \
                         --delay-sec        "$_RSA_DELAY_SEC" \
                         --method           "$_RSA_METHOD" \
                         --tr               "$_RSA_TR" \
@@ -614,7 +615,7 @@ _run_one_neighbors() {
         return 0
     fi
 
-    local LOG_DIR="${_RSA_OUTPUT_DIR}/${SUB}"
+    local LOG_DIR="${_RSA_OUTPUT_DIR}/subject_data/${SUB}"
     mkdir -p "$LOG_DIR"
     local LOG="${LOG_DIR}/neighbors.log"
 
@@ -819,6 +820,7 @@ run_persubject() {
     export _RSA_WORKBENCH="$WORKBENCH"
     export _RSA_MODELS_STR="$MODELS_STR"
     export _RSA_BIN_SEC="$BIN_SEC"
+    export _RSA_SKIP_SEC="$SKIP_SEC"
     export _RSA_DELAY_SEC="$DELAY_SEC"
     export _RSA_TR="$TR"
     export _RSA_K="$K"
@@ -872,6 +874,7 @@ run_group_stats() {
                 --modality        "$MOD" \
                 --k               "$K" \
                 --bin-sec         "$BIN_SEC" \
+                --skip-sec        "$SKIP_SEC" \
                 --delay-sec       "$DELAY_SEC" \
                 --method          "$METHOD" \
                 --fmri-tag        "$PREPROCESSING_FLAG" \
@@ -901,7 +904,6 @@ case "$MODE" in
     *)
         echo "Unknown mode: $MODE" >&2
         echo "Use: preprocess | avg | neighbors_avg | neighbors | persubject | groupstats | all" >&2
-        exit 1 ;;
+        exit 1 ;
 esac
-
 log "All RSA analyses complete."

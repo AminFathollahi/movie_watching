@@ -75,7 +75,8 @@ def load_fmri_cifti(cifti_path: str) -> np.ndarray:
 
 def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
                     run_trs: np.ndarray, bin_sec: float, tr: float,
-                    delay_sec: float = 0.0) -> np.ndarray:
+                    delay_sec: float = 0.0,
+                    skip_sec: float = None) -> np.ndarray:
     """Bin and z-score fMRI data to match model embeddings.
 
     Parameters
@@ -93,12 +94,17 @@ def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
     bin_sec         : temporal bin width in seconds
     tr              : repetition time in seconds
     delay_sec       : haemodynamic shift applied to onset_sec (default 0)
+    skip_sec        : window stride in seconds (default: bin_sec, i.e., no overlap).
+                      Set skip_sec < bin_sec for overlapping windows.
 
     Returns
     -------
-    (total_bins, n_vertices) float32 — binned + per-run z-scored fMRI
+    (total_windows, n_vertices) float32 — windowed + per-run z-scored fMRI
     """
-    bin_trs = max(1, int(np.round(bin_sec / tr)))
+    if skip_sec is None:
+        skip_sec = bin_sec
+    bin_trs  = max(1, int(np.round(bin_sec  / tr)))
+    skip_trs = max(1, int(np.round(skip_sec / tr)))
     run_col = ('run' if 'run' in timing_df.columns
                else ('run_id' if 'run_id' in timing_df.columns else None))
 
@@ -121,31 +127,30 @@ def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
 
         run_segments = []
         for _, row in run_df.iterrows():
-            # 1. Match the segmentation script's floor logic
-            expected_bins = int(np.floor(row["duration_sec"] / bin_sec))
-            if expected_bins == 0:
+            dur = row["duration_sec"]
+            # Number of complete windows: floor((dur - bin_sec) / skip_sec) + 1
+            # Equivalent to floor(dur / bin_sec) when skip_sec == bin_sec.
+            n_wins = (max(0, int(np.floor((dur - bin_sec) / skip_sec)) + 1)
+                      if dur >= bin_sec else 0)
+            if n_wins == 0:
                 continue
 
-            # 2. Convert global onset → within-run TR, then apply haemodynamic delay
             within_run_onset = row["onset_sec"] - run_start_sec
             start_tr = int(np.round((within_run_onset + delay_sec) / tr))
-            end_tr = start_tr + (expected_bins * bin_trs)
 
-            # 3. Handle run boundary cutoffs
             if start_tr >= run_tr_count or start_tr < 0:
                 continue
-            if end_tr > run_tr_count:
-                # Recalculate how many full bins actually fit before the run ends
-                expected_bins = (run_tr_count - start_tr) // bin_trs
-                end_tr = start_tr + (expected_bins * bin_trs)
-                if expected_bins == 0:
-                    continue
 
-            seg = run_data[:, start_tr:end_tr]
+            windows = []
+            for i in range(n_wins):
+                w_start = start_tr + i * skip_trs
+                w_end   = w_start + bin_trs
+                if w_start >= run_tr_count or w_end > run_tr_count:
+                    break  # drop windows that exceed run boundary
+                windows.append(run_data[:, w_start:w_end].mean(axis=1))
 
-            binned = (seg.reshape(run_data.shape[0], expected_bins, bin_trs)
-                         .mean(axis=2).T)
-            run_segments.append(binned)
+            if windows:
+                run_segments.append(np.stack(windows, axis=0))  # (n_wins, n_verts)
 
         if run_segments:
             run_binned_concat = np.concatenate(run_segments, axis=0).astype(np.float32)
@@ -158,12 +163,13 @@ def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
 def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
                              bin_sec: float, tr: float,
                              run_trs: np.ndarray, delay_sec: float = 0.0,
-                             hrf: bool = False) -> np.ndarray:
+                             hrf: bool = False,
+                             skip_sec: float = None) -> np.ndarray:
     """Load and align model embeddings to the fMRI binning scheme.
 
     Parameters
     ----------
-    emb_path  : path to .npy embedding file (total_bins × n_features)
+    emb_path  : path to .npy embedding file (total_windows × n_features)
     timing_df : same DataFrame as passed to preprocess_fmri — must be consistent.
                 onset_sec is GLOBAL time (cumulative across runs). Same format
                 as /data/HCP Data/movie_timing.csv.
@@ -174,14 +180,20 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
     hrf       : if True, convolve each segment with the SPM canonical HRF at
                 bin_sec resolution. Use with delay_sec=0 (the convolution replaces
                 the boxcar delay). Matches encoding's build_embedding_arrays behaviour.
+    skip_sec  : window stride in seconds (default: bin_sec, i.e., no overlap).
+                Must match the skip_sec used to segment the stimulus and passed
+                to preprocess_fmri so brain and model window counts stay aligned.
 
     Returns
     -------
-    (total_bins, n_features) float32 — binned + per-run z-scored embeddings
+    (total_windows, n_features) float32 — windowed + per-run z-scored embeddings
     """
+    if skip_sec is None:
+        skip_sec = bin_sec
     embeddings = np.load(emb_path)
     hrf_kernel = spm_hrf(bin_sec) if hrf else None
-    bin_trs = max(1, int(np.round(bin_sec / tr)))
+    bin_trs  = max(1, int(np.round(bin_sec  / tr)))
+    skip_trs = max(1, int(np.round(skip_sec / tr)))
     run_col = ('run' if 'run' in timing_df.columns
                else ('run_id' if 'run_id' in timing_df.columns else None))
 
@@ -201,30 +213,34 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
         run_start_sec = float(np.sum(run_trs[:run_idx])) * tr
 
         for _, row in run_df.iterrows():
-            # 1. Base bins from segmentation math
-            base_bins = int(np.floor(row["duration_sec"] / bin_sec))
+            dur = row["duration_sec"]
+            # Base window count from clip duration (mirrors segmentation formula)
+            base_wins = (max(0, int(np.floor((dur - bin_sec) / skip_sec)) + 1)
+                         if dur >= bin_sec else 0)
 
-            # 2. Mirror fMRI boundary truncation exactly (global → within-run)
+            # Mirror preprocess_fmri boundary truncation exactly
             within_run_onset = row["onset_sec"] - run_start_sec
             start_tr = int(np.round((within_run_onset + delay_sec) / tr))
-            end_tr = start_tr + (base_bins * bin_trs)
 
-            final_bins = base_bins
-            if start_tr >= run_tr_count or start_tr < 0:
-                final_bins = 0
-            elif end_tr > run_tr_count:
-                final_bins = (run_tr_count - start_tr) // bin_trs
+            final_wins = 0
+            if 0 <= start_tr < run_tr_count:
+                for i in range(base_wins):
+                    w_start = start_tr + i * skip_trs
+                    w_end   = w_start + bin_trs
+                    if w_start >= run_tr_count or w_end > run_tr_count:
+                        break
+                    final_wins += 1
 
-            # 3. Extract from embeddings using the original base_bins for the index counter
-            # (The .npy file always has the full clip — advance seg_idx by base_bins
-            # even when only final_bins are used, so the index stays aligned.)
-            if final_bins > 0:
-                seg = embeddings[seg_idx : seg_idx + final_bins].astype(np.float64)
+            # Extract from embeddings; always advance seg_idx by base_wins so
+            # the pointer stays aligned with the .npy file (which has the full
+            # clip count, regardless of run boundary truncation).
+            if final_wins > 0:
+                seg = embeddings[seg_idx : seg_idx + final_wins].astype(np.float64)
                 if hrf_kernel is not None:
                     seg = _apply_hrf_to_segment(seg, hrf_kernel)
                 run_segments.append(seg)
 
-            seg_idx += base_bins
+            seg_idx += base_wins
 
         if run_segments:
             run_emb_concat = np.concatenate(run_segments, axis=0)
@@ -283,7 +299,7 @@ def align_and_assert_bins(fmri_binned: np.ndarray, model_binned: np.ndarray) -> 
     """
     f_bins = fmri_binned.shape[0]
     m_bins = model_binned.shape[0]
-    
+
     if f_bins != m_bins:
         raise AssertionError(
             f"CRITICAL ALIGNMENT ERROR: Bin counts do not match!\n"
@@ -292,6 +308,77 @@ def align_and_assert_bins(fmri_binned: np.ndarray, model_binned: np.ndarray) -> 
             f"Check delay_sec overlapping run boundaries or missing TRs."
         )
     return fmri_binned, model_binned
+
+
+def assert_segment_timing(timing_df: pd.DataFrame, bin_sec: float, tr: float,
+                           delay_sec: float = 0.0, skip_sec: float = None,
+                           run_trs: np.ndarray = None) -> None:
+    """Verify that model segment windows and fMRI extraction windows are aligned.
+
+    For each clip in timing_df, logs the expected model start/end times
+    (based on onset_sec and skip_sec stride) and the corresponding fMRI TRs
+    (onset + delay). Raises AssertionError if any window would fall outside
+    its run boundary.
+
+    Parameters
+    ----------
+    timing_df : same DataFrame passed to preprocess_fmri / process_model_embeddings
+    bin_sec   : temporal bin width in seconds
+    tr        : repetition time in seconds
+    delay_sec : haemodynamic shift applied to fMRI onset (default 0)
+    skip_sec  : window stride in seconds (default: bin_sec)
+    run_trs   : (n_runs,) int — TRs per run; if None, boundary checks are skipped
+    """
+    if skip_sec is None:
+        skip_sec = bin_sec
+    bin_trs  = max(1, int(np.round(bin_sec  / tr)))
+    skip_trs = max(1, int(np.round(skip_sec / tr)))
+    run_col  = ('run' if 'run' in timing_df.columns
+                else ('run_id' if 'run_id' in timing_df.columns else None))
+
+    log.info(
+        f"Segment alignment check: bin={bin_sec}s skip={skip_sec}s delay={delay_sec}s"
+    )
+
+    if run_col is None:
+        groups = [(None, timing_df)]
+    else:
+        groups = list(timing_df.groupby(run_col, sort=False))
+
+    errors = []
+    for run_idx, (run_id, run_df) in enumerate(groups):
+        run_tr_count = int(run_trs[run_idx]) if run_trs is not None else None
+        run_start_sec = (float(np.sum(run_trs[:run_idx])) * tr
+                         if run_trs is not None else 0.0)
+        for _, row in run_df.iterrows():
+            dur = row["duration_sec"]
+            n_wins = (max(0, int(np.floor((dur - bin_sec) / skip_sec)) + 1)
+                      if dur >= bin_sec else 0)
+            if n_wins == 0:
+                continue
+            within_run_onset = row["onset_sec"] - run_start_sec
+            fmri_start_tr = int(np.round((within_run_onset + delay_sec) / tr))
+            for i in range(n_wins):
+                w_start_tr = fmri_start_tr + i * skip_trs
+                w_end_tr   = w_start_tr + bin_trs
+                model_t0   = row["onset_sec"] + i * skip_sec
+                model_t1   = model_t0 + bin_sec
+                fmri_t0    = within_run_onset + delay_sec + i * skip_sec
+                fmri_t1    = fmri_t0 + bin_sec
+                if run_tr_count is not None and w_end_tr > run_tr_count:
+                    errors.append(
+                        f"  run={run_id} clip={row.get('video_id', '?')} win={i}: "
+                        f"fMRI TRs [{w_start_tr},{w_end_tr}) exceed run ({run_tr_count} TRs)"
+                    )
+                log.debug(
+                    f"  run={run_id} win={i}: model=[{model_t0:.2f},{model_t1:.2f}]s "
+                    f"fMRI=[{fmri_t0:.2f},{fmri_t1:.2f}]s (TRs [{w_start_tr},{w_end_tr}))"
+                )
+    if errors:
+        raise AssertionError(
+            "Segment timing alignment errors:\n" + "\n".join(errors)
+        )
+    log.info("  Segment timing OK — all windows within run boundaries.")
 
 
 # =============================================================================

@@ -58,7 +58,8 @@ def spm_hrf(tr: float, oversampling: int = 16) -> np.ndarray:
 
 def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
                          test_video_ids: list, bin_sec: float, tr: float,
-                         run_trs: np.ndarray, delay_sec: float = 0.0) -> tuple:
+                         run_trs: np.ndarray, delay_sec: float = 0.0,
+                         skip_sec: float = None) -> tuple:
     """Extract movie segments from continuous fMRI, z-score per run, bin, split.
 
     Uses global onset_sec from timing_df (same convention as rsa_utils.preprocess_fmri):
@@ -69,23 +70,27 @@ def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
     bins from the same run to avoid data leakage.
 
     Args:
-        fmri         : (n_vertices, T_total) float32 — full continuous preprocessed signal
-        timing_df    : DataFrame with columns: video_id, onset_sec (global), duration_sec, run_id
+        fmri          : (n_vertices, T_total) float32 — full continuous preprocessed signal
+        timing_df     : DataFrame with columns: video_id, onset_sec (global), duration_sec, run_id
         test_video_ids: list[str] — video IDs held out for test set
-        bin_sec      : float — temporal bin size in seconds
-        tr           : float — TR in seconds
-        run_trs      : (n_runs,) int — TRs per run (from preprocess_individual run_trs.npy)
-        delay_sec    : float — haemodynamic shift applied to onset_sec (default 0;
-                       apply pre-delay in preprocess_individual or pass here)
+        bin_sec       : float — temporal bin size in seconds
+        tr            : float — TR in seconds
+        run_trs       : (n_runs,) int — TRs per run (from preprocess_individual run_trs.npy)
+        delay_sec     : float — haemodynamic shift applied to onset_sec (default 0;
+                        apply pre-delay in preprocess_individual or pass here)
+        skip_sec      : float — window stride in seconds (default: bin_sec, no overlap)
 
     Returns:
         Y_train    : (n_train_bins, n_vertices) float32
         Y_test     : (n_test_bins, n_vertices) float32
         run_onsets : list[int] — training run onset bin indices for LORO-CV
     """
-    bin_trs   = max(1, int(np.round(bin_sec / tr)))
-    run_col   = 'run_id' if 'run_id' in timing_df.columns else 'run'
-    n_verts   = fmri.shape[0]
+    if skip_sec is None:
+        skip_sec = bin_sec
+    bin_trs  = max(1, int(np.round(bin_sec  / tr)))
+    skip_trs = max(1, int(np.round(skip_sec / tr)))
+    run_col  = 'run_id' if 'run_id' in timing_df.columns else 'run'
+    n_verts  = fmri.shape[0]
 
     train_segs   = []
     test_segs    = []
@@ -106,21 +111,26 @@ def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
 
         for _, row in run_df.iterrows():
             vid_id = str(row["video_id"])
+            dur    = row["duration_sec"]
             within_run_onset = row["onset_sec"] - run_start_sec
             start_tr = int(np.round((within_run_onset + delay_sec) / tr))
-            n_bins   = int(np.floor(row["duration_sec"] / bin_sec))
-            if n_bins == 0 or start_tr < 0 or start_tr >= run_tr_count:
-                continue
-            end_tr = start_tr + n_bins * bin_trs
-            if end_tr > run_tr_count:
-                n_bins = (run_tr_count - start_tr) // bin_trs
-                end_tr = start_tr + n_bins * bin_trs
-                if n_bins == 0:
-                    continue
 
-            seg    = run_data[:, start_tr:end_tr]          # (n_verts, n_bins*bin_trs)
-            binned = (seg.reshape(n_verts, n_bins, bin_trs)
-                        .mean(axis=2).T)                   # (n_bins, n_verts)
+            n_wins = (max(0, int(np.floor((dur - bin_sec) / skip_sec)) + 1)
+                      if dur >= bin_sec else 0)
+            if n_wins == 0 or start_tr < 0 or start_tr >= run_tr_count:
+                continue
+
+            windows = []
+            for i in range(n_wins):
+                w_start = start_tr + i * skip_trs
+                w_end   = w_start + bin_trs
+                if w_start >= run_tr_count or w_end > run_tr_count:
+                    break
+                windows.append(run_data[:, w_start:w_end].mean(axis=1))
+
+            if not windows:
+                continue
+            binned = np.stack(windows, axis=0)  # (n_wins, n_verts)
 
             if vid_id in test_video_ids:
                 run_test_segs.append(binned)
@@ -156,7 +166,8 @@ def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
 def build_fmri_arrays(cifti_path: str, run_trs_path: str,
                        timing_df: pd.DataFrame,
                        test_video_ids: list, bin_sec: float, tr: float,
-                       delay_sec: float = 0.0) -> tuple:
+                       delay_sec: float = 0.0,
+                       skip_sec: float = None) -> tuple:
     """Load continuous preprocessed CIFTI and build binned train/test arrays.
 
     Loads the full-run CIFTI (all 4 runs concatenated) produced by
@@ -171,6 +182,7 @@ def build_fmri_arrays(cifti_path: str, run_trs_path: str,
         bin_sec       : float — temporal bin size in seconds
         tr            : float — TR in seconds
         delay_sec     : float — haemodynamic delay to apply (default 0)
+        skip_sec      : float — window stride in seconds (default: bin_sec, no overlap)
 
     Returns:
         Y_train    : (n_train_bins, n_vertices) float32
@@ -181,7 +193,7 @@ def build_fmri_arrays(cifti_path: str, run_trs_path: str,
     fmri = img.get_fdata(dtype=np.float32).T   # (n_vertices, T_total)
     run_trs = np.load(run_trs_path)
     return _bin_and_split_fmri(fmri, timing_df, test_video_ids,
-                                bin_sec, tr, run_trs, delay_sec)
+                                bin_sec, tr, run_trs, delay_sec, skip_sec)
 
 
 # =============================================================================
@@ -208,25 +220,30 @@ def apply_hrf_to_segment(segment: np.ndarray, hrf_kernel: np.ndarray) -> np.ndar
 
 def build_embedding_arrays(emb_path: str, timing_df: pd.DataFrame,
                             test_video_ids: list, bin_sec: float,
-                            hrf: bool, normalize: bool) -> tuple:
+                            hrf: bool, normalize: bool,
+                            skip_sec: float = None) -> tuple:
     """Load and process model embeddings to produce train/test design matrices.
 
-    Embeddings are pre-computed at bin_sec resolution. The hemodynamic delay is
-    handled at fMRI preprocessing time. When hrf=True, the fMRI was preprocessed
-    with --delay-sec 0 and embeddings are convolved with the SPM HRF kernel.
+    Embeddings are pre-computed at bin_sec resolution with skip_sec stride.
+    The hemodynamic delay is handled at fMRI preprocessing time. When hrf=True,
+    the fMRI was preprocessed with --delay-sec 0 and embeddings are convolved
+    with the SPM HRF kernel.
 
     Args:
-        emb_path: str — path to .npy embedding file, shape (n_total_bins, n_features)
-        timing_df: pd.DataFrame — with video_id, duration_sec, run_id
+        emb_path      : str — path to .npy embedding file, shape (n_total_bins, n_features)
+        timing_df     : pd.DataFrame — with video_id, duration_sec, run_id
         test_video_ids: list[str]
-        bin_sec: float — temporal bin size in seconds
-        hrf: bool — convolve with SPM HRF (use when fMRI preprocessed with delay=0)
-        normalize: bool — per-run z-score of training embeddings
+        bin_sec       : float — temporal bin size in seconds
+        hrf           : bool — convolve with SPM HRF (use when fMRI preprocessed with delay=0)
+        normalize     : bool — per-run z-score of training embeddings
+        skip_sec      : float — window stride in seconds (default: bin_sec, no overlap)
 
     Returns:
         X_train: (n_train_bins, n_features) float32
         X_test: (n_test_bins, n_features) float32
     """
+    if skip_sec is None:
+        skip_sec = bin_sec
     embeddings = np.load(emb_path).astype(np.float64)
     hrf_kernel = spm_hrf(bin_sec) if hrf else None
 
@@ -239,10 +256,15 @@ def build_embedding_arrays(emb_path: str, timing_df: pd.DataFrame,
     for _, row in timing_df.iterrows():
         vid_id = str(row["video_id"])
         run_id = row["run_id"]
-        n_bins = int(round(row["duration_sec"] / bin_sec))
+        dur    = row["duration_sec"]
+        n_wins = (max(0, int(np.floor((dur - bin_sec) / skip_sec)) + 1)
+                  if dur >= bin_sec else 0)
 
-        seg = embeddings[seg_idx: seg_idx + n_bins].copy()
-        seg_idx += n_bins
+        seg = embeddings[seg_idx: seg_idx + n_wins].copy()
+        seg_idx += n_wins
+
+        if n_wins == 0:
+            continue
 
         if hrf and hrf_kernel is not None:
             seg = apply_hrf_to_segment(seg, hrf_kernel)
@@ -357,21 +379,29 @@ def run_encoding_model(X_train: np.ndarray, Y_train: np.ndarray,
     if backend == "torch_cuda" and not _torch.cuda.is_available():
         log.warning("CUDA not available — falling back to torch backend")
         backend = "torch"
-    backend_obj = set_backend(backend, on_error="warn")
+    set_backend(backend, on_error="warn")
 
     cv_splitter = make_loro_splitter(len(Y_train), run_onsets)
-
-    y_in_cpu = backend != "numpy"
-    model = RidgeCV(alphas=alphas, cv=cv_splitter, solver="svd", Y_in_cpu=y_in_cpu)
-
+    # Y_in_cpu keeps Y in RAM; himalaya moves 2000-vertex batches to GPU at a
+    # time so the refit tensor (n_unique_alphas, n_features, 2000) stays small.
+    # Per-vertex alpha selection is unchanged — only the memory layout differs.
+    model = RidgeCV(
+        alphas=alphas,
+        cv=cv_splitter,
+        solver="svd",
+        Y_in_cpu=True,
+        solver_params={
+            "n_targets_batch": 2000,
+            "n_targets_batch_refit": 2000,
+        },
+    )
     log.info(f"  Fitting RidgeCV: X_train={X_train.shape}, Y_train={Y_train.shape} "
-             f"(backend={backend}, Y_in_cpu={y_in_cpu})")
+             f"(backend={backend}, per-vertex alpha, Y_in_cpu, batch=2000)")
     model.fit(X_train, Y_train)
 
     log.info("  Predicting on test set ...")
     Y_hat = model.predict(X_test)
-
-    if hasattr(Y_hat, 'cpu'):
+    if hasattr(Y_hat, "cpu"):
         Y_hat = Y_hat.cpu().numpy()
     Y_hat = _np.asarray(Y_hat, dtype=np.float32)
     Y_test = _np.asarray(Y_test, dtype=np.float32)

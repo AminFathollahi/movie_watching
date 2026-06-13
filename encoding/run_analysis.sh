@@ -13,8 +13,10 @@
 #                            group-average CIFTI → PREPROCESSED_DIR
 #                            Respects SG_FILTER/PSC/GSR flags and resumes.
 #               avg          Group-average encoding model (default)
-#               persubject   Per-subject encoding → (no group-stats step yet)
-#               all          avg + persubject
+#               persubject   Per-subject encoding
+#               groupstats   Group-level statistics: t-test + TFCE + FDR on
+#                            per-subject r maps → group_stats/ subdir
+#               all          avg + persubject + groupstats
 #
 #   BATCH_SIZE  N            Parallel subjects (default 8)
 #   START_FROM  SUBID        Resume per-subject from this subject ID
@@ -99,7 +101,7 @@ SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 TIMING_CSV="${DATA_BASE}/movie_timing.csv"
 
 # Embeddings root
-# Convention: {EMBEDDINGS_DIR}/{model_name}/{bin_sec}s/{model_name}_{modality}.npy
+# Convention: {EMBEDDINGS_DIR}/{model_name}/bin{B}s_skip{S}s/{model_name}_{modality}.npy
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
 
 # CIFTI template (59k grayordinate space).
@@ -116,6 +118,7 @@ OUTPUT_DIR="${OUTPUTS_BASE}/encoding"
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
 BIN_SEC=5.0
+SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
 HRF=false       # true → SPM HRF convolution; false → boxcar delay
 NORMALIZE=true  # per-run z-score normalization of embeddings
 
@@ -124,9 +127,9 @@ ALPHA_MIN=-2
 ALPHA_MAX=9
 N_ALPHAS=23
 
-# ── himalaya backend ───────────────────────────────────────────────────────
-# torch_cuda uses GPU if CUDA is available (auto-detected); falls back to torch.
-# Use "numpy" for CPU-only (slower but no GPU memory required).
+# ── Backend ───────────────────────────────────────────────────────────────
+# torch_cuda: GPU-accelerated (requires himalaya ≥0.4.11 — older versions
+# have a device-mismatch bug when n_samples < n_features)
 BACKEND="torch_cuda"
 
 TEST_VIDEO_IDS="video5,video9,video14,video18"
@@ -135,8 +138,11 @@ TEST_VIDEO_IDS="video5,video9,video14,video18"
 # Format: "model_name:modalities"
 MODELS=(
     "pe-av-small-16-frame:v,a,av"
-    "pe-av-base:v,a,av"
-    "pe-av-large:v,a,av"
+    "omni3b_layer35:av,a,v"
+    "omni3b_layer27:av,a,v"
+    "omni3b_layer18:av,a,v"
+    # "pe-av-base:v,a,av"
+    # "pe-av-large:v,a,av"
     "cav-mae-sync:v,a,av"
     "audiomae:a"
     "videomaev2-large:v"
@@ -155,6 +161,7 @@ BATCH_SIZE=${2:-$DEFAULT_BATCH_SIZE}
 START_FROM=${3:-""}
 
 BIN_SEC_INT="${BIN_SEC%.*}"
+SKIP_INT="${SKIP_SEC%.*}"
 
 N_CPUS=$(nproc 2>/dev/null || echo 8)
 N_JOBS_PER_SUBJECT=$(( N_CPUS / BATCH_SIZE ))
@@ -178,7 +185,7 @@ _normalize_flag() { [ "$NORMALIZE" = "true" ] && echo "--normalize" || echo ""; 
 
 _emb_exists() {
     local MODEL_NAME="$1" MOD="$2"
-    [ -f "${EMBEDDINGS_DIR}/${MODEL_NAME}/${BIN_SEC_INT}s/${MODEL_NAME}_${MOD}.npy" ]
+    [ -f "${EMBEDDINGS_DIR}/${MODEL_NAME}/bin${BIN_SEC_INT}s_skip${SKIP_INT}s/${MODEL_NAME}_${MOD}.npy" ]
 }
 
 # =============================================================================
@@ -246,6 +253,7 @@ run_avg() {
                 --model            "$MODEL_NAME" \
                 --modality         "$MOD" \
                 --bin-sec          "$BIN_SEC" \
+                --skip-sec         "$SKIP_SEC" \
                 --delay-sec        "$DELAY_SEC" \
                 --tr               "$TR" \
                 --alpha-min        "$ALPHA_MIN" \
@@ -272,6 +280,7 @@ _run_one_subject() {
     local SUB="$1"
 
     local BIN_SEC_INT="${_ENC_BIN_SEC%.*}"
+    local SKIP_INT="${_ENC_SKIP_SEC%.*}"
     local LOG_DIR="${_ENC_OUTPUT_DIR}/${SUB}"
     mkdir -p "$LOG_DIR"
     local LOG="${LOG_DIR}/pipeline.log"
@@ -306,7 +315,7 @@ _run_one_subject() {
         IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
 
         for MOD in "${MODS[@]}"; do
-            local EMB="${_ENC_EMBEDDINGS_DIR}/${MODEL_NAME}/${BIN_SEC_INT}s/${MODEL_NAME}_${MOD}.npy"
+            local EMB="${_ENC_EMBEDDINGS_DIR}/${MODEL_NAME}/bin${BIN_SEC_INT}s_skip${SKIP_INT}s/${MODEL_NAME}_${MOD}.npy"
             if [ ! -f "$EMB" ]; then
                 echo "[$(date +%H:%M:%S)] ${SUB}: SKIP ${MODEL_NAME}/${MOD} — no embedding" \
                     | tee -a "$LOG"
@@ -325,6 +334,7 @@ _run_one_subject() {
                 --model          "$MODEL_NAME" \
                 --modality       "$MOD" \
                 --bin-sec        "$_ENC_BIN_SEC" \
+                --skip-sec       "$_ENC_SKIP_SEC" \
                 --delay-sec      "$_ENC_DELAY_SEC" \
                 --tr             "$_ENC_TR" \
                 --alpha-min      "$_ENC_ALPHA_MIN" \
@@ -376,6 +386,7 @@ run_persubject() {
     export _ENC_TEMPLATE_CIFTI="$TEMPLATE_CIFTI"
     export _ENC_MODELS_STR="$MODELS_STR"
     export _ENC_BIN_SEC="$BIN_SEC"
+    export _ENC_SKIP_SEC="$SKIP_SEC"
     export _ENC_DELAY_SEC="$DELAY_SEC"
     export _ENC_TR="$TR"
     export _ENC_ALPHA_MIN="$ALPHA_MIN"
@@ -407,16 +418,58 @@ run_persubject() {
 }
 
 # =============================================================================
+# GROUP STATS PIPELINE
+# =============================================================================
+run_groupstats() {
+    log "=== Group-level encoding statistics (${#MODELS[@]} models) ==="
+
+    local LEFT_SURF="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
+    local RIGHT_SURF="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
+    local WORKBENCH="/opt/workbench/bin_linux64/wb_command"
+    [ ! -f "$WORKBENCH" ] && WORKBENCH=""
+
+    local HRF_FLAG="";  [ "$HRF"       = "true" ] && HRF_FLAG="--hrf"
+    local NORM_FLAG=""; [ "$NORMALIZE" = "true" ] && NORM_FLAG="--normalize"
+
+    for MODEL_ENTRY in "${MODELS[@]}"; do
+        IFS=':' read -r MODEL_NAME MODALITIES_STR <<< "$MODEL_ENTRY"
+        IFS=',' read -ra MODS <<< "$MODALITIES_STR"
+
+        for MOD in "${MODS[@]}"; do
+            log "  Group stats: ${MODEL_NAME} / ${MOD}"
+
+            run_python "${SCRIPT_DIR}/run_group_stats.py" \
+                --output-dir      "$OUTPUT_DIR" \
+                --model           "$MODEL_NAME" \
+                --modality        "$MOD" \
+                --bin-sec         "$BIN_SEC" \
+                --skip-sec        "$SKIP_SEC" \
+                --delay-sec       "$DELAY_SEC" \
+                --template-cifti  "$TEMPLATE_CIFTI" \
+                --left-surface    "$LEFT_SURF" \
+                --right-surface   "$RIGHT_SURF" \
+                ${WORKBENCH:+--workbench "$WORKBENCH"} \
+                --n-permutations  5000 \
+                --n-jobs          -1 \
+                $HRF_FLAG $NORM_FLAG
+        done
+    done
+
+    log "=== Group-level encoding statistics done ==="
+}
+
+# =============================================================================
 # DISPATCH
 # =============================================================================
 case "$MODE" in
     preprocess) run_preprocess ;;
     avg)        run_avg ;;
     persubject) run_persubject ;;
-    all)        run_avg; run_persubject ;;
+    groupstats) run_groupstats ;;
+    all)        run_avg; run_persubject; run_groupstats ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Use: preprocess | avg | persubject | all" >&2
+        echo "Use: preprocess | avg | persubject | groupstats | all" >&2
         exit 1 ;;
 esac
 

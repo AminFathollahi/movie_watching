@@ -20,6 +20,9 @@ The within-movie (block-diagonal) RDM measures narrative/scene-level temporal
 similarity.  The cross-movie (off-diagonal) RDM probes semantic generalisation
 across distinct narratives.
 
+Embedding path convention:
+  {embeddings_dir}/{model}/bin{bin_sec}s_skip{skip_sec}s/{model}_{modality}.npy
+
 Outputs — stage 1 (always):
   {output_dir}/{stem}_rdm_full.npy
   {output_dir}/{stem}_rdm_offdiag.npy      — NaN within-movie
@@ -37,25 +40,27 @@ Outputs — stage 2 (requires --preprocessed-dir + other fMRI args):
 
 Usage (RDM only):
   python rsa/run_rdm_diagonal.py \
-      --embeddings-dir /path/to/embeddings \
-      --timing-csv /path/to/movie_timing.csv \
-      --output-dir /path/to/output \
-      --model pe-av-small-16-frame \
-      --modality av --bin-sec 5.0 --delay-sec 5.0 --tr 1.0
+      --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
+      --timing-csv     /home/amin/Research/Representation/Movie/data/movie_timing.csv \
+      --output-dir     /home/amin/Research/Representation/Movie/outputs/rsa/raw/rdm_diagonal \
+      --model omni3b_layer35 \
+      --modality av --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0
 
 Usage (RDM + RSA maps):
   python rsa/run_rdm_diagonal.py \
-      --embeddings-dir /path/to/embeddings \
-      --timing-csv /path/to/movie_timing.csv \
-      --output-dir /path/to/output \
-      --model pe-av-small-16-frame \
-      --modality av --bin-sec 5.0 --delay-sec 5.0 --tr 1.0 \
-      --preprocessed-dir /path/to/preprocessed --fmri-suffix sg_psc_gsr \
-      --template-cifti /path/to/cortex_59k.dtseries.nii \
-      --glasser-dlabel /path/to/MMP.dlabel.nii \
-      --left-surface /path/to/L.midthickness.surf.gii \
-      --right-surface /path/to/R.midthickness.surf.gii \
-      --workbench /path/to/wb_command \
+      --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
+      --timing-csv     /home/amin/Research/Representation/Movie/data/movie_timing.csv \
+      --output-dir     /home/amin/Research/Representation/Movie/outputs/rsa/raw/rdm_diagonal \
+      --model omni3b_layer35 \
+      --modality av --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0 \
+      --preprocessed-dir /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw \
+      --fmri-suffix raw \
+      --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
+      --glasser-dlabel /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii \
+      --left-surface   /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
+      --right-surface  /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
+      --workbench      /opt/workbench/bin_linux64/wb_command \
+      --geodesic-cache-dir /home/amin/Research/Representation/Movie/outputs/rsa/_geodesic_cache \
       --k 100 --method spearman
 """
 
@@ -84,7 +89,6 @@ from rsa.shared.model_registry import (
     DELAY_SEC_DEFAULT,
     TR_DEFAULT,
     DIAGONAL_MASK_DEFAULT,
-    check_embeddings_exist,
 )
 from cifti_io import (
     get_bm_axis, get_cortex_vertex_indices, save_cifti_multimap,
@@ -116,6 +120,8 @@ def parse_args():
                    default=DIAGONAL_MASK_DEFAULT["modality"],
                    choices=["a", "v", "av"])
     p.add_argument("--bin-sec",   type=float, default=BIN_SEC_DEFAULT)
+    p.add_argument("--skip-sec",  type=float, default=BIN_SEC_DEFAULT,
+                   help="Sliding-window stride in seconds (default = bin-sec, no overlap).")
     p.add_argument("--delay-sec", type=float, default=DELAY_SEC_DEFAULT)
     p.add_argument("--tr",        type=float, default=TR_DEFAULT)
     p.add_argument("--rdm-metric",
@@ -153,6 +159,21 @@ def parse_args():
     fmri.add_argument("--n-jobs", type=int, default=-1, dest="n_jobs",
                       help="CPU joblib workers (used only without CUDA).")
     return p.parse_args()
+
+
+# =============================================================================
+# Embedding path resolver (bin{N}s_skip{N}s convention)
+# =============================================================================
+
+def _resolve_emb(embeddings_dir: str, model: str, modality: str,
+                 bin_sec: float, skip_sec: float) -> Path:
+    """Return the embedding .npy path and raise FileNotFoundError if absent."""
+    p = (Path(embeddings_dir) / model
+         / f"bin{int(bin_sec)}s_skip{int(skip_sec)}s"
+         / f"{model}_{modality}.npy")
+    if not p.exists():
+        raise FileNotFoundError(f"Embedding not found: {p}")
+    return p
 
 
 # =============================================================================
@@ -659,26 +680,16 @@ def _run_rsa_maps(args, emb, labels, timing_df, out_dir, stem):
     log.info(f"  fMRI binned & z-scored: {fmri_binned.shape}")
     del fmri_continuous
 
-    # Re-load embeddings with hemodynamic delay (for alignment with fMRI bins)
-    emb_file = check_embeddings_exist(args.embeddings_dir, args.model,
-                                      args.modality, args.bin_sec)
-    run_col_local = (
-        "run" if "run" in timing_df.columns
-        else ("run_id" if "run_id" in timing_df.columns else None)
-    )
-    if run_col_local is None:
-        _run_trs = np.array([int(timing_df["duration_sec"].sum() / args.tr) + 1],
-                            dtype=np.int64)
-    else:
-        _groups = list(timing_df.groupby(run_col_local, sort=False))
-        _run_trs = np.array(
-            [int(g["duration_sec"].sum() / args.tr) + 1 for _, g in _groups],
-            dtype=np.int64,
-        )
+    # Re-load embeddings with hemodynamic delay aligned to the fMRI binning.
+    # Must use the CIFTI run_trs (already loaded above), NOT timing-based run_trs
+    # computed from clip durations — the latter underestimates run lengths and
+    # silently drops clips near each run's end (e.g. video5, video14, video18).
+    emb_file = _resolve_emb(args.embeddings_dir, args.model,
+                            args.modality, args.bin_sec, args.skip_sec)
     emb_aligned = process_model_embeddings(
         str(emb_file), timing_df,
         bin_sec=args.bin_sec, tr=args.tr,
-        run_trs=_run_trs, delay_sec=args.delay_sec,
+        run_trs=run_trs, delay_sec=args.delay_sec,
     )
     fmri_binned, emb_aligned = align_and_assert_bins(fmri_binned, emb_aligned)
     n_bins     = fmri_binned.shape[0]
@@ -759,7 +770,7 @@ def _run_rsa_maps(args, emb, labels, timing_df, out_dir, stem):
 
     # ── Save 4-map CIFTI ──────────────────────────────────────────────────────
     delay_tag   = f"delay{int(args.delay_sec)}s"
-    maps_stem   = f"{stem}_rsa_{delay_tag}_bin{bin_sec_int}_{method}_diagonal_maps"
+    maps_stem   = f"{stem}_rsa_{delay_tag}_{method}_diagonal_maps"
     out_path    = out_dir / f"{maps_stem}.dscalar.nii"
 
     map_names = [
@@ -787,25 +798,27 @@ def main():
     args = parse_args()
 
     # ── Resolve embedding path and load ─────────────────────────────────────
-    emb_file  = check_embeddings_exist(args.embeddings_dir, args.model,
-                                        args.modality, args.bin_sec)
+    emb_file = _resolve_emb(args.embeddings_dir, args.model,
+                            args.modality, args.bin_sec, args.skip_sec)
     timing_df = pd.read_csv(args.timing_csv)
     log.info(f"Embeddings: {emb_file}")
     log.info(f"Timing CSV: {args.timing_csv}  ({len(timing_df)} clips)")
 
-    run_col_local = (
-        "run" if "run" in timing_df.columns
-        else ("run_id" if "run_id" in timing_df.columns else None)
-    )
-    if run_col_local is None:
-        _emb_run_trs = np.array(
-            [int(timing_df["duration_sec"].sum() / args.tr) + 1], dtype=np.int64
-        )
+    # Load CIFTI run_trs from the preprocessed dir so that process_model_embeddings
+    # uses the real scan run lengths for boundary calculations.  timing-based
+    # run_trs (sum of clip durations) underestimates run lengths and silently
+    # drops clips near each run's end (video5, video9, video14, video18, etc.)
+    # because their global onset_sec exceeds the estimated run boundary.
+    if args.preprocessed_dir:
+        trs_path = (Path(args.preprocessed_dir) /
+                    f"{args.subject}_{args.fmri_suffix}_run_trs.npy")
+        _emb_run_trs = np.load(str(trs_path))
+        log.info(f"run_trs (from CIFTI): {_emb_run_trs.tolist()}")
     else:
-        _groups_local = list(timing_df.groupby(run_col_local, sort=False))
-        _emb_run_trs = np.array(
-            [int(g["duration_sec"].sum() / args.tr) + 1 for _, g in _groups_local],
-            dtype=np.int64,
+        raise RuntimeError(
+            "--preprocessed-dir is required so that run_trs can be read from "
+            f"{{preprocessed_dir}}/{{subject}}_{{fmri_suffix}}_run_trs.npy.  "
+            "Timing-based run_trs silently drops clips near each run's end."
         )
     emb = process_model_embeddings(
         str(emb_file), timing_df,
@@ -818,7 +831,7 @@ def main():
     # ── Build segment labels ─────────────────────────────────────────────────
     labels = build_segment_labels(
         timing_df, args.bin_sec, args.tr,
-        run_trs=None, delay_sec=0.0,
+        run_trs=_emb_run_trs, delay_sec=0.0,
     )
     if len(labels) != n_bins:
         raise ValueError(
@@ -849,8 +862,9 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    bin_sec_int = int(args.bin_sec)
-    stem = f"{args.model}_{args.modality}_bin{bin_sec_int}s"
+    bin_sec_int  = int(args.bin_sec)
+    skip_sec_int = int(args.skip_sec)
+    stem = f"{args.model}_{args.modality}_bin{bin_sec_int}s_skip{skip_sec_int}s"
 
     np.save(out_dir / f"{stem}_rdm_full.npy",       rdm_full.astype(np.float32))
     np.save(out_dir / f"{stem}_rdm_offdiag.npy",    rdm_off.astype(np.float32))

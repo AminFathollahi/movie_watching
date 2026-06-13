@@ -35,7 +35,7 @@ conda env create -f cf_modeling/environment.yml
 conda activate movie
 # Install CUDA torch manually (needed for GPU acceleration):
 pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
-pip install himalaya==0.3.5 pycortex "mne>=1.9"
+pip install himalaya==0.4.11 pycortex "mne>=1.9"
 ```
 
 See `SETUP.md` for full setup instructions including path configuration.
@@ -65,12 +65,27 @@ Output per subject: `{sub}_sg_psc_cortex_59k.dtseries.nii` + `{sub}_sg_psc_run_t
 ### 3. Extract model embeddings
 
 ```bash
+# PE-AV embeddings
 conda activate avtransformer
-# Edit MODEL_CONFIGS in the notebook, then run all cells:
 jupyter notebook notebooks/feature_extraction/pe_av_embeddings.ipynb
+
+# Whisper transcripts + Gemma 4 audio captions + InternVL2.5 video captions
+# (three models, sequential — each clears GPU before load and after unload)
+conda activate avtransformer
+jupyter notebook notebooks/feature_extraction/text.ipynb
+
+# LLM rewrite (fuses captions + audio captions + transcripts via Claude Haiku)
+conda activate audiocaption
+export ANTHROPIC_API_KEY="sk-ant-..."
+jupyter notebook notebooks/feature_extraction/audiocaption.ipynb
 ```
 
-Output: `{EMBEDDINGS_DIR}/{model_name}/{bin_sec}s/{model_name}_{v,a,av}.npy`
+> **Note:** `audiocaption.ipynb` is **deprecated** for audio captioning (previously used CLAP-Cap).
+> It is kept only for the LLM rewrite step (Claude Haiku fusing the three text sources).
+> Audio captioning now runs in `text.ipynb` via `google/gemma-4-E4B-it`.
+
+Output: `{EMBEDDINGS_DIR}/{model_name}/bin{B}s_skip{S}s/{model_name}_{v,a,av}.npy`  
+Text outputs: `outputs/model_embeddings/text/{seg}s/{captions,audio_captions,transcripts,rewritten_text_inputs}.json`
 
 ### 4. Run RSA
 
@@ -104,7 +119,7 @@ bash cf_modeling/run_analysis.sh persubject    # per-subject only
 - **Preprocessing**: SG high-pass → PSC (using pre-SG mean for normalisation) → GSR, applied per run on the continuous run. No timing filtering at preprocessing time.
 - **Timing**: `data/movie_timing.csv` — authoritative timing file (18 videos, 4 runs, global `onset_sec`). All analysis scripts apply hemodynamic delay at analysis time.
 - **Hemodynamic delay**: Applied at analysis time via `--delay-sec 5.0` (boxcar shift) or `--hrf` (SPM HRF convolution).
-- **Embeddings**: `{EMBEDDINGS_DIR}/{model_name}/{bin_sec}s/{model_name}_{v,a,av}.npy`
+- **Embeddings**: `{EMBEDDINGS_DIR}/{model_name}/bin{B}s_skip{S}s/{model_name}_{v,a,av}.npy`
 - **Outputs**: `{OUTPUT_DIR}/{subject_or_group_average}/{model}/{config_label}/`
 
 ## Environments
@@ -113,13 +128,17 @@ bash cf_modeling/run_analysis.sh persubject    # per-subject only
 # All analyses (RSA, encoding, CF modeling):
 conda env create -f cf_modeling/environment.yml  # movie env
 pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
-pip install himalaya==0.3.5 pycortex "mne>=1.9"
+pip install himalaya==0.4.11 pycortex "mne>=1.9"
 
-# Feature extraction only:
+# PE-AV embeddings + video captions + transcripts:
 conda env create -f notebooks/feature_extraction/environment.yml  # avtransformer env
+
+# Audio captions (CLAP-Cap) + LLM rewrite:
+conda env create -f notebooks/feature_extraction/audiocaption_environment.yml  # audiocaption env
 ```
 
 | Environment | Used for |
 |---|---|
 | `movie` | RSA, encoding, CF modeling, preprocessing |
-| `avtransformer` | Model embedding extraction notebooks |
+| `avtransformer` | PE-AV embeddings, InternVL2.5 video captions, Whisper transcripts |
+| `audiocaption` | CLAP-Cap audio captions, Claude Haiku LLM rewrite |

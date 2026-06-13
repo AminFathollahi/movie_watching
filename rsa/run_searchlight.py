@@ -66,10 +66,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from rsa.shared.rsa_utils import (
     load_fmri_cifti, preprocess_fmri,
-    process_model_embeddings, align_and_assert_bins
+    process_model_embeddings, align_and_assert_bins,
+    assert_segment_timing,
 )
 from cifti_io import (
-    get_bm_axis, save_cifti_multimap, get_cortex_vertex_indices,
+    get_bm_axis, get_cortex_vertex_indices,
     get_combined_map_names, merge_into_combined,
 )
 
@@ -123,20 +124,21 @@ def parse_args():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--subject", default="group_average")
     p.add_argument("--model", required=True)
-    p.add_argument("--modality", required=True, choices=["v", "a", "av"])
+    p.add_argument("--modality", required=True, choices=["v", "a", "av", "at", "vt", "avt", "t"])
     p.add_argument("--k", type=int, required=True)
     p.add_argument("--bin-sec", type=float, required=True)
     p.add_argument("--delay-sec", type=float, default=5.0,
                    help="Applied when slicing stimulus blocks from continuous fMRI.")
     p.add_argument("--hrf", action="store_true",
                    help="Convolve embeddings with SPM HRF.")
+    p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec",
+                   help="Window stride in seconds (default: bin-sec, i.e. no overlap).")
     p.add_argument("--method", required=True, choices=["spearman", "pearson"])
     p.add_argument("--tr", type=float, required=True)
     p.add_argument("--combined-output", default=None, dest="combined_output",
                    help="Path to a combined .dscalar.nii that accumulates maps from "
                         "both searchlight and Glasser runs. This script adds/replaces "
-                        "the 'searchlight_{method}_rho' map. The individual output "
-                        "file is still saved alongside.")
+                        "the 'searchlight_{method}_rho' map.")
     p.add_argument("--geodesic-cache-dir", default=None, dest="geodesic_cache_dir",
                    help="Shared directory for geodesic k-NN .npy caches (preprocessing-"
                         "agnostic). Defaults to {output_dir}/_geodesic_cache if not set. "
@@ -618,7 +620,7 @@ def _config_label(args) -> str:
     parts = [
         f"k{args.k}",
         "hrf" if args.hrf else f"delay{args.delay_sec:.0f}s",
-        f"bin{args.bin_sec:.0f}s",
+        f"bin{args.bin_sec:.0f}s_skip{args.skip_sec:.0f}s",
         args.method,
     ]
     return "_".join(parts)
@@ -639,10 +641,11 @@ def _streaming_fmri_tag(args) -> str:
 def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
                   timing_df: pd.DataFrame, config: str, out_root: Path, fmri_tag: str):
 
-    bin_sec_int  = int(args.bin_sec)
-    delay_tag    = f"delay{int(args.delay_sec)}s"
-    maps_out     = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_searchlight.dscalar.nii"
-    map_name     = f"searchlight_{args.method}_rho"
+    bin_sec_int   = int(args.bin_sec)
+    skip_int      = int(args.skip_sec)
+    delay_tag     = f"delay{int(args.delay_sec)}s"
+    maps_out      = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy"
+    map_name      = f"searchlight_{args.method}_rho"
     combined_path = Path(args.combined_output) if args.combined_output else None
 
     # ── Skip / fast-merge logic ───────────────────────────────────────────────
@@ -653,25 +656,30 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
         if map_name in get_combined_map_names(combined_path):
             log.info(f"Output already exists and combined up to date — skipping: {maps_out.name}")
             return
-        # Individual done, combined missing this map → merge without recomputing
-        log.info(f"  Individual map exists; merging '{map_name}' into combined ...")
-        corr_full = nib.load(str(maps_out)).get_fdata(dtype=np.float32).squeeze()
+        # .npy exists but combined missing this map → merge without recomputing
+        log.info(f"  .npy exists; merging '{map_name}' into combined ...")
+        corr_full = np.load(str(maps_out)).astype(np.float32)
         combined_path.parent.mkdir(parents=True, exist_ok=True)
         merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
         return
 
+    assert_segment_timing(timing_df, args.bin_sec, args.tr,
+                          args.delay_sec, args.skip_sec, run_trs)
+
     fmri_binned = preprocess_fmri(
-        fmri_continuous, timing_df, run_trs, args.bin_sec, args.tr, args.delay_sec
+        fmri_continuous, timing_df, run_trs, args.bin_sec, args.tr,
+        args.delay_sec, skip_sec=args.skip_sec,
     )
     log.info(f"  fMRI binned & z-scored: {fmri_binned.shape}")
 
     emb_file = (Path(args.embeddings_dir) / args.model /
-                f"{bin_sec_int}s" / f"{args.model}_{args.modality}.npy")
+                f"bin{bin_sec_int}s_skip{skip_int}s" / f"{args.model}_{args.modality}.npy")
     log.info(f"  Embeddings: {emb_file}")
 
     emb = process_model_embeddings(
         str(emb_file), timing_df, bin_sec=args.bin_sec, tr=args.tr,
         run_trs=run_trs, delay_sec=args.delay_sec, hrf=args.hrf,
+        skip_sec=args.skip_sec,
     )
     log.info(f"  Model binned & z-scored: {emb.shape}")
 
@@ -731,12 +739,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     gc.collect()
 
     out_root.mkdir(parents=True, exist_ok=True)
-    save_cifti_multimap(
-        corr_full.reshape(1, -1),
-        [map_name],
-        args.template_cifti,
-        str(maps_out),
-    )
+    np.save(str(maps_out), corr_full)
     log.info(f"  Saved: {maps_out.name}  mean_r={corr_full.mean():.4f}  max_r={corr_full.max():.4f}")
 
     # ── Merge into combined output ────────────────────────────────────────────
@@ -745,7 +748,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
         merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
 
     # ── Per-subject JSON report (flat directory, keyed by subject ID) ─────────
-    reports_dir = Path(args.output_dir) / "subject_reports"
+    reports_dir = Path(args.output_dir) / "subject_data" / "subject_reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     report_path = reports_dir / f"{args.subject}.json"
 
@@ -783,7 +786,8 @@ def _run_disk(args):
     timing_df = pd.read_csv(args.timing_csv)
     config    = _config_label(args)
     fmri_tag  = args.fmri_suffix
-    out_root  = Path(args.output_dir) / args.subject / f"{args.model}_{args.modality}" / config
+    sub_dir   = Path(args.output_dir) / args.subject if args.subject == "group_average" else Path(args.output_dir) / "subject_data" / args.subject
+    out_root  = sub_dir / f"{args.model}_{args.modality}" / config
 
     cifti = _cifti_path(args)
     trs_path = _run_trs_path(args)
@@ -811,14 +815,14 @@ def _run_streaming(args):
     config      = _config_label(args)
     fmri_tag    = _streaming_fmri_tag(args)
     sub         = args.subject
-    
+
     # Delay tag for output naming consistency
     delay_tag   = f"delay{int(args.delay_sec)}s"
-    out_root    = Path(args.output_dir) / sub / f"{args.model}_{args.modality}" / config
+    out_root    = Path(args.output_dir) / "subject_data" / sub / f"{args.model}_{args.modality}" / config
     bin_sec_int = int(args.bin_sec)
+    skip_int    = int(args.skip_sec)
 
-    # CHANGE THIS LINE TO MATCH:
-    maps_out    = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}_{args.method}_searchlight.dscalar.nii"
+    maps_out    = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy"
 
     if maps_out.exists():
         log.info(f"[{sub}] Output already exists — skipping")
@@ -846,6 +850,9 @@ def _run_streaming(args):
 
 def main():
     args = parse_args()
+
+    if args.skip_sec is None:
+        args.skip_sec = args.bin_sec
 
     if args.preprocessed_dir and args.raw_dir:
         log.error("--preprocessed-dir and --raw-dir are mutually exclusive.")

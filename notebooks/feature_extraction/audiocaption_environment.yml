@@ -1,0 +1,17 @@
+name: audiocaption
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy>=1.26
+  - pip
+  - pip:
+    - torch>=2.1
+    - torchaudio>=2.1
+    - msclap
+    - anthropic>=0.40
+    - natsort>=8.4
+    - soundfile>=0.12
+    - librosa>=0.10
+    - ipykernel

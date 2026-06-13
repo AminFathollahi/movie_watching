@@ -33,7 +33,7 @@ Usage (disk mode):
       --timing-csv <path> --embeddings-dir <path> --template-cifti <path> \\
       --output-dir <path> --subject group_average \\
       --model pe-av-small-16-frame --modality av \\
-      --bin-sec 2.0 --delay-sec 5.0 --tr 1.0 \\
+      --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0 \\
       --alpha-min -2 --alpha-max 9 --n-alphas 23 \\
       --test-video-ids video5,video9,video14,video18
 
@@ -43,7 +43,7 @@ Usage (streaming mode):
       --timing-csv <path> --embeddings-dir <path> --template-cifti <path> \\
       --output-dir <path> \\
       --model pe-av-small-16-frame --modality av \\
-      --bin-sec 2.0 --delay-sec 5.0 --tr 1.0 \\
+      --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0 \\
       [--sg-filter] [--psc] [--no-gsr] [--no-z-score] \\
       --alpha-min -2 --alpha-max 9 --n-alphas 23 \\
       --test-video-ids video5,video9,video14,video18
@@ -115,6 +115,8 @@ def parse_args():
                         "modes when slicing stimulus blocks from continuous fMRI).")
     p.add_argument("--hrf", action="store_true",
                    help="Convolve embeddings with SPM HRF (use with delay-sec 0).")
+    p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec",
+                   help="Window stride in seconds (default: bin-sec, i.e. no overlap).")
     p.add_argument("--normalize", action="store_true",
                    help="Per-run z-score normalization of embeddings.")
     p.add_argument("--tr", type=float, required=True, help="TR in seconds.")
@@ -149,7 +151,7 @@ def _config_label(args) -> str:
     parts = [
         "hrf" if args.hrf else f"delay{args.delay_sec:.0f}s",
         "norm" if args.normalize else "nonorm",
-        f"bin{args.bin_sec:.0f}s",
+        f"bin{args.bin_sec:.0f}s_skip{args.skip_sec:.0f}s",
     ]
     return "_".join(parts)
 
@@ -172,12 +174,14 @@ def _run_modalities(args, timing_df, test_ids, alphas, config,
             continue
 
         emb_file = (Path(args.embeddings_dir) / args.model /
-                    f"{int(args.bin_sec)}s" / f"{args.model}_{mod}.npy")
+                    f"bin{int(args.bin_sec)}s_skip{int(args.skip_sec)}s" /
+                    f"{args.model}_{mod}.npy")
         log.info(f"{prefix}[{mod}] Embeddings: {emb_file}")
 
         X_train, X_test = build_embedding_arrays(
             str(emb_file), timing_df, test_ids,
             bin_sec=args.bin_sec, hrf=args.hrf, normalize=args.normalize,
+            skip_sec=args.skip_sec,
         )
         log.info(f"{prefix}[{mod}] X_train={X_train.shape}  X_test={X_test.shape}")
 
@@ -217,7 +221,7 @@ def _run_disk(args):
                        f"{args.subject}_{args.fmri_suffix}_run_trs.npy")
     Y_train, Y_test, run_onsets = build_fmri_arrays(
         cifti, run_trs_path, timing_df, test_ids,
-        args.bin_sec, args.tr, delay_sec=args.delay_sec,
+        args.bin_sec, args.tr, delay_sec=args.delay_sec, skip_sec=args.skip_sec,
     )
     log.info(f"  Y_train={Y_train.shape}  Y_test={Y_test.shape}  "
              f"run_onsets={run_onsets}")
@@ -264,7 +268,7 @@ def _run_streaming(args):
 
     Y_train, Y_test, run_onsets = _bin_and_split_fmri(
         data, timing_df, test_ids, args.bin_sec, args.tr,
-        run_trs=run_trs, delay_sec=args.delay_sec,
+        run_trs=run_trs, delay_sec=args.delay_sec, skip_sec=args.skip_sec,
     )
     del data
     log.info(f"[{sub}] Y_train={Y_train.shape}  Y_test={Y_test.shape}  "
@@ -284,6 +288,8 @@ def _run_streaming(args):
 
 def main():
     args = parse_args()
+    if args.skip_sec is None:
+        args.skip_sec = args.bin_sec
     if args.preprocessed_dir and args.raw_dir:
         log.error("--preprocessed-dir and --raw-dir are mutually exclusive.")
         sys.exit(1)

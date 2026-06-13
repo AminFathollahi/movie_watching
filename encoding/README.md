@@ -44,14 +44,15 @@ All parameters are set in `run_analysis.sh`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `BIN_SEC` | 2.0 | Temporal bin size (seconds) |
+| `BIN_SEC` | 5.0 | Temporal bin size (seconds) |
+| `SKIP_SEC` | `$BIN_SEC` | Window stride in seconds (default = BIN_SEC, no overlap) |
 | `DELAY_SEC` | 5.0 | Hemodynamic delay applied at analysis time |
 | `HRF` | `false` | Convolve embeddings with SPM HRF instead of boxcar delay |
-| `NORMALIZE` | `false` | Per-run z-score normalization of embeddings |
+| `NORMALIZE` | `true` | Per-run z-score normalization of embeddings |
+| `BACKEND` | `torch_cuda` | himalaya backend: `torch_cuda` \| `torch` \| `numpy` |
 | `ALPHA_MIN` | -2 | Log10 of minimum ridge alpha |
 | `ALPHA_MAX` | 9 | Log10 of maximum ridge alpha |
 | `N_ALPHAS` | 23 | Number of alpha values on log scale |
-| `CHUNK_SIZE` | 2000 | Vertices per batch for Pearson r computation |
 | `TEST_VIDEO_IDS` | `video5,video9,video14,video18` | Held-out test videos |
 | `MODELS` | (array) | Model registry |
 
@@ -105,4 +106,4 @@ When `HRF=true`: set `--delay-sec 0` (no boxcar shift); embeddings are convolved
     encoding_r_av.dscalar.nii    # Pearson r map — audiovisual modality
 ```
 
-`config_label` encodes parameters: `delay{D}s_nonorm_bin{B}s` or `hrf_norm_bin{B}s`.
+`config_label` encodes parameters: `delay{D}s_norm_bin{B}s_skip{S}s` or `hrf_norm_bin{B}s_skip{S}s`.

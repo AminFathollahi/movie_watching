@@ -23,12 +23,12 @@ conda activate movie
 pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
 
 # Install remaining pip packages:
-pip install himalaya==0.3.5 pycortex "mne>=1.9"
+pip install himalaya==0.4.11 pycortex "mne>=1.9"
 ```
 
 The `movie` environment includes:
 - `torch 2.11.0+cu128` (CUDA 12.8, RTX 5070Ti compatible)
-- `himalaya 0.3.5`
+- `himalaya 0.4.11`
 - `pycortex 1.3.0` (for flatmap visualisation)
 - `nibabel 5.4.0`, `scipy 1.15.2`, `scikit-learn 1.3.2`, `pandas 2.3.3`
 - `numpy 1.26.2` (< 2.0 required by himalaya)

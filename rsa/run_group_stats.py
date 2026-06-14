@@ -21,16 +21,35 @@ threshold=dict(start=0, step=0.2), using full surface adjacency from the
 maximum TFCE statistic per sign-flip permutation; the FWE threshold is the
 (1-α)-th percentile of that distribution.
 
-Output: multi-map CIFTI dscalar with 8 maps:
-  mean_rho | cohens_d | t_stat | sigmap_uncorr | tfce_stat | tfce_fwe_mask
-  | sigmap_fdr | fdr_mask
+Output: multi-map CIFTI dscalar with 7 continuous maps:
+  mean_rho | cohens_d | t_stat | sigmap_uncorr
+  | sigmap_fdr | tfce_stat | sigmap_tfce_fwe
+
+Binary masks are saved as separate standalone dscalar files only:
+  group_stats_{n}subs_fdr_mask.dscalar.nii
+  group_stats_{n}subs_tfce_fwe_mask.dscalar.nii
+
+Note on sigmap_fdr vs sigmap_uncorr: when signal is dense (>99% of vertices
+truly positive), BH-FDR p-values converge to uncorrected p-values and the two
+maps appear visually identical. This is expected, not a bug. The FDR mask is
+still meaningful as a binary significance indicator. For spatial gradients, use
+mean_rho, cohens_d, or tfce_stat (the continuous TFCE statistic varies even
+when the FWE threshold is exceeded everywhere).
+
+And saves the TFCE null distribution for later patching:
+  group_stats_{n}subs_h0_null.npy
 
 Skip logic
 ----------
 If the output CIFTI already exists:
-  - Both FDR maps present → skip entirely (nothing to do).
-  - CIFTI present but FDR maps missing → patch FDR from stored t_stat without
-    rerunning the expensive TFCE permutation test.
+  - All 3 significance maps present (sigmap_fdr, fdr_mask, sigmap_tfce_fwe)
+    → skip entirely (nothing to do).
+  - CIFTI present but sigmap_tfce_fwe missing and h0_null.npy present
+    → patch sigmap_tfce_fwe from the saved null without rerunning TFCE.
+  - CIFTI present but sigmap_fdr / fdr_mask missing → patch FDR from stored
+    t_stat without rerunning the expensive TFCE permutation test.
+  - sigmap_tfce_fwe missing and no h0_null.npy → delete the combined CIFTI
+    and rerun to regenerate it.
 If the output CIFTI does not exist → full computation.
 
 Border contours of the FWE-significant clusters are written as separate
@@ -82,6 +101,7 @@ from cifti_io import (
     get_combined_map_names,
     get_cortex_vertex_indices,
     merge_into_combined,
+    save_cifti_map,
     save_cifti_multimap,
 )
 
@@ -282,8 +302,39 @@ def _write_border_file(
 
 
 # =============================================================================
-# FDR helpers
+# Significance map helpers
 # =============================================================================
+
+def _compute_tfce_sigmap(
+    tfce_stat_f64: np.ndarray,
+    h0: np.ndarray,
+    mean_rho: np.ndarray,
+    n_perms: int,
+) -> np.ndarray:
+    """Compute sign(mean_rho) × −log₁₀(p_fwe_vertex) from the TFCE null distribution.
+
+    p_fwe[v] = fraction of permutations where max-TFCE ≥ observed TFCE[v],
+    with a pseudo-count of 1/(n_perms+1) to avoid p=0.
+
+    This is the proper FWE-corrected continuous sigmap (analogous to sigmap_fdr
+    but using the permutation null instead of BH correction).
+    """
+    n_grays = len(tfce_stat_f64)
+    p_fwe = np.empty(n_grays, dtype=np.float32)
+    chunk = 5000   # process in chunks to avoid > ~200 MB peak allocation
+    for s in range(0, n_grays, chunk):
+        e = min(s + chunk, n_grays)
+        exceed = (h0[:, None] >= tfce_stat_f64[None, s:e]).sum(axis=0)
+        p_fwe[s:e] = exceed.astype(np.float32) / n_perms
+
+    # Pseudo-count so p_fwe is never exactly 0 (min resolution = 1/n_perms)
+    min_p = np.float32(1.0 / (n_perms + 1))
+    p_fwe = np.maximum(p_fwe, min_p)
+
+    eps = np.finfo(np.float32).tiny
+    return (np.sign(mean_rho) *
+            (-np.log10(np.maximum(p_fwe, eps)))).astype(np.float32)
+
 
 def _compute_fdr_maps(
     p_uncorr: np.ndarray,
@@ -308,14 +359,17 @@ def _patch_fdr_maps(
     n_subs: int,
     alpha: float,
     template_cifti: str,
-) -> int:
+    min_cluster_size: int = 10,
+    workbench: str | None = None,
+    left_surface: str | None = None,
+    right_surface: str | None = None,
+) -> dict:
     """Append sigmap_fdr and fdr_mask to an existing group-stats CIFTI.
 
-    Re-derives one-tailed p-values from the stored t_stat row (using n_subs
-    for the t-distribution df), then applies BH-FDR.  Uses merge_into_combined
-    so existing maps are untouched.
+    Also saves standalone mask CIFTIs and, if surface paths + workbench are
+    provided, creates FDR border files.
 
-    Returns n_significant_fdr.
+    Returns dict with n_sig_fdr, fdr_border_lh, fdr_border_rh.
     """
     existing = get_combined_map_names(str(out_path))
     img  = nib.load(str(out_path))
@@ -324,6 +378,7 @@ def _patch_fdr_maps(
 
     t_vals   = data[existing.index("t_stat")].astype(np.float64)
     mean_rho = data[existing.index("mean_rho")].astype(np.float32)
+    n_grays  = t_vals.shape[0]
 
     p_two    = stats.t.sf(np.abs(t_vals), df=n_subs - 1) * 2.0
     p_uncorr = np.where(t_vals > 0,
@@ -333,9 +388,66 @@ def _patch_fdr_maps(
     sigmap_fdr, fdr_mask, n_sig = _compute_fdr_maps(p_uncorr, mean_rho, alpha)
 
     merge_into_combined(sigmap_fdr, "sigmap_fdr", out_path, template_cifti)
-    merge_into_combined(fdr_mask,   "fdr_mask",   out_path, template_cifti)
     log.info(f"FDR-significant vertices (p<{alpha}): {n_sig:,}")
-    return n_sig
+
+    # ── sigmap_tfce_fwe from saved null distribution (if available) ───────────
+    h0_path = out_path.parent / out_path.name.replace(".dscalar.nii", "_h0_null.npy")
+    # Also check the plain sibling path (older naming)
+    h0_path_alt = out_path.parent / (out_path.stem.replace(".dscalar", "") + "_h0_null.npy")
+    for hp in (h0_path, h0_path_alt):
+        if hp.exists():
+            h0 = np.load(str(hp)).astype(np.float64)
+            if "tfce_stat" in existing:
+                tfce_stat_arr = data[existing.index("tfce_stat")].astype(np.float64)
+                mean_rho_arr  = data[existing.index("mean_rho")].astype(np.float32)
+                sig_tfce = _compute_tfce_sigmap(tfce_stat_arr, h0, mean_rho_arr, len(h0))
+                merge_into_combined(sig_tfce, "sigmap_tfce_fwe", out_path, template_cifti)
+                log.info(f"sigmap_tfce_fwe patched from {hp.name}")
+            break
+    else:
+        log.info("h0_null.npy not found — sigmap_tfce_fwe requires a full rerun.")
+
+    # ── Standalone mask CIFTIs ────────────────────────────────────────────────
+    stem = out_path.stem.replace(".dscalar", "")
+    fdr_mask_path = out_path.parent / f"{stem}_fdr_mask.dscalar.nii"
+    save_cifti_map(fdr_mask, template_cifti, str(fdr_mask_path), "fdr_mask")
+    log.info(f"Saved FDR mask: {fdr_mask_path.name}")
+
+    if "tfce_fwe_mask" in existing:
+        tfce_fwe_mask = data[existing.index("tfce_fwe_mask")]
+        tfce_mask_path = out_path.parent / f"{stem}_tfce_fwe_mask.dscalar.nii"
+        save_cifti_map(tfce_fwe_mask, template_cifti, str(tfce_mask_path), "tfce_fwe_mask")
+        log.info(f"Saved TFCE FWE mask: {tfce_mask_path.name}")
+
+    # ── FDR border files ──────────────────────────────────────────────────────
+    fdr_border_lh = fdr_border_rh = None
+    if workbench and left_surface and right_surface:
+        bm_axis = get_bm_axis(template_cifti)
+        lh_idx, rh_idx = get_cortex_vertex_indices(bm_axis)
+        n_left = len(lh_idx)
+        faces_lh, n_verts_lh = _load_surface(left_surface)
+        faces_rh, n_verts_rh = _load_surface(right_surface)
+        adj_lh = _surface_adjacency(faces_lh, lh_idx, n_left)
+        adj_rh = _surface_adjacency(faces_rh, rh_idx, n_grays - n_left)
+
+        fdr_cm_lh = _filter_clusters(fdr_mask[:n_left] > 0.5, adj_lh, min_cluster_size)
+        fdr_cm_rh = _filter_clusters(fdr_mask[n_left:] > 0.5, adj_rh, min_cluster_size)
+        n_cluster_fdr = int(fdr_cm_lh.sum()) + int(fdr_cm_rh.sum())
+        coverage_fdr  = n_cluster_fdr / n_grays if n_grays > 0 else 0.0
+
+        if n_cluster_fdr == 0:
+            log.info("No FDR cluster vertices; skipping FDR border files.")
+        elif coverage_fdr > 0.90:
+            log.warning(f"FDR mask covers {coverage_fdr*100:.1f}% of cortex — skipping border files.")
+        else:
+            fdr_border_lh = str(out_path.parent / f"{stem}_fdr_lh.border")
+            fdr_border_rh = str(out_path.parent / f"{stem}_fdr_rh.border")
+            _write_border_file(fdr_cm_lh, lh_idx, n_verts_lh, left_surface, fdr_border_lh, workbench)
+            _write_border_file(fdr_cm_rh, rh_idx, n_verts_rh, right_surface, fdr_border_rh, workbench)
+            log.info(f"  FDR LH border: {fdr_border_lh}")
+            log.info(f"  FDR RH border: {fdr_border_rh}")
+
+    return {"n_sig_fdr": n_sig, "fdr_border_lh": fdr_border_lh, "fdr_border_rh": fdr_border_rh}
 
 
 # =============================================================================
@@ -393,12 +505,12 @@ def main():
 
     # ── Skip / patch logic ────────────────────────────────────────────────────
     existing_map_names = get_combined_map_names(str(out_path))
-    fdr_maps_present = (
-        "sigmap_fdr" in existing_map_names and
-        "fdr_mask"   in existing_map_names
+    all_maps_present = (
+        "sigmap_fdr"      in existing_map_names and
+        "sigmap_tfce_fwe" in existing_map_names
     )
-    if fdr_maps_present:
-        log.info(f"FDR maps already present in {out_path.name} — nothing to do.")
+    if all_maps_present:
+        log.info(f"All significance maps present in {out_path.name} — nothing to do.")
         return
 
     if out_path.exists() and existing_map_names:
@@ -406,14 +518,19 @@ def main():
             f"Existing CIFTI lacks FDR maps ({existing_map_names}) — "
             f"patching FDR without rerunning TFCE ..."
         )
-        n_sig_fdr = _patch_fdr_maps(
-            out_path, n_subs, args.alpha, args.template_cifti
+        patch = _patch_fdr_maps(
+            out_path, n_subs, args.alpha, args.template_cifti,
+            min_cluster_size=args.min_cluster_size,
+            workbench=args.workbench,
+            left_surface=args.left_surface,
+            right_surface=args.right_surface,
         )
-        # Append FDR stats to existing summary.json
         summary_path = out_dir / "summary.json"
         if summary_path.exists():
             summary = json.loads(summary_path.read_text())
-            summary["n_sig_fdr"] = n_sig_fdr
+            summary["n_sig_fdr"]      = patch["n_sig_fdr"]
+            summary["fdr_border_lh"]  = patch["fdr_border_lh"]
+            summary["fdr_border_rh"]  = patch["fdr_border_rh"]
             summary_path.write_text(json.dumps(summary, indent=2))
             log.info(f"Summary updated: {summary_path}")
         log.info("FDR patch complete.")
@@ -492,6 +609,12 @@ def main():
     # 1e-10 above the threshold in float64 rounds below it in float32).
     tfce_stat_f64 = np.asarray(tfce_stat, dtype=np.float64)
     h0            = np.asarray(h0,        dtype=np.float64)
+    n_perms_actual = len(h0)
+
+    # Save null distribution so the patch path can compute sigmap_tfce_fwe later
+    h0_path = out_dir / f"group_stats_{n_subs}subs_h0_null.npy"
+    np.save(str(h0_path), h0)
+    log.info(f"Saved TFCE null distribution: {h0_path.name}")
 
     # FWE threshold: 95th percentile of the null max-TFCE distribution.
     # h0 is empty when no vertex had t > 0 (i.e. no positive ρ anywhere).
@@ -521,6 +644,15 @@ def main():
 
     log.info(f"TFCE-FWE clusters (≥{args.min_cluster_size} verts): "
              f"{int(tfce_fwe_mask.sum()):,} verts")
+
+    # ── TFCE sigmap: sign(mean_ρ) × −log₁₀(p_fwe_vertex) ────────────────────
+    if n_perms_actual > 0:
+        sigmap_tfce_fwe = _compute_tfce_sigmap(
+            tfce_stat_f64, h0, mean_rho, n_perms_actual)
+        log.info(f"sigmap_tfce_fwe range: "
+                 f"[{sigmap_tfce_fwe.min():.3f}, {sigmap_tfce_fwe.max():.3f}]")
+    else:
+        sigmap_tfce_fwe = np.zeros(n_grays, dtype=np.float32)
 
     # ── Workbench border files ────────────────────────────────────────────────
     # wb_command -metric-rois-to-border traces the exact surface edges between
@@ -554,31 +686,64 @@ def main():
         log.info(f"  LH border: {border_lh_path}")
         log.info(f"  RH border: {border_rh_path}")
 
+    # ── FDR border files ──────────────────────────────────────────────────────
+    fdr_border_lh = fdr_border_rh = None
+    fdr_cm_lh = _filter_clusters(fdr_mask[:n_left] > 0.5, adj_lh, args.min_cluster_size)
+    fdr_cm_rh = _filter_clusters(fdr_mask[n_left:] > 0.5, adj_rh, args.min_cluster_size)
+    n_cluster_fdr = int(fdr_cm_lh.sum()) + int(fdr_cm_rh.sum())
+    coverage_fdr  = n_cluster_fdr / n_grays if n_grays > 0 else 0.0
+    if not args.workbench:
+        pass   # already logged above
+    elif n_cluster_fdr == 0:
+        log.info("No FDR cluster vertices; skipping FDR border files.")
+    elif coverage_fdr > 0.90:
+        log.warning(
+            f"FDR mask covers {coverage_fdr*100:.1f}% of cortex "
+            f"({n_cluster_fdr:,}/{n_grays:,} verts) — skipping FDR border files."
+        )
+    else:
+        log.info("Creating FDR border files ...")
+        fdr_border_lh = str(out_dir / f"group_stats_{n_subs}subs_fdr_lh.border")
+        fdr_border_rh = str(out_dir / f"group_stats_{n_subs}subs_fdr_rh.border")
+        _write_border_file(fdr_cm_lh, left_indices, n_verts_lh,
+                           args.left_surface, fdr_border_lh, args.workbench)
+        _write_border_file(fdr_cm_rh, right_indices, n_verts_rh,
+                           args.right_surface, fdr_border_rh, args.workbench)
+        log.info(f"  FDR LH border: {fdr_border_lh}")
+        log.info(f"  FDR RH border: {fdr_border_rh}")
+
     # ── Save multi-map CIFTI ──────────────────────────────────────────────────
     maps = np.stack([
         mean_rho,
         cohens_d,
         t_vals,
         sigmap_uncorr,
-        tfce_stat,
-        tfce_fwe_mask,
         sigmap_fdr,
-        fdr_mask,
-    ], axis=0)   # (8, n_grayords)
+        tfce_stat,
+        sigmap_tfce_fwe,
+    ], axis=0)   # (7, n_grayords)
 
     map_names = [
         "mean_rho",
         "cohens_d",
         "t_stat",
         "sigmap_uncorr",
-        "tfce_stat",
-        "tfce_fwe_mask",
         "sigmap_fdr",
-        "fdr_mask",
+        "tfce_stat",
+        "sigmap_tfce_fwe",
     ]
 
     save_cifti_multimap(maps, map_names, args.template_cifti, str(out_path))
     log.info(f"Saved: {out_path}")
+
+    # ── Standalone mask CIFTIs ────────────────────────────────────────────────
+    tfce_mask_path = out_dir / f"group_stats_{n_subs}subs_tfce_fwe_mask.dscalar.nii"
+    save_cifti_map(tfce_fwe_mask, args.template_cifti, str(tfce_mask_path), "tfce_fwe_mask")
+    log.info(f"Saved TFCE FWE mask: {tfce_mask_path.name}")
+
+    fdr_mask_path = out_dir / f"group_stats_{n_subs}subs_fdr_mask.dscalar.nii"
+    save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
+    log.info(f"Saved FDR mask: {fdr_mask_path.name}")
 
     # ── Summary JSON ──────────────────────────────────────────────────────────
     summary = {
@@ -602,9 +767,12 @@ def main():
         "max_tfce_stat":          float(tfce_stat.max()),
         "max_sigmap_uncorr":      float(sigmap_uncorr.max()),
         "max_sigmap_fdr":         float(sigmap_fdr.max()),
+        "max_sigmap_tfce_fwe":    float(sigmap_tfce_fwe.max()),
         "mean_rho_range":         [float(mean_rho.min()), float(mean_rho.max())],
-        "border_lh":              border_lh_path,
-        "border_rh":              border_rh_path,
+        "border_tfce_lh":         border_lh_path,
+        "border_tfce_rh":         border_rh_path,
+        "border_fdr_lh":          fdr_border_lh,
+        "border_fdr_rh":          fdr_border_rh,
         "subjects":               [f.parent.parent.parent.name for f in subject_rho_files],
     }
 

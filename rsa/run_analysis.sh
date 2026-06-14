@@ -184,6 +184,7 @@ N_PERM_TFCE=5000   # sign-flip permutations for TFCE group-stats FWE correction
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
+    "pe-av-small-16-frame:av,a,v"
     "omni3b_layer35:av,a,v"
     "omni3b_layer27:av,a,v"
     "omni3b_layer18:av,a,v"
@@ -883,7 +884,8 @@ run_group_stats() {
                 --right-surface   "$RIGHT_SURFACE" \
                 --workbench       "$WORKBENCH" \
                 --n-permutations  "$N_PERM_TFCE" \
-                --n-jobs          "$N_CPUS"
+                --n-jobs          "$N_CPUS" \
+                || log "  WARNING: group stats skipped for ${MODEL_NAME}/${MOD} (no per-subject data or error above)"
         done
     done
 

@@ -18,7 +18,7 @@
 #   GroupAverage_59k/CohortAvg.{L,R}.inflated_MSMAll.59k_fs_LR.surf.gii
 #
 # After running, build the geodesic k-NN cache for the new group-average surface:
-#   bash rsa/run_analysis.sh neighbors_avg
+#   bash rsa/analysis.sh neighbors_avg
 
 set -euo pipefail
 
@@ -105,4 +105,4 @@ average_surfaces "L" "inflated" "$INF_DIR"
 average_surfaces "R" "inflated" "$INF_DIR"
 
 log "=== All group averages generated → ${OUT_DIR} ==="
-log "Next step: bash rsa/run_analysis.sh neighbors_avg"
+log "Next step: bash rsa/analysis.sh neighbors_avg"

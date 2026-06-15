@@ -1,6 +1,6 @@
 # Movie-Watching fMRI — Representation Analysis
 
-HCP 7T movie-watching fMRI analyses examining how cortical regions represent audiovisual content. Three analysis pillars, each self-contained with its own `run_analysis.sh`.
+HCP 7T movie-watching fMRI analyses examining how cortical regions represent audiovisual content. Three analysis pillars, each self-contained with its own `analysis.sh`.
 
 ## Repository Structure
 
@@ -22,9 +22,9 @@ All three pillars use the **same `movie` conda environment**.
 
 | Folder | Method | Script | Environment |
 |---|---|---|---|
-| `rsa/` | Searchlight + Glasser parcel RSA | `run_analysis.sh` | `movie` |
-| `encoding/` | Ridge encoding (himalaya RidgeCV) | `run_analysis.sh` | `movie` |
-| `cf_modeling/` | Banded ridge connective field modeling (Hedger 2025) | `run_analysis.sh` | `movie` |
+| `rsa/` | Searchlight + Glasser parcel RSA | `analysis.sh` | `movie` |
+| `encoding/` | Ridge encoding (himalaya RidgeCV) | `analysis.sh` | `movie` |
+| `cf_modeling/` | Banded ridge connective field modeling (Hedger 2025) | `analysis.sh` | `movie` |
 
 ## Quick Start
 
@@ -60,7 +60,7 @@ Output per subject: `{sub}_sg_psc_cortex_59k.dtseries.nii` + `{sub}_sg_psc_run_t
 (suffix is `sg_psc` with the default `GSR=false`; becomes `sg_psc_gsr` when `GSR=true`)
 
 > **Streaming mode** (default for RSA/encoding per-subject): Set `STREAM=true` in each
-> `run_analysis.sh`. Raw CIFTIs are preprocessed on-the-fly — no saved CIFTI is needed.
+> `analysis.sh`. Raw CIFTIs are preprocessed on-the-fly — no saved CIFTI is needed.
 
 ### 3. Extract model embeddings
 
@@ -91,26 +91,26 @@ Text outputs: `outputs/model_embeddings/text/{seg}s/{captions,audio_captions,tra
 
 ```bash
 conda activate movie
-bash rsa/run_analysis.sh avg                      # group-average (disk mode)
-bash rsa/run_analysis.sh persubject               # all subjects, streaming (default)
-bash rsa/run_analysis.sh persubject all 4 100610  # 4 parallel jobs, resume from 100610
-bash rsa/run_analysis.sh groupstats               # re-aggregate per-subject maps
+bash rsa/analysis.sh avg                      # group-average (disk mode)
+bash rsa/analysis.sh persubject               # all subjects, streaming (default)
+bash rsa/analysis.sh persubject all 4 100610  # 4 parallel jobs, resume from 100610
+bash rsa/analysis.sh groupstats               # re-aggregate per-subject maps
 ```
 
 ### 5. Run encoding models
 
 ```bash
 conda activate movie
-bash encoding/run_analysis.sh avg          # group-average
-bash encoding/run_analysis.sh persubject   # all subjects
+bash encoding/analysis.sh avg          # group-average
+bash encoding/analysis.sh persubject   # all subjects
 ```
 
 ### 6. Run CF modeling
 
 ```bash
 conda activate movie
-bash cf_modeling/run_analysis.sh all           # group-average + per-subject
-bash cf_modeling/run_analysis.sh persubject    # per-subject only
+bash cf_modeling/analysis.sh all           # group-average + per-subject
+bash cf_modeling/analysis.sh persubject    # per-subject only
 ```
 
 ## Data Conventions

@@ -1,5 +1,5 @@
 """
-rsa/run_partial_rsa.py
+rsa/partial_rsa.py
 =======================
 Vertex-wise Partial RSA via Banded Ridge Regression.
 
@@ -32,7 +32,7 @@ Default run: run_A (PE-AV joint controlling for AudioMAE + VideoMAE).
 
 Usage
 -----
-python rsa/run_partial_rsa.py \
+python rsa/partial_rsa.py \
     --run run_A \
     --preprocessed-dir /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw \
     --fmri-suffix raw \
@@ -83,7 +83,7 @@ from rsa.shared.model_registry import (
 # Re-use the neighbour-loading machinery from the main searchlight script.
 # Importing it here keeps our code DRY.
 sys.path.insert(0, str(Path(__file__).parent))
-from run_searchlight import get_neighbors, _searchlight_vertex_fast  # noqa: E402
+from searchlight import get_neighbors, _searchlight_vertex_fast  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

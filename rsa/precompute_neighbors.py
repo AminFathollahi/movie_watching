@@ -8,7 +8,7 @@ Run this BEFORE per-subject searchlight RSA to front-load the expensive
 ``.npy`` files (one per hemisphere) are present in ``cache-dir``, any
 searchlight run for the same subject will skip geodesic computation entirely.
 
-The k=150 cache is also usable for any k' ≤ 150: ``run_searchlight.py``
+The k=150 cache is also usable for any k' ≤ 150: ``searchlight.py``
 will automatically derive the k'-NN cache from the k=150 cache without
 re-running wb_command.
 
@@ -22,7 +22,7 @@ Usage
       --cache-dir     /path/to/outputs/rsa/sg_psc_gsr/_geodesic_cache \\
       --k             150
 
-Called from ``run_analysis.sh neighbors`` mode (via GNU parallel).
+Called from ``analysis.sh neighbors`` mode (via GNU parallel).
 """
 
 import argparse

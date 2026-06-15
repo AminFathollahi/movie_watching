@@ -13,15 +13,15 @@ Pearson r evaluation uses a fully vectorized numpy computation (no per-vertex lo
 replacing the previous O(n_vertices) scipy.stats.pearsonr calls.
 
 Control via CLI: `--backend torch_cuda | torch | numpy`.
-Control via run_analysis.sh: `BACKEND="torch_cuda"`.
+Control via analysis.sh: `BACKEND="torch_cuda"`.
 
 ## Structure
 
 ```
 encoding/
-├── run_analysis.sh          # master runner — all config lives here
+├── analysis.sh          # master runner — all config lives here
 ├── environment.yml          # conda env: movie
-├── run_encoding.py          # per-model/modality encoding script
+├── encoding.py          # per-model/modality encoding script
 └── shared/
     └── encoding_utils.py    # fMRI + embedding array builders, CV helpers, model runner
 ```
@@ -32,15 +32,15 @@ encoding/
 conda activate movie
 cd movie_watching   # run from repo root
 
-bash encoding/run_analysis.sh                       # group-average, all models
-bash encoding/run_analysis.sh persubject            # per-subject (GNU parallel)
-bash encoding/run_analysis.sh persubject 4          # 4 parallel jobs
-bash encoding/run_analysis.sh persubject 8 100610   # resume from subject 100610
+bash encoding/analysis.sh                       # group-average, all models
+bash encoding/analysis.sh persubject            # per-subject (GNU parallel)
+bash encoding/analysis.sh persubject 4          # 4 parallel jobs
+bash encoding/analysis.sh persubject 8 100610   # resume from subject 100610
 ```
 
 ## Configuration
 
-All parameters are set in `run_analysis.sh`:
+All parameters are set in `analysis.sh`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -83,7 +83,7 @@ Output per subject:
 - `{sub}_raw_cortex_59k.dtseries.nii` — concatenated full-run CIFTI (4 runs, no preprocessing)
 - `{sub}_raw_run_trs.npy` — TRs per run (needed for timing alignment)
 
-Set `FMRI_SUFFIX="raw"` in `run_analysis.sh` to match (default). Use `"sg_psc_gsr"` etc. if preprocessing was applied.
+Set `FMRI_SUFFIX="raw"` in `analysis.sh` to match (default). Use `"sg_psc_gsr"` etc. if preprocessing was applied.
 
 ### Streaming mode (`--raw-dir`)
 
@@ -93,9 +93,9 @@ Preprocesses raw 7T CIFTIs on-the-fly via `preprocess_individual.preprocess_subj
 
 `preprocess_individual.py` optionally applies per-run signal cleaning (SG→PSC→GSR) and concatenates all 4 runs into a single continuous CIFTI. **Default is raw (no preprocessing). No timing filtering happens at preprocessing time.**
 
-At analysis time, `run_encoding.py` loads `movie_timing.csv`, computes within-run onset TRs from global `onset_sec`, applies hemodynamic delay (`--delay-sec`), bins to `BIN_SEC` resolution, z-scores per run, and splits into train/test by video ID.
+At analysis time, `encoding.py` loads `movie_timing.csv`, computes within-run onset TRs from global `onset_sec`, applies hemodynamic delay (`--delay-sec`), bins to `BIN_SEC` resolution, z-scores per run, and splits into train/test by video ID.
 
-When `HRF=true`: set `--delay-sec 0` (no boxcar shift); embeddings are convolved with the SPM HRF inside `run_encoding.py`.
+When `HRF=true`: set `--delay-sec 0` (no boxcar shift); embeddings are convolved with the SPM HRF inside `encoding.py`.
 
 ## Outputs
 

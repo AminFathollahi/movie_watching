@@ -64,5 +64,5 @@ Departures from vicsompy (intentional):
 ## Everything else
 
 All other code in `cf_modeling/` (scripts 01–06, `shared/ridge_utils.py` outside
-the two attributed functions, and `cf_modeling/run_analysis.sh`) was written by
+the two attributed functions, and `cf_modeling/analysis.sh`) was written by
 Mohammad Amin Fathollahi and collaborators.

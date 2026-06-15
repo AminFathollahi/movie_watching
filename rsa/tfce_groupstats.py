@@ -1,26 +1,28 @@
 """
-encoding/run_group_stats.py
-============================
-Aggregate per-subject encoding Pearson-r maps into group-level statistics.
+rsa/group_stats.py
+======================
+Aggregate per-subject searchlight RSA maps into group-level statistics.
 
-For each grayordinate vertex across subjects:
-  1. Stack per-subject r maps → (n_subjects, n_grayords)
-  2. Fisher-z transform:  Z = arctanh(r)
-  3. One-sample t-test (H₀: mean Z = 0) → one-tailed t/p for r > 0
-  4. Mean r = tanh(mean Z)
-  5. Cohen's d = mean(Z) / std(Z, ddof=1)
-  6. BH-FDR correction on the one-tailed p-values
-  7. TFCE + sign-flipping permutation test (n_permutations, default 5000)
+For each vertex across subjects:
+  1. Stack per-subject ρ maps → (n_subjects, n_grayords)
+  2. Fisher-z transform:  Z = arctanh(ρ)
+  3. One-sample t-test (H₀: mean Z = 0) → one-tailed t/p for ρ > 0
+  4. Mean ρ = tanh(mean Z)
+
+  5. TFCE + sign-flipping permutation test (n_permutations, default 5000)
      → FWE-corrected significance mask at p < α (95th percentile of null)
-  8. Cluster border: wb_command -metric-rois-to-border traces the contour of
+  6. BH-FDR correction on the one-tailed p-values → FDR-corrected sigmap + mask
+  7. Cluster border: wb_command -metric-rois-to-border traces the contour of
      surviving clusters on the midthickness surface → per-hemisphere .border files
 
 TFCE is computed via mne.stats.permutation_cluster_1samp_test with
 threshold=dict(start=0, step=0.2), using full surface adjacency from the
-59k midthickness GIFTI meshes.
+59k midthickness GIFTI meshes. The null distribution is built from the
+maximum TFCE statistic per sign-flip permutation; the FWE threshold is the
+(1-α)-th percentile of that distribution.
 
 Output: multi-map CIFTI dscalar with 7 continuous maps:
-  mean_r | cohens_d | t_stat | sigmap_uncorr
+  mean_rho  | t_stat | sigmap_uncorr
   | sigmap_fdr | tfce_stat | sigmap_tfce_fwe
 
 Binary masks are saved as separate standalone dscalar files only:
@@ -31,7 +33,8 @@ Note on sigmap_fdr vs sigmap_uncorr: when signal is dense (>99% of vertices
 truly positive), BH-FDR p-values converge to uncorrected p-values and the two
 maps appear visually identical. This is expected, not a bug. The FDR mask is
 still meaningful as a binary significance indicator. For spatial gradients, use
-mean_r, cohens_d, or tfce_stat.
+mean_rho, or tfce_stat (the continuous TFCE statistic varies even
+when the FWE threshold is exceeded everywhere).
 
 And saves the TFCE null distribution for later patching:
   group_stats_{n}subs_h0_null.npy
@@ -54,17 +57,20 @@ Workbench .border files (one per hemisphere) alongside the dscalar.
 
 Also writes summary.json to the same directory.
 
+Runtime note: TFCE on ~59k vertices with 5000 permutations typically takes
+1–4 hours. Use --n-jobs -1 to parallelise across all available CPU cores.
+
 Usage:
-  python encoding/run_group_stats.py \\
-    --output-dir    /path/to/encoding/outputs \\
-    --model         pe-av-small-16-frame \\
-    --modality      av \\
-    --bin-sec       5.0 \\
-    --skip-sec      5.0 \\
-    --delay-sec     5.0 \\
-    --hrf-mode      delay \\
-    --normalize \\
-    --template-cifti /path/to/group_average_raw_cortex_59k.dtseries.nii \\
+  python group_stats.py \\
+    --output-dir  /path/to/rsa/sg_psc_gsr \\
+    --model       pe-av-small-16-frame \\
+    --modality    av \\
+    --k           150 \\
+    --bin-sec     2.0 \\
+    --delay-sec   5.0 \\
+    --method      spearman \\
+    --fmri-tag    sg_psc_gsr \\
+    --template-cifti /path/to/group_average_sg_psc_cortex_59k.dtseries.nii \\
     --left-surface   /path/to/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \\
     --right-surface  /path/to/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \\
     --workbench      /opt/workbench/bin_linux64/wb_command \\
@@ -112,22 +118,22 @@ log = logging.getLogger(__name__)
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Aggregate per-subject encoding r maps to group-level statistics.",
+        description="Aggregate per-subject RSA maps to group-level statistics.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--output-dir",       required=True,
-                   help="Root encoding output directory (contains per-subject subdirs).")
+                   help="Root RSA output directory (contains per-subject subdirs).")
     p.add_argument("--model",            required=True)
-    p.add_argument("--modality",         required=True,
-                   help="Modality key (e.g. v, a, av).")
+    p.add_argument("--modality",         required=True, choices=["v", "a", "av", "at", "vt", "avt", "t"])
+    p.add_argument("--k",                type=int, required=True)
     p.add_argument("--bin-sec",          type=float, required=True)
     p.add_argument("--skip-sec",         type=float, default=None, dest="skip_sec",
                    help="Window stride in seconds (default: bin-sec, i.e. no overlap).")
     p.add_argument("--delay-sec",        type=float, default=5.0)
-    p.add_argument("--hrf",              action="store_true",
-                   help="Set if embeddings were HRF-convolved (changes config label).")
-    p.add_argument("--normalize",        action="store_true",
-                   help="Set if per-run z-score normalization was used (changes config label).")
+    p.add_argument("--method",           required=True, choices=["spearman", "pearson"])
+    p.add_argument("--fmri-tag",         required=True,
+                   help="Preprocessing tag in per-subject CIFTI filenames "
+                        "(e.g. sg_psc_gsr).")
     p.add_argument("--template-cifti",   required=True,
                    help="59k CIFTI whose BrainModelAxis defines grayordinate space.")
     p.add_argument("--left-surface",     required=True,
@@ -136,9 +142,10 @@ def parse_args():
                    help="Right 59k midthickness .surf.gii (for TFCE adjacency).")
     p.add_argument("--workbench",        default=None,
                    help="Path to wb_command. Used to create .border files from the "
-                        "FWE-significant cluster mask. If omitted, border files are skipped.")
+                        "FWE-significant cluster mask. If omitted, border files are "
+                        "skipped.")
     p.add_argument("--alpha",            type=float, default=0.05,
-                   help="FWE / FDR significance threshold.")
+                   help="FWE significance threshold (p < alpha).")
     p.add_argument("--min-cluster-size", type=int, default=10,
                    help="Minimum cluster size (vertices) to include in FWE mask.")
     p.add_argument("--n-permutations",   type=int, default=5000,
@@ -149,25 +156,15 @@ def parse_args():
 
 
 # =============================================================================
-# Config label (must match run_encoding.py _config_label())
-# =============================================================================
-
-def _config_label(args) -> str:
-    parts = [
-        "hrf" if args.hrf else f"delay{args.delay_sec:.0f}s",
-        "norm" if args.normalize else "nonorm",
-        f"bin{args.bin_sec:.0f}s_skip{args.skip_sec:.0f}s",
-    ]
-    return "_".join(parts)
-
-
-# =============================================================================
 # Surface helpers
 # =============================================================================
 
 def _load_surface(surf_path: str) -> tuple[np.ndarray, int]:
-    """Return (faces, n_verts) from a GIFTI surface file."""
-    surf   = nib.load(surf_path)
+    """Return (faces, n_verts) from a GIFTI surface file.
+
+    darrays[0] = (n_verts, 3) coordinates; darrays[1] = (n_faces, 3) indices.
+    """
+    surf = nib.load(surf_path)
     n_verts = surf.darrays[0].data.shape[0]
     faces   = surf.darrays[1].data.astype(np.int32)
     return faces, n_verts
@@ -176,7 +173,19 @@ def _load_surface(surf_path: str) -> tuple[np.ndarray, int]:
 def _surface_adjacency(faces: np.ndarray,
                         vertex_idx: np.ndarray,
                         n_cifti_verts: int) -> csr_matrix:
-    """Sparse adjacency matrix in CIFTI grayordinate space."""
+    """Sparse adjacency matrix in CIFTI grayordinate space.
+
+    Re-indexes the full-surface face array to CIFTI vertex space, keeping
+    only faces whose three vertices are all grayordinates.
+
+    Args:
+        faces:         (n_faces, 3) full-surface face array
+        vertex_idx:    (n_cifti_verts,) vertex indices of CIFTI grayordinates
+        n_cifti_verts: number of CIFTI grayordinates for this hemisphere
+
+    Returns:
+        (n_cifti_verts, n_cifti_verts) uint8 sparse adjacency matrix
+    """
     idx_map = np.full(int(faces.max()) + 1, -1, dtype=np.int32)
     idx_map[vertex_idx] = np.arange(n_cifti_verts, dtype=np.int32)
 
@@ -194,6 +203,8 @@ def _surface_adjacency(faces: np.ndarray,
         (np.ones(len(i), dtype=np.uint8), (i, j)),
         shape=(n_cifti_verts, n_cifti_verts),
     )
+    # Binarize: triangles sharing an edge produce duplicate (i,j) pairs whose
+    # weights sum to 2 after CSR construction. Set all stored values to 1.
     adj.data[:] = 1
     return adj
 
@@ -205,7 +216,19 @@ def _surface_adjacency(faces: np.ndarray,
 def _filter_clusters(sig_mask: np.ndarray,
                      adj: csr_matrix,
                      min_cluster_size: int) -> np.ndarray:
-    """Filter a binary significance mask to retain only clusters ≥ min_cluster_size."""
+    """Filter a binary significance mask to retain only clusters ≥ min_cluster_size.
+
+    Connected components are computed in the subgraph of significant vertices;
+    components with fewer than min_cluster_size vertices are zeroed out.
+
+    Args:
+        sig_mask:         (n_cifti_verts,) bool — TFCE-FWE significant vertices
+        adj:              (n_cifti_verts × n_cifti_verts) symmetric CSR adjacency
+        min_cluster_size: minimum vertices per cluster to retain
+
+    Returns:
+        cluster_mask: (n_cifti_verts,) float32 — 1 inside valid clusters, 0 outside
+    """
     cluster_mask = np.zeros(len(sig_mask), dtype=np.float32)
     if not sig_mask.any():
         return cluster_mask
@@ -234,6 +257,26 @@ def _write_border_file(
     out_border_path: str,
     workbench: str,
 ) -> None:
+    """Trace the cluster boundary on the surface and write a Workbench .border file.
+
+    Expands cluster_mask from CIFTI grayordinate space back to the full surface
+    vertex space (medial-wall vertices = 0), saves it as a temporary GIFTI metric,
+    then calls:
+        wb_command -metric-rois-to-border <surface> <roi-metric> <border-out>
+    The temporary metric is deleted whether or not wb_command succeeds.
+
+    Args:
+        cluster_mask:          (n_cifti_verts,) float32 — 1 inside cluster, 0 outside
+        cifti_vertex_indices:  (n_cifti_verts,) int — maps CIFTI rows → surface vertices
+        n_full_verts:          total vertices in the full surface (incl. medial wall)
+        surface_path:          .surf.gii to trace the border on
+        out_border_path:       output .border file path
+        workbench:             path to wb_command executable
+
+    Command used: wb_command -metric-rois-to-border <surface> <metric> <class-name> <border-out>
+    Finds all mesh edges that cross the ROI boundary and draws borders through them.
+    """
+    # Expand to full surface space; medial-wall vertices stay 0
     full_mask = np.zeros(n_full_verts, dtype=np.float32)
     full_mask[cifti_vertex_indices] = cluster_mask
 
@@ -245,7 +288,9 @@ def _write_border_file(
         subprocess.run(
             [workbench, '-metric-rois-to-border',
              surface_path, str(tmp_metric), 'tfce_fwe', out_border_path],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         log.warning(
@@ -263,42 +308,47 @@ def _write_border_file(
 def _compute_tfce_sigmap(
     tfce_stat_f64: np.ndarray,
     h0: np.ndarray,
-    mean_r: np.ndarray,
+    mean_rho: np.ndarray,
     n_perms: int,
 ) -> np.ndarray:
-    """Compute sign(mean_r) × −log₁₀(p_fwe_vertex) from the TFCE null distribution.
+    """Compute sign(mean_rho) × −log₁₀(p_fwe_vertex) from the TFCE null distribution.
 
     p_fwe[v] = fraction of permutations where max-TFCE ≥ observed TFCE[v],
     with a pseudo-count of 1/(n_perms+1) to avoid p=0.
+
+    This is the proper FWE-corrected continuous sigmap (analogous to sigmap_fdr
+    but using the permutation null instead of BH correction).
     """
     n_grays = len(tfce_stat_f64)
     p_fwe = np.empty(n_grays, dtype=np.float32)
-    chunk = 5000
+    chunk = 5000   # process in chunks to avoid > ~200 MB peak allocation
     for s in range(0, n_grays, chunk):
         e = min(s + chunk, n_grays)
         exceed = (h0[:, None] >= tfce_stat_f64[None, s:e]).sum(axis=0)
         p_fwe[s:e] = exceed.astype(np.float32) / n_perms
 
+    # Pseudo-count so p_fwe is never exactly 0 (min resolution = 1/n_perms)
     min_p = np.float32(1.0 / (n_perms + 1))
     p_fwe = np.maximum(p_fwe, min_p)
+
     eps = np.finfo(np.float32).tiny
-    return (np.sign(mean_r) *
+    return (np.sign(mean_rho) *
             (-np.log10(np.maximum(p_fwe, eps)))).astype(np.float32)
 
 
 def _compute_fdr_maps(
     p_uncorr: np.ndarray,
-    mean_r: np.ndarray,
+    mean_rho: np.ndarray,
     alpha: float,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Apply BH-FDR correction; return (sigmap_fdr, fdr_mask, n_significant).
 
-    sigmap_fdr = sign(mean_r) × −log₁₀(p_fdr)  (same convention as sigmap_uncorr)
+    sigmap_fdr = sign(mean_rho) × −log₁₀(p_fdr)  (same convention as sigmap_uncorr)
     fdr_mask   = float32 binary, 1 where BH-corrected p < alpha
     """
     p_fdr = stats.false_discovery_control(p_uncorr, method="bh")
     eps = np.finfo(np.float32).tiny
-    sigmap_fdr = (np.sign(mean_r) *
+    sigmap_fdr = (np.sign(mean_rho) *
                   (-np.log10(np.maximum(p_fdr, eps)))).astype(np.float32)
     fdr_mask = (p_fdr < alpha).astype(np.float32)
     return sigmap_fdr, fdr_mask, int(fdr_mask.sum())
@@ -326,30 +376,31 @@ def _patch_fdr_maps(
     data = img.get_fdata(dtype=np.float32)   # (n_maps, n_grays)
     del img
 
-    t_vals = data[existing.index("t_stat")].astype(np.float64)
-    mean_r = data[existing.index("mean_r")].astype(np.float32)
-    n_grays = t_vals.shape[0]
+    t_vals   = data[existing.index("t_stat")].astype(np.float64)
+    mean_rho = data[existing.index("mean_rho")].astype(np.float32)
+    n_grays  = t_vals.shape[0]
 
     p_two    = stats.t.sf(np.abs(t_vals), df=n_subs - 1) * 2.0
     p_uncorr = np.where(t_vals > 0,
                         p_two / 2.0,
                         1.0 - p_two / 2.0).astype(np.float32)
 
-    sigmap_fdr, fdr_mask, n_sig = _compute_fdr_maps(p_uncorr, mean_r, alpha)
+    sigmap_fdr, fdr_mask, n_sig = _compute_fdr_maps(p_uncorr, mean_rho, alpha)
 
     merge_into_combined(sigmap_fdr, "sigmap_fdr", out_path, template_cifti)
     log.info(f"FDR-significant vertices (p<{alpha}): {n_sig:,}")
 
     # ── sigmap_tfce_fwe from saved null distribution (if available) ───────────
     h0_path = out_path.parent / out_path.name.replace(".dscalar.nii", "_h0_null.npy")
+    # Also check the plain sibling path (older naming)
     h0_path_alt = out_path.parent / (out_path.stem.replace(".dscalar", "") + "_h0_null.npy")
     for hp in (h0_path, h0_path_alt):
         if hp.exists():
             h0 = np.load(str(hp)).astype(np.float64)
             if "tfce_stat" in existing:
                 tfce_stat_arr = data[existing.index("tfce_stat")].astype(np.float64)
-                mean_r_arr    = data[existing.index("mean_r")].astype(np.float32)
-                sig_tfce = _compute_tfce_sigmap(tfce_stat_arr, h0, mean_r_arr, len(h0))
+                mean_rho_arr  = data[existing.index("mean_rho")].astype(np.float32)
+                sig_tfce = _compute_tfce_sigmap(tfce_stat_arr, h0, mean_rho_arr, len(h0))
                 merge_into_combined(sig_tfce, "sigmap_tfce_fwe", out_path, template_cifti)
                 log.info(f"sigmap_tfce_fwe patched from {hp.name}")
             break
@@ -408,44 +459,46 @@ def main():
 
     if args.skip_sec is None:
         args.skip_sec = args.bin_sec
-    config = _config_label(args)
+    bin_sec_int  = int(args.bin_sec)
+    skip_int     = int(args.skip_sec)
+    delay_tag    = f"delay{int(args.delay_sec)}s"
+    config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}"
 
     out_dir = (Path(args.output_dir) / "group_stats" /
                f"{args.model}_{args.modality}" / config)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Collect per-subject r maps ────────────────────────────────────────────
-    fname = f"encoding_r_{args.modality}.dscalar.nii"
+    # ── Collect per-subject ρ maps ────────────────────────────────────────────
+    fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
+                     f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy")
 
-    subject_r_files = sorted(
-        f for f in Path(args.output_dir).glob(
-            f"*/{args.model}/{config}/{fname}"
+    model_mod_dir = f"{args.model}_{args.modality}"
+    subject_rho_files = sorted(
+        Path(args.output_dir).glob(
+            f"subject_data/*/{model_mod_dir}/{config}/{fname_pattern}"
         )
-        if f.parts[-4] not in ("group_average", "group_stats")
     )
 
-    if not subject_r_files:
+    if not subject_rho_files:
         log.error(
-            f"No per-subject r maps found matching:\n"
-            f"  {Path(args.output_dir)}/*/{args.model}/{config}/{fname}\n"
-            f"Run per-subject encoding first (run_analysis.sh persubject)."
+            f"No per-subject ρ maps found matching:\n"
+            f"  {Path(args.output_dir)}/subject_data/*/{model_mod_dir}/{config}/{fname_pattern}\n"
+            f"Run per-subject RSA first (analysis.sh persubject)."
         )
         sys.exit(1)
 
-    log.info(f"Found {len(subject_r_files)} per-subject r maps")
+    log.info(f"Found {len(subject_rho_files)} per-subject ρ maps")
 
-    r_maps = []
-    for f in subject_r_files:
-        img  = nib.load(str(f))
-        data = img.get_fdata(dtype=np.float32)
-        # dscalar: (1, n_grays) — squeeze to 1-D
-        r_maps.append(data.squeeze())
-        log.info(f"  Loaded: {f.parts[-4]}  "
-                 f"shape={data.squeeze().shape}  max={data.max():.4f}")
+    rho_maps = []
+    for f in subject_rho_files:
+        data = np.load(str(f)).astype(np.float32)
+        rho_maps.append(data)
+        log.info(f"  Loaded: {f.parent.parent.parent.name}  "
+                 f"shape={data.shape}  max={data.max():.4f}")
 
-    r_stack = np.stack(r_maps, axis=0)   # (n_subjects, n_grayords)
-    n_subs, n_grays = r_stack.shape
-    log.info(f"Stacked: {r_stack.shape}")
+    rho_stack = np.stack(rho_maps, axis=0)   # (n_subjects, n_grayords)
+    n_subs, n_grays = rho_stack.shape
+    log.info(f"Stacked: {rho_stack.shape}")
 
     # ── Output path (needed for skip logic) ──────────────────────────────────
     out_path = out_dir / f"group_stats_{n_subs}subs.dscalar.nii"
@@ -475,43 +528,41 @@ def main():
         summary_path = out_dir / "summary.json"
         if summary_path.exists():
             summary = json.loads(summary_path.read_text())
-            summary["n_sig_fdr"]     = patch["n_sig_fdr"]
-            summary["fdr_border_lh"] = patch["fdr_border_lh"]
-            summary["fdr_border_rh"] = patch["fdr_border_rh"]
+            summary["n_sig_fdr"]      = patch["n_sig_fdr"]
+            summary["fdr_border_lh"]  = patch["fdr_border_lh"]
+            summary["fdr_border_rh"]  = patch["fdr_border_rh"]
             summary_path.write_text(json.dumps(summary, indent=2))
             log.info(f"Summary updated: {summary_path}")
         log.info("FDR patch complete.")
         return
 
     # ── Fisher-z transform ────────────────────────────────────────────────────
-    Z = np.arctanh(np.clip(r_stack, -1 + 1e-7, 1 - 1e-7)).astype(np.float64)
+    Z = np.arctanh(np.clip(rho_stack, -1 + 1e-7, 1 - 1e-7)).astype(np.float64)
 
     # ── One-sample t-test (H₀: mean Z = 0) ───────────────────────────────────
     t_vals, p_two = stats.ttest_1samp(Z, popmean=0.0, axis=0)
     t_vals = t_vals.astype(np.float32)
 
-    # One-tailed p for r > 0
+    # One-tailed p for ρ > 0
     p_uncorr = np.where(t_vals > 0,
                         p_two / 2.0,
                         1.0 - p_two / 2.0).astype(np.float32)
 
     # ── Summary statistics ────────────────────────────────────────────────────
-    mean_z = Z.mean(axis=0).astype(np.float32)
-    std_z  = Z.std(axis=0, ddof=1).astype(np.float32)
-    std_z[std_z == 0] = 1e-10
+    mean_z   = Z.mean(axis=0).astype(np.float32)
 
-    mean_r   = np.tanh(mean_z).astype(np.float32)
-    cohens_d = (mean_z / std_z).astype(np.float32)
+    mean_rho = rho_stack.mean(axis=0).astype(np.float32)
+    
 
+    # sign(mean_ρ) × −log₁₀(p_uncorr); positive = significant positive ρ
     eps = np.finfo(np.float32).tiny
-    sigmap_uncorr = (np.sign(mean_r) *
+    sigmap_uncorr = (np.sign(mean_rho) *
                      (-np.log10(np.maximum(p_uncorr, eps)))).astype(np.float32)
 
     # ── BH-FDR correction ─────────────────────────────────────────────────────
-    sigmap_fdr, fdr_mask, n_sig_fdr = _compute_fdr_maps(p_uncorr, mean_r, args.alpha)
+    sigmap_fdr, fdr_mask, n_sig_fdr = _compute_fdr_maps(p_uncorr, mean_rho, args.alpha)
 
-    log.info(f"mean_r range: [{mean_r.min():.4f}, {mean_r.max():.4f}]")
-    log.info(f"Cohen's d range: [{cohens_d.min():.4f}, {cohens_d.max():.4f}]")
+    log.info(f"mean_rho range: [{mean_rho.min():.4f}, {mean_rho.max():.4f}]")
     log.info(f"Uncorrected p<{args.alpha}: {(p_uncorr < args.alpha).sum():,} / {n_grays:,}")
     log.info(f"BH-FDR p<{args.alpha}: {n_sig_fdr:,} / {n_grays:,}")
 
@@ -529,9 +580,12 @@ def main():
     adj_rh = _surface_adjacency(faces_rh, right_indices, n_grays - n_left)
     log.info("  Adjacency built.")
 
+    # Block-diagonal adjacency spanning both hemispheres
     adj_combined = sp_block_diag([adj_lh, adj_rh], format="coo")
 
     # ── TFCE permutation test ─────────────────────────────────────────────────
+    # Sign-flipping permutations; TFCE via threshold=dict(start,step).
+    # tail=1: one-tailed test for ρ > 0; H0 = max TFCE per permutation.
     log.info(
         f"Running TFCE permutation test: n_permutations={args.n_permutations}, "
         f"n_jobs={args.n_jobs}  (runtime: 1–4 h for 59k verts)"
@@ -547,14 +601,20 @@ def main():
         out_type="indices",
         verbose=False,
     )
+    # Keep float64 for the threshold comparison — float32 quantization can
+    # flip borderline vertices across the threshold (demonstrated: a vertex
+    # 1e-10 above the threshold in float64 rounds below it in float32).
     tfce_stat_f64 = np.asarray(tfce_stat, dtype=np.float64)
     h0            = np.asarray(h0,        dtype=np.float64)
     n_perms_actual = len(h0)
 
+    # Save null distribution so the patch path can compute sigmap_tfce_fwe later
     h0_path = out_dir / f"group_stats_{n_subs}subs_h0_null.npy"
     np.save(str(h0_path), h0)
     log.info(f"Saved TFCE null distribution: {h0_path.name}")
 
+    # FWE threshold: 95th percentile of the null max-TFCE distribution.
+    # h0 is empty when no vertex had t > 0 (i.e. no positive ρ anywhere).
     if len(h0) == 0:
         log.warning("TFCE null distribution is empty — no positive t-values found. "
                     "Setting threshold to inf; no vertices will be significant.")
@@ -563,6 +623,7 @@ def main():
         tfce_thresh = float(np.percentile(h0, 100.0 * (1.0 - args.alpha)))
     log.info(f"TFCE FWE threshold (p<{args.alpha}): {tfce_thresh:.4f}")
 
+    # Significance mask computed in float64, then convert stat to float32 for saving
     n_sig_tfce = int((tfce_stat_f64 >= tfce_thresh).sum())
     log.info(f"TFCE-FWE significant vertices: {n_sig_tfce:,} / {n_grays:,}")
 
@@ -575,32 +636,41 @@ def main():
 
     tfce_fwe_mask = np.concatenate([cm_lh, cm_rh])
 
+    # Float32 for storage (CIFTI maps)
     tfce_stat = tfce_stat_f64.astype(np.float32)
 
     log.info(f"TFCE-FWE clusters (≥{args.min_cluster_size} verts): "
              f"{int(tfce_fwe_mask.sum()):,} verts")
 
-    # ── TFCE sigmap: sign(mean_r) × −log₁₀(p_fwe_vertex) ────────────────────
+    # ── TFCE sigmap: sign(mean_ρ) × −log₁₀(p_fwe_vertex) ────────────────────
     if n_perms_actual > 0:
         sigmap_tfce_fwe = _compute_tfce_sigmap(
-            tfce_stat_f64, h0, mean_r, n_perms_actual)
+            tfce_stat_f64, h0, mean_rho, n_perms_actual)
         log.info(f"sigmap_tfce_fwe range: "
                  f"[{sigmap_tfce_fwe.min():.3f}, {sigmap_tfce_fwe.max():.3f}]")
     else:
         sigmap_tfce_fwe = np.zeros(n_grays, dtype=np.float32)
 
     # ── Workbench border files ────────────────────────────────────────────────
+    # wb_command -metric-rois-to-border traces the exact surface edges between
+    # significant and non-significant faces, producing a clean contour .border
+    # file per hemisphere (separate from the CIFTI output).
     border_lh_path = border_rh_path = None
     n_cluster = int(tfce_fwe_mask.sum())
-    coverage  = n_cluster / n_grays if n_grays > 0 else 0.0
+    coverage = n_cluster / n_grays if n_grays > 0 else 0.0
     if not args.workbench:
         log.info("--workbench not provided; skipping border file creation.")
     elif n_cluster == 0:
         log.info("No significant cluster vertices; skipping border file creation.")
     elif coverage > 0.90:
+        # When >90 % of cortex is significant the only boundary is the medial
+        # wall edge, which traces a misleading diagonal in Workbench's flat map.
+        # Skip border creation and rely on the continuous maps instead.
         log.warning(
             f"Cluster covers {coverage*100:.1f}% of cortex ({n_cluster:,}/{n_grays:,} verts). "
-            f"The only boundary is the medial-wall edge. Skipping .border file creation."
+            f"The only boundary is the medial-wall edge, which is not scientifically "
+            f"informative. Skipping .border file creation — use the continuous maps "
+            f"(tfce_stat, mean_rho) for visualisation."
         )
     else:
         log.info("Creating Workbench border files ...")
@@ -641,8 +711,7 @@ def main():
 
     # ── Save multi-map CIFTI ──────────────────────────────────────────────────
     maps = np.stack([
-        mean_r,
-        cohens_d,
+        mean_rho,
         t_vals,
         sigmap_uncorr,
         sigmap_fdr,
@@ -651,8 +720,7 @@ def main():
     ], axis=0)   # (7, n_grayords)
 
     map_names = [
-        "mean_r",
-        "cohens_d",
+        "mean_rho",
         "t_stat",
         "sigmap_uncorr",
         "sigmap_fdr",
@@ -677,6 +745,7 @@ def main():
         "model":                  args.model,
         "modality":               args.modality,
         "config":                 config,
+        "fmri_tag":               args.fmri_tag,
         "n_subjects":             n_subs,
         "n_grayordinates":        n_grays,
         "alpha":                  args.alpha,
@@ -688,18 +757,17 @@ def main():
         "n_sig_tfce_fwe":         n_sig_tfce,
         "n_cluster_verts_tfce":   int(tfce_fwe_mask.sum()),
         "n_sig_fdr":              n_sig_fdr,
-        "max_cohens_d":           float(cohens_d.max()),
         "max_t_stat":             float(t_vals.max()),
         "max_tfce_stat":          float(tfce_stat.max()),
         "max_sigmap_uncorr":      float(sigmap_uncorr.max()),
         "max_sigmap_fdr":         float(sigmap_fdr.max()),
         "max_sigmap_tfce_fwe":    float(sigmap_tfce_fwe.max()),
-        "mean_r_range":           [float(mean_r.min()), float(mean_r.max())],
+        "mean_rho_range":         [float(mean_rho.min()), float(mean_rho.max())],
         "border_tfce_lh":         border_lh_path,
         "border_tfce_rh":         border_rh_path,
         "border_fdr_lh":          fdr_border_lh,
         "border_fdr_rh":          fdr_border_rh,
-        "subjects":               [f.parts[-4] for f in subject_r_files],
+        "subjects":               [f.parent.parent.parent.name for f in subject_rho_files],
     }
 
     summary_path = out_dir / "summary.json"

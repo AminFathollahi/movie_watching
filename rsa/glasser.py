@@ -1,5 +1,5 @@
 """
-rsa/run_glasser.py
+rsa/glasser.py
 ==========================
 Parcel-wise RSA using the Glasser MMP 360-parcel atlas in 59k.
 
@@ -16,11 +16,11 @@ STREAMING MODE (--raw-dir):
   saves only result maps, then frees all arrays before the next subject.
 
 Both modes are parallel-safe: each call processes one (subject, model,
-modality) tuple. GNU parallel in run_analysis.sh spawns N such processes
+modality) tuple. GNU parallel in analysis.sh spawns N such processes
 simultaneously.
 
 Usage (disk mode):
-  python run_glasser.py \
+  python glasser.py \
       --preprocessed-dir <path> --fmri-suffix sg_psc_gsr \
       --subject group_average --timing-csv <path> \
       --embeddings-dir <path> --template-cifti <path_59k> \
@@ -110,7 +110,7 @@ def parse_args():
     p.add_argument("--tr", type=float, required=True,
                    help="TR in seconds.")
     p.add_argument("--combined-output", default=None, dest="combined_output",
-                   help="Path to a combined .dscalar.nii shared with run_searchlight.py. "
+                   help="Path to a combined .dscalar.nii shared with searchlight.py. "
                         "This script adds/replaces the 'glasser_{method}_rho' map.")
 
     # Streaming preprocessing flags

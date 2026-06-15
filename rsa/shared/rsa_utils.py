@@ -4,7 +4,7 @@ rsa/shared/rsa_utils.py
 Shared utilities for RSA analyses (searchlight and Glasser parcellation).
 
 All functions are stateless and accept explicit arguments — no hardcoded paths
-or parameters. Configure everything in run_analysis.sh and pass via CLI.
+or parameters. Configure everything in analysis.sh and pass via CLI.
 
 fMRI preprocessing convention
 ------------------------------
@@ -76,8 +76,9 @@ def load_fmri_cifti(cifti_path: str) -> np.ndarray:
 def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
                     run_trs: np.ndarray, bin_sec: float, tr: float,
                     delay_sec: float = 0.0,
-                    skip_sec: float = None) -> np.ndarray:
-    """Bin and z-score fMRI data to match model embeddings.
+                    skip_sec: float = None,
+                    normalize: bool = True) -> np.ndarray:
+    """Bin and normalize fMRI data to match model embeddings.
 
     Parameters
     ----------
@@ -96,10 +97,12 @@ def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
     delay_sec       : haemodynamic shift applied to onset_sec (default 0)
     skip_sec        : window stride in seconds (default: bin_sec, i.e., no overlap).
                       Set skip_sec < bin_sec for overlapping windows.
+    normalize       : if True (default) z-score per run; if False demean only
+                      (subtract per-run mean, do not divide by std).
 
     Returns
     -------
-    (total_windows, n_vertices) float32 — windowed + per-run z-scored fMRI
+    (total_windows, n_vertices) float32 — windowed + per-run normalized fMRI
     """
     if skip_sec is None:
         skip_sec = bin_sec
@@ -154,8 +157,11 @@ def preprocess_fmri(fmri_continuous: np.ndarray, timing_df: pd.DataFrame,
 
         if run_segments:
             run_binned_concat = np.concatenate(run_segments, axis=0).astype(np.float32)
-            run_zscored = zscore(run_binned_concat, axis=0, nan_policy='omit')
-            binned_runs.append(run_zscored)
+            if normalize:
+                run_normed = zscore(run_binned_concat, axis=0, nan_policy='omit')
+            else:
+                run_normed = run_binned_concat - run_binned_concat.mean(axis=0, keepdims=True)
+            binned_runs.append(run_normed)
 
     return np.concatenate(binned_runs, axis=0)
 
@@ -164,7 +170,8 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
                              bin_sec: float, tr: float,
                              run_trs: np.ndarray, delay_sec: float = 0.0,
                              hrf: bool = False,
-                             skip_sec: float = None) -> np.ndarray:
+                             skip_sec: float = None,
+                             normalize: bool = True) -> np.ndarray:
     """Load and align model embeddings to the fMRI binning scheme.
 
     Parameters
@@ -183,10 +190,11 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
     skip_sec  : window stride in seconds (default: bin_sec, i.e., no overlap).
                 Must match the skip_sec used to segment the stimulus and passed
                 to preprocess_fmri so brain and model window counts stay aligned.
+    normalize : if True (default) z-score per run; if False demean only.
 
     Returns
     -------
-    (total_windows, n_features) float32 — windowed + per-run z-scored embeddings
+    (total_windows, n_features) float32 — windowed + per-run normalized embeddings
     """
     if skip_sec is None:
         skip_sec = bin_sec
@@ -244,8 +252,11 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
 
         if run_segments:
             run_emb_concat = np.concatenate(run_segments, axis=0)
-            run_zscored = zscore(run_emb_concat, axis=0, nan_policy='omit')
-            processed_runs.append(run_zscored)
+            if normalize:
+                run_normed = zscore(run_emb_concat, axis=0, nan_policy='omit')
+            else:
+                run_normed = run_emb_concat - run_emb_concat.mean(axis=0, keepdims=True)
+            processed_runs.append(run_normed)
 
     return np.concatenate(processed_runs, axis=0).astype(np.float32)
 

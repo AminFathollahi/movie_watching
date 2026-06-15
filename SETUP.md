@@ -53,7 +53,7 @@ All shell scripts in `cf_modeling/`, `encoding/`, and `rsa/` respect these varia
 You can also override them per-run:
 
 ```bash
-VICSOMPY_REPO=/alt/path bash cf_modeling/run_analysis.sh geometry
+VICSOMPY_REPO=/alt/path bash cf_modeling/analysis.sh geometry
 ```
 
 ## 4. Verify the setup
@@ -76,7 +76,7 @@ python -c "import cortex; print('pycortex OK')"
 
 ## 5. Data paths
 
-Edit the `CONFIG` section at the top of each `run_analysis.sh` to match your local
+Edit the `CONFIG` section at the top of each `analysis.sh` to match your local
 data directories before running any analyses. Key variables:
 
 | Variable | Description |
@@ -95,17 +95,17 @@ data directories before running any analyses. Key variables:
 conda activate movie
 
 # Preprocessing (one-time; skip if using streaming mode)
-bash cf_modeling/run_analysis.sh preprocess
+bash cf_modeling/analysis.sh preprocess
 
 # CF modeling (geometry → group-average → per-subject)
 # Default preprocessing: SG high-pass + PSC, no GSR (suffix = sg_psc)
-bash cf_modeling/run_analysis.sh all
+bash cf_modeling/analysis.sh all
 
 # RSA searchlight
-bash rsa/run_analysis.sh avg
+bash rsa/analysis.sh avg
 
 # Encoding models
-bash encoding/run_analysis.sh avg
+bash encoding/analysis.sh avg
 ```
 
 See `cf_modeling/README.md`, `rsa/README.md`, and `encoding/README.md` for full details.

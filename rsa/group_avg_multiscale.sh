@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rsa/run_group_avg_multiscale.sh
+# rsa/group_avg_multiscale.sh
 # ================================
 # Group-average searchlight RSA at multiple temporal bin sizes.
 #
@@ -11,7 +11,7 @@
 #
 # Usage:
 #   conda activate analysis
-#   bash rsa/run_group_avg_multiscale.sh
+#   bash rsa/group_avg_multiscale.sh
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -72,7 +72,7 @@ for BIN_SEC in 1 2  ; do
     fi
 
     log "--- bin_sec=${BIN_SEC}s ---"
-    conda run -n "$CONDA_ENV" python "${SCRIPT_DIR}/run_searchlight.py" \
+    conda run -n "$CONDA_ENV" python "${SCRIPT_DIR}/searchlight.py" \
         --preprocessed-dir "$PREPROCESSED_DIR" \
         --fmri-suffix      "$FMRI_SUFFIX" \
         --timing-csv       "$TIMING_CSV" \

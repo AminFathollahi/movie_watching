@@ -1,5 +1,5 @@
 """
-rsa/run_rdm_diagonal.py
+rsa/rdm_diagonal.py
 ========================
 Compute within-movie (block-diagonal) and cross-movie (off-diagonal) RDMs,
 and optionally run Glasser + searchlight RSA using those masked model RDMs.
@@ -39,7 +39,7 @@ Outputs — stage 2 (requires --preprocessed-dir + other fMRI args):
       searchlight_{method}_rho_blockdiag
 
 Usage (RDM only):
-  python rsa/run_rdm_diagonal.py \
+  python rsa/rdm_diagonal.py \
       --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
       --timing-csv     /home/amin/Research/Representation/Movie/data/movie_timing.csv \
       --output-dir     /home/amin/Research/Representation/Movie/outputs/rsa/raw/rdm_diagonal \
@@ -47,7 +47,7 @@ Usage (RDM only):
       --modality av --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0
 
 Usage (RDM + RSA maps):
-  python rsa/run_rdm_diagonal.py \
+  python rsa/rdm_diagonal.py \
       --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
       --timing-csv     /home/amin/Research/Representation/Movie/data/movie_timing.csv \
       --output-dir     /home/amin/Research/Representation/Movie/outputs/rsa/raw/rdm_diagonal \
@@ -330,7 +330,7 @@ def _precompute_partial_model_rdm(
 
 
 # =============================================================================
-# Glasser parcellation loading (same as run_glasser.py)
+# Glasser parcellation loading (same as glasser.py)
 # =============================================================================
 
 def _load_glasser_parcels(dlabel_path: str, fmri_bm_axis) -> dict:
@@ -441,7 +441,7 @@ def compute_partial_parcel_rsa(
 
 
 # =============================================================================
-# Searchlight helpers (k-NN caching — reused from run_searchlight.py)
+# Searchlight helpers (k-NN caching — reused from searchlight.py)
 # =============================================================================
 
 def _get_neighbors(surface_path, workbench, subject, hem, k, cache_dir):

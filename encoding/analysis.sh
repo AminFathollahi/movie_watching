@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# encoding/run_analysis.sh
+# encoding/analysis.sh
 # ==========================
 # Master runner for ridge encoding model analyses.
 # Supports group-average and per-subject modes with GNU parallel.
 #
 # Usage
 # -----
-#   bash encoding/run_analysis.sh [MODE] [BATCH_SIZE] [START_FROM]
+#   bash encoding/analysis.sh [MODE] [BATCH_SIZE] [START_FROM]
 #
 #   MODE        preprocess   Preprocess all 175 subjects from SUBJECTS_LIST:
 #                            per-subject CIFTIs → PREPROCESSED_INDIV_DIR
@@ -23,13 +23,13 @@
 #
 # Recommended workflow
 #   # 0. Preprocess all 175 subjects (skip if using streaming mode)
-#   bash encoding/run_analysis.sh preprocess
+#   bash encoding/analysis.sh preprocess
 #
 #   # 1. Group-average encoding
-#   bash encoding/run_analysis.sh avg
+#   bash encoding/analysis.sh avg
 #
 #   # 2. Per-subject encoding
-#   bash encoding/run_analysis.sh persubject 8
+#   bash encoding/analysis.sh persubject 8
 #
 # Streaming vs disk mode
 #   STREAM=true  — raw 7T CIFTIs preprocessed on-the-fly (SG→PSC→GSR→zscore)
@@ -69,7 +69,7 @@ STREAM=false
 SG_FILTER=false   # Savitzky-Golay high-pass filter
 PSC=false         # Percent signal change normalization
 GSR=false         # Global signal regression
-Z_SCORE=true      # Z-score per vertex (applied inside run_encoding.py; not by preprocess_individual.py)
+Z_SCORE=true      # Z-score per vertex (applied inside encoding.py; not by preprocess_individual.py)
 
 # Automatically build PREPROCESSING_FLAG from SG_FILTER/PSC/GSR
 # (Z_SCORE is NOT included — it is applied inside the Python analysis script)
@@ -194,7 +194,7 @@ _emb_exists() {
 run_preprocess() {
     log "=== Preprocessing n=$(grep -cv '^\s*#' "$SUBJECTS_LIST") subjects → ${PREPROCESSED_INDIV_DIR} ==="
     log "  Flags: SG_FILTER=${SG_FILTER}  PSC=${PSC}  GSR=${GSR}  (${PREPROCESSING_FLAG})"
-    log "  Note: Z_SCORE is applied inside run_encoding.py, not during preprocessing"
+    log "  Note: Z_SCORE is applied inside encoding.py, not during preprocessing"
     log "  Subjects: ${SUBJECTS_LIST}"
     log "  Raw CIFTI dir: ${CIFTI_DIR}"
 
@@ -231,6 +231,11 @@ run_preprocess() {
 run_avg() {
     log "=== Group-average encoding (${#MODELS[@]} models) ==="
 
+    local LEFT_SURF="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
+    local RIGHT_SURF="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
+    local WORKBENCH="/opt/workbench/bin_linux64/wb_command"
+    [ ! -f "$WORKBENCH" ] && WORKBENCH=""
+
     for MODEL_ENTRY in "${MODELS[@]}"; do
         IFS=':' read -r MODEL_NAME MODALITIES_STR <<< "$MODEL_ENTRY"
         IFS=',' read -ra MODS <<< "$MODALITIES_STR"
@@ -242,7 +247,7 @@ run_avg() {
             fi
             log "  ${MODEL_NAME} / ${MOD}"
 
-            run_python "${SCRIPT_DIR}/run_encoding.py" \
+            run_python "${SCRIPT_DIR}/encoding.py" \
                 --preprocessed-dir "$PREPROCESSED_DIR" \
                 --fmri-suffix      "$FMRI_SUFFIX" \
                 --timing-csv       "$TIMING_CSV" \
@@ -261,6 +266,9 @@ run_avg() {
                 --n-alphas         "$N_ALPHAS" \
                 --backend          "$BACKEND" \
                 --test-video-ids   "$TEST_VIDEO_IDS" \
+                --left-surface     "$LEFT_SURF" \
+                --right-surface    "$RIGHT_SURF" \
+                ${WORKBENCH:+--workbench "$WORKBENCH"} \
                 $(_hrf_flag) $(_normalize_flag)
         done
     done
@@ -324,7 +332,7 @@ _run_one_subject() {
 
             # shellcheck disable=SC2086
             conda run --no-capture-output -n "$_ENC_CONDA_ENV" python \
-                "${_ENC_SCRIPT_DIR}/run_encoding.py" \
+                "${_ENC_SCRIPT_DIR}/encoding.py" \
                 $FMRI_FLAGS \
                 --timing-csv     "$_ENC_TIMING_CSV" \
                 --embeddings-dir "$_ENC_EMBEDDINGS_DIR" \
@@ -438,7 +446,7 @@ run_groupstats() {
         for MOD in "${MODS[@]}"; do
             log "  Group stats: ${MODEL_NAME} / ${MOD}"
 
-            run_python "${SCRIPT_DIR}/run_group_stats.py" \
+            run_python "${SCRIPT_DIR}/group_stats.py" \
                 --output-dir      "$OUTPUT_DIR" \
                 --model           "$MODEL_NAME" \
                 --modality        "$MOD" \

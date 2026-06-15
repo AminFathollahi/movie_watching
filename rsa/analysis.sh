@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# rsa/run_analysis.sh
+# rsa/analysis.sh
 # ====================
 # Master runner for searchlight and Glasser parcel RSA analyses.
 # Supports group-average and per-subject modes with GNU parallel.
 #
 # Usage
 # -----
-#   bash rsa/run_analysis.sh [MODE] [METHOD] [BATCH_SIZE] [START_FROM]
+#   bash rsa/analysis.sh [MODE] [METHOD] [BATCH_SIZE] [START_FROM]
 #
 #   MODE        avg            Group-average RSA only (default)
 #               preprocess     Preprocess every subject listed in SUBJECTS_LIST:
@@ -35,28 +35,28 @@
 #
 # Recommended workflow
 #   # 0. Preprocess all subjects + group average (skip in streaming mode)
-#   bash rsa/run_analysis.sh preprocess
+#   bash rsa/analysis.sh preprocess
 #
 #   # 1a. Build the group-average midthickness surface from SUBJECTS_LIST
 #   bash make_average.sh
 #
 #   # 1b. Build the group-average geodesic cache
-#   bash rsa/run_analysis.sh neighbors_avg
+#   bash rsa/analysis.sh neighbors_avg
 #
 #   # 1c. Build per-subject neighbour caches for every subject in SUBJECTS_LIST
-#   bash rsa/run_analysis.sh neighbors all 4
+#   bash rsa/analysis.sh neighbors all 4
 #
 #   # 2. Per-subject searchlight
-#   bash rsa/run_analysis.sh persubject searchlight 4
+#   bash rsa/analysis.sh persubject searchlight 4
 #
 #   # 3. Re-run group stats after adding subjects
-#   bash rsa/run_analysis.sh groupstats
+#   bash rsa/analysis.sh groupstats
 #
 #   # Group average only
-#   bash rsa/run_analysis.sh avg
+#   bash rsa/analysis.sh avg
 #
 #   # Resume per-subject from a given subject ID
-#   bash rsa/run_analysis.sh persubject searchlight 4 100610
+#   bash rsa/analysis.sh persubject searchlight 4 100610
 #
 # Caching
 #   Neighbour caches are stored as
@@ -169,7 +169,7 @@ WORKBENCH="/opt/workbench/bin_linux64/wb_command"
 OUTPUT_DIR="${OUTPUTS_BASE}/rsa/${PREPROCESSING_FLAG}"
 
 # Shared geodesic neighbour cache.  Preprocessing-agnostic and stored outside
-# OUTPUT_DIR so that the k_max derivation logic in run_searchlight.py can
+# OUTPUT_DIR so that the k_max derivation logic in searchlight.py can
 # reuse existing caches across all PREPROCESSING_FLAG values.
 GEODESIC_CACHE_DIR="${OUTPUTS_BASE}/rsa/_geodesic_cache"
 
@@ -178,9 +178,10 @@ TR=1.0
 BIN_SEC=5.0
 SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
 HRF=false
+NORMALIZE=false  # true → per-run z-score; false → demean only (adds _demean suffix to outputs)
 METHOD="spearman"
 K=100
-N_PERM_TFCE=5000   # sign-flip permutations for TFCE group-stats FWE correction
+
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
@@ -255,7 +256,9 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 
-_hrf_flag() { [ "$HRF" = "true" ] && echo "--hrf" || echo ""; }
+_hrf_flag()       { [ "$HRF"       = "true" ] && echo "--hrf"          || echo ""; }
+_normalize_flag() { [ "$NORMALIZE" = "true" ] && echo "--normalize"    || echo "--no-normalize"; }
+_norm_label()     { [ "$NORMALIZE" = "true" ] && echo ""               || echo "_demean"; }
 
 _emb_exists() {
     local MODEL_NAME="$1" MOD="$2"
@@ -328,10 +331,11 @@ _run_avg_one_model() {
         fi
         log "  ${MODEL_NAME} / ${MOD}"
 
-        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_maps.dscalar.nii"
+        local NORM_LBL; NORM_LBL=$(_norm_label)
+        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}${NORM_LBL}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_maps.dscalar.nii"
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; then
-            run_python "${SCRIPT_DIR}/run_searchlight.py" \
+            run_python "${SCRIPT_DIR}/searchlight.py" \
                 --preprocessed-dir   "$PREPROCESSED_DIR" \
                 --fmri-suffix        "$FMRI_SUFFIX" \
                 --timing-csv         "$TIMING_CSV" \
@@ -353,11 +357,11 @@ _run_avg_one_model() {
                 --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
                 --combined-output    "$COMBINED_OUT" \
                 --gpu-batch-size "$GPU_BATCH_SIZE" \
-                $(_hrf_flag)
+                $(_hrf_flag) $(_normalize_flag)
         fi
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "glasser" ]; then
-            run_python "${SCRIPT_DIR}/run_glasser.py" \
+            run_python "${SCRIPT_DIR}/glasser.py" \
                 --preprocessed-dir "$PREPROCESSED_DIR" \
                 --fmri-suffix      "$FMRI_SUFFIX" \
                 --timing-csv       "$TIMING_CSV" \
@@ -484,7 +488,7 @@ _run_one_subject() {
                 else
                     # shellcheck disable=SC2086
                     conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
-                        "${_RSA_SCRIPT_DIR}/run_searchlight.py" \
+                        "${_RSA_SCRIPT_DIR}/searchlight.py" \
                         $FMRI_FLAGS \
                         --timing-csv         "$_RSA_TIMING_CSV" \
                         --embeddings-dir     "$_RSA_EMBEDDINGS_DIR" \
@@ -518,7 +522,7 @@ _run_one_subject() {
                 else
                     # shellcheck disable=SC2086
                     conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
-                        "${_RSA_SCRIPT_DIR}/run_glasser.py" \
+                        "${_RSA_SCRIPT_DIR}/glasser.py" \
                         $FMRI_FLAGS \
                         --timing-csv       "$_RSA_TIMING_CSV" \
                         --embeddings-dir   "$_RSA_EMBEDDINGS_DIR" \
@@ -542,7 +546,7 @@ _run_one_subject() {
     done
 
     # Remove any partial per-subject dconn files left in the cache directory.
-    # run_searchlight.py deletes these after extracting k-NN, but a crash mid-
+    # searchlight.py deletes these after extracting k-NN, but a crash mid-
     # run can leave them behind.
     rm -f "${_RSA_GEODESIC_CACHE_DIR}/${SUB}_left_geodesic.dconn.nii"
     rm -f "${_RSA_GEODESIC_CACHE_DIR}/${SUB}_right_geodesic.dconn.nii"
@@ -663,7 +667,7 @@ export -f _run_one_neighbors
 # before the first 'avg' RSA run.  Uses the K and GEODESIC_CACHE_DIR values
 # defined in the CONFIG section.
 #
-#   bash rsa/run_analysis.sh neighbors_avg
+#   bash rsa/analysis.sh neighbors_avg
 #
 # The full 'neighbors' mode invokes this first and then adds per-subject
 # caches; use 'neighbors_avg' to build only the group-average cache.
@@ -869,7 +873,7 @@ run_group_stats() {
 
         for MOD in "${MODS[@]}"; do
             log "  Group stats: ${MODEL_NAME} / ${MOD}"
-            run_python "${SCRIPT_DIR}/run_group_stats.py" \
+            run_python "${SCRIPT_DIR}/group_stats.py" \
                 --output-dir      "$OUTPUT_DIR" \
                 --model           "$MODEL_NAME" \
                 --modality        "$MOD" \
@@ -883,13 +887,52 @@ run_group_stats() {
                 --left-surface    "$LEFT_SURFACE" \
                 --right-surface   "$RIGHT_SURFACE" \
                 --workbench       "$WORKBENCH" \
-                --n-permutations  "$N_PERM_TFCE" \
-                --n-jobs          "$N_CPUS" \
                 || log "  WARNING: group stats skipped for ${MODEL_NAME}/${MOD} (no per-subject data or error above)"
         done
     done
 
     log "=== Group stats done ==="
+}
+
+# =============================================================================
+# NOISE CEILING
+# =============================================================================
+run_noise_ceiling() {
+    if [ ! -f "$SUBJECTS_LIST" ]; then
+        log "WARNING: SUBJECTS_LIST not found at ${SUBJECTS_LIST} — skipping noise ceiling."
+        return
+    fi
+
+    mapfile -t _NC_SUBJECTS < "$SUBJECTS_LIST"
+    local N_SUBS="${#_NC_SUBJECTS[@]}"
+
+    if [ "$N_SUBS" -lt 2 ]; then
+        log "WARNING: need ≥2 subjects for noise ceiling, found ${N_SUBS} — skipping."
+        return
+    fi
+
+    log "=== Noise ceiling (${N_SUBS} subjects, k=${K}, ${METHOD}) ==="
+
+    run_python "${SCRIPT_DIR}/noise_ceiling.py" \
+        --preprocessed-root  "$PREPROCESSED_INDIV_DIR" \
+        --subjects           "${_NC_SUBJECTS[@]}" \
+        --fmri-suffix        "$PREPROCESSING_FLAG" \
+        --timing-csv         "$TIMING_CSV" \
+        --k                  "$K" \
+        --bin-sec            "$BIN_SEC" \
+        --skip-sec           "$SKIP_SEC" \
+        --delay-sec          "$DELAY_SEC" \
+        --tr                 "$TR" \
+        --method             "$METHOD" \
+        --left-surface       "$LEFT_SURFACE" \
+        --right-surface      "$RIGHT_SURFACE" \
+        --workbench          "$WORKBENCH" \
+        --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
+        --template-cifti     "$TEMPLATE_CIFTI" \
+        --output-dir         "${OUTPUT_DIR}/noise_ceiling" \
+        || log "WARNING: noise ceiling failed (see output above)"
+
+    log "=== Noise ceiling done ==="
 }
 
 # =============================================================================
@@ -900,9 +943,9 @@ case "$MODE" in
     avg)            run_avg ;;
     neighbors_avg)  run_precompute_neighbors_avg ;;
     neighbors)      run_precompute_neighbors ;;
-    persubject)     run_persubject; run_group_stats ;;
-    groupstats)     run_group_stats ;;
-    all)            run_avg; run_persubject; run_group_stats ;;
+    persubject)     run_persubject; run_group_stats; run_noise_ceiling ;;
+    groupstats)     run_group_stats; run_noise_ceiling ;;
+    all)            run_avg; run_persubject; run_group_stats; run_noise_ceiling ;;
     *)
         echo "Unknown mode: $MODE" >&2
         echo "Use: preprocess | avg | neighbors_avg | neighbors | persubject | groupstats | all" >&2

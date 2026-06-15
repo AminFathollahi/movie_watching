@@ -34,7 +34,7 @@ GPU support
 -----------
 Himalaya automatically uses the torch_cuda backend when CUDA is available
 (configured via --backend in the YAML config builder).  Set PYTORCH_CUDA_ALLOC_CONF
-in run_analysis.sh for memory management.
+in analysis.sh for memory management.
 
 Input modes
 -----------

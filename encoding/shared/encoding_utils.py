@@ -4,7 +4,7 @@ encoding/shared/encoding_utils.py
 Shared utilities for ridge encoding models.
 
 All functions are stateless and accept explicit arguments — no hardcoded paths
-or parameters. Configure everything in run_analysis.sh and pass via CLI.
+or parameters. Configure everything in analysis.sh and pass via CLI.
 
 fMRI preprocessing convention
 ------------------------------
@@ -283,11 +283,13 @@ def build_embedding_arrays(emb_path: str, timing_df: pd.DataFrame,
         if not run_segs:
             continue
         run_data = np.vstack(run_segs)
+        mu = run_data.mean(axis=0, keepdims=True)
         if normalize:
-            mu = run_data.mean(axis=0, keepdims=True)
             sd = run_data.std(axis=0, keepdims=True)
             sd[sd == 0] = 1.0
             run_data = (run_data - mu) / sd
+        else:
+            run_data = run_data - mu   # demean per run, no variance normalization
         all_train.append(run_data)
 
     X_train = np.vstack(all_train).astype(np.float32)

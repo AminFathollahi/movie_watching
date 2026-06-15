@@ -1,5 +1,5 @@
 """
-rsa/run_multimodal_decomposition.py
+rsa/multimodal_decomposition.py
 =====================================
 CKA-based Multimodal Interaction Decomposition.
 
@@ -26,7 +26,7 @@ Mathematical Framework
     brain responses and model representations, computed either:
       - Per Glasser parcel: K_brain from all vertices in that parcel.
       - Per searchlight vertex: K_brain from the k-NN geodesic neighbourhood
-        (same k-NN cache as run_searchlight.py).
+        (same k-NN cache as searchlight.py).
 
     For each parcel or searchlight:
        K_brain        — Gram matrix from binned fMRI at the local vertices
@@ -73,7 +73,7 @@ Model Recommendations for Future Runs
 Usage
 -----
   # Both Glasser parcels and searchlight (default):
-python rsa/run_multimodal_decomposition.py \
+python rsa/multimodal_decomposition.py \
     --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
     --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \
     --fmri-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
@@ -92,10 +92,10 @@ python rsa/run_multimodal_decomposition.py \
     --bin-sec 5.0 --delay-sec 5.0 --tr 1.0
 
   # Glasser parcels only (no surface/workbench/cache args needed):
-  python rsa/run_multimodal_decomposition.py ... --method glasser
+  python rsa/multimodal_decomposition.py ... --method glasser
 
   # Searchlight only (no --glasser-dlabel needed):
-  python rsa/run_multimodal_decomposition.py ... --method searchlight
+  python rsa/multimodal_decomposition.py ... --method searchlight
 
 References
 ----------
@@ -187,7 +187,7 @@ def parse_args():
                    help="Path to wb_command (for geodesic distance computation).")
     p.add_argument("--geodesic-cache-dir", default=None, dest="geodesic_cache_dir",
                    help="Directory for k-NN .npy cache files (shared with "
-                        "run_searchlight.py). Required for method=searchlight or both.")
+                        "searchlight.py). Required for method=searchlight or both.")
     p.add_argument("--subject",        default="group_average",
                    help="Subject label used for geodesic cache filenames.")
     p.add_argument("--gpu-batch-size", type=int, default=256, dest="gpu_batch_size",

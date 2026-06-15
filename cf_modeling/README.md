@@ -89,7 +89,7 @@ group_average_sg_psc_run_trs.npy
 ```
 
 File names are determined by `PREPROCESSING_FLAG` (auto-built from `SG_FILTER`/`PSC`/`GSR`
-in `run_analysis.sh`).  With the current defaults (`SG_FILTER=true PSC=true GSR=false`)
+in `analysis.sh`).  With the current defaults (`SG_FILTER=true PSC=true GSR=false`)
 the suffix is `sg_psc`.  Add `GSR=true` to get `sg_psc_gsr`.
 
 > **Group-average CIFTI location**: `preprocess` mode saves the group-average file to
@@ -103,7 +103,7 @@ the suffix is `sg_psc`.  Add `GSR=true` to get `sg_psc_gsr`.
 
 ### Streaming mode (`STREAM=true`)
 
-Set `STREAM=true` in `run_analysis.sh` to preprocess raw CIFTIs on-the-fly
+Set `STREAM=true` in `analysis.sh` to preprocess raw CIFTIs on-the-fly
 inside `02_fit_cf_model.py`; only R²_nc maps are written to disk.
 
 ## Structure
@@ -112,7 +112,7 @@ inside `02_fit_cf_model.py`; only R²_nc maps are written to disk.
 cf_modeling/
 ├── NOTICE                         # third-party code attributions (read this)
 ├── README.md                      # this file
-├── run_analysis.sh                # master runner — all paths and ROI pairs here
+├── analysis.sh                # master runner — all paths and ROI pairs here
 │
 ├── 00_make_roi_masks.py           # (optional) export CSV masks from Glasser dlabel
 ├── 01_extract_geometry.py         # build Subsurfaces + LBOEs (59k_fs_LR)
@@ -145,19 +145,19 @@ conda activate movie
 cd /home/amin/Research/Representation/Movie/movie_watching   # repo root
 
 # Full pipeline (geometry → group-average → per-subject)
-bash cf_modeling/run_analysis.sh all
+bash cf_modeling/analysis.sh all
 
 # Individual stages
-bash cf_modeling/run_analysis.sh masks        # optional CSV mask generation
-bash cf_modeling/run_analysis.sh geometry     # build subsurfaces only
-bash cf_modeling/run_analysis.sh avg          # group-average only
-bash cf_modeling/run_analysis.sh persubject   # per-subject, sequential
-bash cf_modeling/run_analysis.sh persubject 8 # per-subject, 8 parallel jobs
-bash cf_modeling/run_analysis.sh persubject 8 100610  # resume from subject 100610
+bash cf_modeling/analysis.sh masks        # optional CSV mask generation
+bash cf_modeling/analysis.sh geometry     # build subsurfaces only
+bash cf_modeling/analysis.sh avg          # group-average only
+bash cf_modeling/analysis.sh persubject   # per-subject, sequential
+bash cf_modeling/analysis.sh persubject 8 # per-subject, 8 parallel jobs
+bash cf_modeling/analysis.sh persubject 8 100610  # resume from subject 100610
 ```
 
 Add or remove ROI pairs by editing `PERSUBJECT_PAIRS` and `AVG_PAIRS` in
-`run_analysis.sh`.
+`analysis.sh`.
 
 ## Script-by-script overview
 
@@ -308,7 +308,7 @@ wb_view \
 Load `R2_V1_nc` (visual) as blue and `R2_3b_nc` (somatosensory) as red,
 both transparent below 0, for a Figure 3a-style dual-colour display.
 
-## Configuration reference (`run_analysis.sh`)
+## Configuration reference (`analysis.sh`)
 
 | Variable | Default | Description |
 |---|---|---|

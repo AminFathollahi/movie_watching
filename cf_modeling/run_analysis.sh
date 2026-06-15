@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# cf_modeling/run_analysis.sh
+# cf_modeling/analysis.sh
 # ============================
 # Master runner for CF (connective field) modeling analyses.
 # Imports vicsompy directly from its source repo (no pip install required).
 #
 # Usage
 # -----
-#   bash cf_modeling/run_analysis.sh [MODE] [BATCH_SIZE] [START_FROM]
+#   bash cf_modeling/analysis.sh [MODE] [BATCH_SIZE] [START_FROM]
 #
 #   MODE        masks        Generate per-ROI CSV mask files from Glasser dlabel
 #                            (optional — 01_extract_geometry.py reads dlabel directly)
@@ -22,19 +22,19 @@
 #
 # Recommended workflow
 #   # 0. (Optional) Generate ROI CSV mask files
-#   bash cf_modeling/run_analysis.sh masks
+#   bash cf_modeling/analysis.sh masks
 #
 #   # 1. Build subsurfaces + LBOEs (one-time, cached)
-#   bash cf_modeling/run_analysis.sh geometry
+#   bash cf_modeling/analysis.sh geometry
 #
 #   # 2. Preprocess all 175 subjects (skip if using streaming mode)
-#   bash cf_modeling/run_analysis.sh preprocess
+#   bash cf_modeling/analysis.sh preprocess
 #
 #   # 3. Group-average CF modeling
-#   bash cf_modeling/run_analysis.sh avg
+#   bash cf_modeling/analysis.sh avg
 #
 #   # 4. Per-subject CF modeling
-#   bash cf_modeling/run_analysis.sh persubject 8
+#   bash cf_modeling/analysis.sh persubject 8
 #
 # Disk mode (default, STREAM=false)
 #   Reads pre-saved preprocessed CIFTIs from PREPROCESSED_INDIV_DIR.

@@ -1,5 +1,5 @@
 """
-rsa/run_searchlight.py
+rsa/searchlight.py
 ===================================
 Vertex-wise searchlight RSA on HCP 7T movie-watching fMRI data.
 
@@ -32,7 +32,7 @@ Slow path: compute/load dconn → chunk-extract k-NN → save .npy → delete dc
             group_average dconn is kept so other k values can reuse it).
 
 Usage (disk mode):
-  python run_searchlight.py \
+  python searchlight.py \
       --preprocessed-dir <path> --fmri-suffix raw \
       --subject group_average --timing-csv <path> \
       --embeddings-dir <path> --template-cifti <path> \
@@ -60,6 +60,8 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
+from nibabel.gifti import GiftiDataArray, GiftiImage
+from scipy import stats
 from scipy.stats import rankdata
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +74,7 @@ from rsa.shared.rsa_utils import (
 from cifti_io import (
     get_bm_axis, get_cortex_vertex_indices,
     get_combined_map_names, merge_into_combined,
+    save_cifti_map,
 )
 
 logging.basicConfig(
@@ -81,7 +84,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # n_jobs for joblib parallelism inside each subject's searchlight.
-# Read from env var _RSA_N_JOBS (set by run_analysis.sh based on BATCH_SIZE).
+# Read from env var _RSA_N_JOBS (set by analysis.sh based on BATCH_SIZE).
 # Default -1 (all CPUs) is fine when running a single subject, but MUST be
 # reduced when many subjects run in parallel to avoid thread oversubscription.
 # Rule of thumb: _RSA_N_JOBS = max(1, nproc // BATCH_SIZE)
@@ -91,6 +94,65 @@ N_JOBS = int(os.environ.get("_RSA_N_JOBS", -1))
 # Each chunk uses ~chunk_size × n_surface_verts × 4 bytes of RAM.
 # 1000 rows × 59292 verts × 4 bytes ≈ 237 MB — safe on any modern machine.
 _DCONN_CHUNK = 1_000
+
+
+# =============================================================================
+# Group-average significance helpers
+# =============================================================================
+
+def _rho_sigmap(rho: np.ndarray, n_bins: int) -> tuple[np.ndarray, np.ndarray]:
+    """Compute one-tailed p-values and sign × −log10(p) for a rho map.
+
+    Uses df = n_bins − 2 via the standard rho → t conversion
+    (same formula as Pearson r, valid as an approximation for Spearman).
+    Returns (p_uncorr, sigmap_uncorr) both float32.
+    """
+    df   = max(n_bins - 2, 1)
+    rho  = np.asarray(rho, dtype=np.float64)
+    t    = rho * np.sqrt(df) / np.sqrt(np.maximum(1.0 - rho**2, 1e-10))
+    p_two = stats.t.sf(np.abs(t), df=df) * 2.0
+    p_uncorr = np.where(t > 0, p_two / 2.0, 1.0 - p_two / 2.0).astype(np.float32)
+    eps = np.finfo(np.float32).tiny
+    sigmap = (np.sign(rho) * (-np.log10(np.maximum(p_uncorr, eps)))).astype(np.float32)
+    return p_uncorr, sigmap
+
+
+def _fdr_sigmap(p_uncorr: np.ndarray, rho: np.ndarray,
+                alpha: float = 0.05) -> tuple[np.ndarray, np.ndarray, int]:
+    """BH-FDR correction; returns (sigmap_fdr, fdr_mask_f32, n_sig)."""
+    p_fdr = stats.false_discovery_control(p_uncorr.astype(np.float64), method="bh")
+    eps   = np.finfo(np.float32).tiny
+    sigmap_fdr = (np.sign(rho) * (-np.log10(np.maximum(p_fdr, eps)))).astype(np.float32)
+    fdr_mask   = (p_fdr < alpha).astype(np.float32)
+    return sigmap_fdr, fdr_mask, int(fdr_mask.sum())
+
+
+def _write_border_file(
+    cluster_mask: np.ndarray,
+    cifti_vertex_indices: np.ndarray,
+    n_full_verts: int,
+    surface_path: str,
+    out_border_path: str,
+    workbench: str,
+    class_name: str = "fdr",
+) -> None:
+    """Expand cluster_mask to full surface and trace a border with wb_command."""
+    full_mask = np.zeros(n_full_verts, dtype=np.float32)
+    full_mask[cifti_vertex_indices] = cluster_mask
+
+    tmp_metric = Path(out_border_path).with_suffix(".tmp.func.gii")
+    arr = GiftiDataArray(data=full_mask, intent=0, datatype="NIFTI_TYPE_FLOAT32")
+    nib.save(GiftiImage(darrays=[arr]), str(tmp_metric))
+    try:
+        subprocess.run(
+            [workbench, "-metric-rois-to-border",
+             surface_path, str(tmp_metric), class_name, out_border_path],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        log.warning(f"wb_command border failed for {out_border_path}:\n  {e.stderr.strip()}")
+    finally:
+        tmp_metric.unlink(missing_ok=True)
 
 
 # =============================================================================
@@ -147,6 +209,9 @@ def parse_args():
 
     p.add_argument("--gpu-batch-size", type=int, default=512, dest="gpu_batch_size",
                    help="Vertices per GPU batch (default 512; reduce if GPU OOM).")
+    p.add_argument("--normalize", action=argparse.BooleanOptionalAction, default=True,
+                   help="Per-run z-score normalization of fMRI and embeddings. "
+                        "--no-normalize demeaning only; output files get _demean suffix.")
 
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
     prep.add_argument("--sg-filter", default=False, action="store_true")
@@ -638,29 +703,121 @@ def _streaming_fmri_tag(args) -> str:
 # Core analysis
 # =============================================================================
 
+def _save_significance_maps(corr_full, n_bins, combined_path, map_name, out_root, fmri_tag, args):
+    """Compute and save vertex-wise p-values + FDR maps for a group-average rho map."""
+    p_uncorr, sigmap_uncorr = _rho_sigmap(corr_full, n_bins)
+    sigmap_fdr, fdr_mask, n_sig_fdr = _fdr_sigmap(p_uncorr, corr_full)
+    log.info(f"  n_bins={n_bins}  FDR significant (p<0.05): {n_sig_fdr:,} / {corr_full.shape[0]:,}")
+
+    if combined_path is not None:
+        existing = get_combined_map_names(combined_path)
+        uncorr_name = f"{map_name}_sigmap_uncorr"
+        fdr_name    = f"{map_name}_sigmap_fdr"
+        if uncorr_name not in existing:
+            merge_into_combined(sigmap_uncorr, uncorr_name, combined_path, args.template_cifti)
+        if fdr_name not in existing:
+            merge_into_combined(sigmap_fdr, fdr_name, combined_path, args.template_cifti)
+
+    bin_sec_int = int(args.bin_sec)
+    skip_int    = int(args.skip_sec)
+    delay_tag   = f"delay{int(args.delay_sec)}s"
+    mask_stem   = (f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}"
+                   f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}")
+    fdr_mask_path = out_root / f"{mask_stem}_fdr_mask.dscalar.nii"
+    if not fdr_mask_path.exists():
+        out_root.mkdir(parents=True, exist_ok=True)
+        save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
+        log.info(f"  Saved FDR mask: {fdr_mask_path.name}")
+
+    workbench   = getattr(args, "workbench", None)
+    left_surf   = getattr(args, "left_surface", None)
+    right_surf  = getattr(args, "right_surface", None)
+    sentinel    = out_root / f"{mask_stem}_fdr_no_borders"
+    border_lh_p = out_root / f"{mask_stem}_fdr_lh.border"
+    border_rh_p = out_root / f"{mask_stem}_fdr_rh.border"
+    if workbench and left_surf and right_surf:
+        if border_lh_p.exists() and border_rh_p.exists():
+            pass  # already created
+        elif sentinel.exists():
+            pass  # intentionally skipped previously
+        else:
+            n_grays      = corr_full.shape[0]
+            coverage_fdr = fdr_mask.sum() / n_grays if n_grays > 0 else 0.0
+            if fdr_mask.sum() == 0:
+                log.info("  No FDR-significant vertices; skipping border files.")
+                sentinel.touch()
+            elif coverage_fdr > 0.90:
+                log.warning(f"  FDR mask covers {coverage_fdr*100:.1f}% of cortex — skipping border files.")
+                sentinel.touch()
+            else:
+                bm  = get_bm_axis(args.template_cifti)
+                lh_idx, rh_idx = get_cortex_vertex_indices(bm)
+                n_left     = len(lh_idx)
+                n_verts_lh = nib.load(left_surf).darrays[0].data.shape[0]
+                n_verts_rh = nib.load(right_surf).darrays[0].data.shape[0]
+                _write_border_file(fdr_mask[:n_left], lh_idx, n_verts_lh,
+                                   left_surf, str(border_lh_p), workbench)
+                _write_border_file(fdr_mask[n_left:], rh_idx, n_verts_rh,
+                                   right_surf, str(border_rh_p), workbench)
+                log.info(f"  FDR borders: {border_lh_p.name}  {border_rh_p.name}")
+
+
 def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
                   timing_df: pd.DataFrame, config: str, out_root: Path, fmri_tag: str):
+
+    normalize     = getattr(args, "normalize", True)
+    norm_tag      = "" if normalize else "_demean"
+    full_tag      = f"{fmri_tag}{norm_tag}"   # e.g. "raw" or "raw_demean"
 
     bin_sec_int   = int(args.bin_sec)
     skip_int      = int(args.skip_sec)
     delay_tag     = f"delay{int(args.delay_sec)}s"
-    maps_out      = out_root / f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy"
+    maps_out      = out_root / f"rsa_59k_{full_tag}_k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy"
     map_name      = f"searchlight_{args.method}_rho"
     combined_path = Path(args.combined_output) if args.combined_output else None
 
     # ── Skip / fast-merge logic ───────────────────────────────────────────────
+    mask_stem_check = (f"rsa_59k_{full_tag}_k{args.k}_delay{int(args.delay_sec)}s"
+                       f"_bin{int(args.bin_sec)}s_skip{int(args.skip_sec)}s_{args.method}")
+    fdr_mask_path_check = out_root / f"{mask_stem_check}_fdr_mask.dscalar.nii"
+    border_lh_check     = out_root / f"{mask_stem_check}_fdr_lh.border"
+    border_rh_check     = out_root / f"{mask_stem_check}_fdr_rh.border"
+    sentinel_check      = out_root / f"{mask_stem_check}_fdr_no_borders"
+
+    wb = getattr(args, "workbench", None)
+    ls = getattr(args, "left_surface", None)
+    rs = getattr(args, "right_surface", None)
+    borders_done = (
+        not (wb and ls and rs) or               # wb not configured — borders N/A
+        (border_lh_check.exists() and border_rh_check.exists()) or  # borders saved
+        sentinel_check.exists()                  # intentionally skipped (empty/full mask)
+    )
+
+    sigmap_fdr_name = f"{map_name}_sigmap_fdr"
+    all_done = (
+        maps_out.exists() and
+        fdr_mask_path_check.exists() and
+        borders_done and
+        (combined_path is None or sigmap_fdr_name in get_combined_map_names(combined_path))
+    )
+    if all_done:
+        log.info(f"Output already exists and significance maps up to date — skipping.")
+        return
+
     if maps_out.exists():
-        if combined_path is None:
-            log.info(f"Output already exists — skipping: {maps_out.name}")
-            return
-        if map_name in get_combined_map_names(combined_path):
-            log.info(f"Output already exists and combined up to date — skipping: {maps_out.name}")
-            return
-        # .npy exists but combined missing this map → merge without recomputing
-        log.info(f"  .npy exists; merging '{map_name}' into combined ...")
+        # .npy exists; compute significance maps without rerunning the searchlight
+        log.info(f"  .npy exists; computing/merging significance maps ...")
         corr_full = np.load(str(maps_out)).astype(np.float32)
-        combined_path.parent.mkdir(parents=True, exist_ok=True)
-        merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
+        if combined_path is not None:
+            combined_path.parent.mkdir(parents=True, exist_ok=True)
+            if map_name not in get_combined_map_names(combined_path):
+                merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
+        # Compute n_bins from embeddings (needed for df in p-value formula)
+        emb_file = (Path(args.embeddings_dir) / args.model /
+                    f"bin{bin_sec_int}s_skip{skip_int}s" / f"{args.model}_{args.modality}.npy")
+        n_bins = np.load(str(emb_file), mmap_mode="r").shape[0]
+        _save_significance_maps(
+            corr_full, n_bins, combined_path, map_name, out_root, full_tag, args)
         return
 
     assert_segment_timing(timing_df, args.bin_sec, args.tr,
@@ -668,9 +825,9 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
 
     fmri_binned = preprocess_fmri(
         fmri_continuous, timing_df, run_trs, args.bin_sec, args.tr,
-        args.delay_sec, skip_sec=args.skip_sec,
+        args.delay_sec, skip_sec=args.skip_sec, normalize=normalize,
     )
-    log.info(f"  fMRI binned & z-scored: {fmri_binned.shape}")
+    log.info(f"  fMRI binned {'z-scored' if normalize else 'demeaned'}: {fmri_binned.shape}")
 
     emb_file = (Path(args.embeddings_dir) / args.model /
                 f"bin{bin_sec_int}s_skip{skip_int}s" / f"{args.model}_{args.modality}.npy")
@@ -679,9 +836,9 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     emb = process_model_embeddings(
         str(emb_file), timing_df, bin_sec=args.bin_sec, tr=args.tr,
         run_trs=run_trs, delay_sec=args.delay_sec, hrf=args.hrf,
-        skip_sec=args.skip_sec,
+        skip_sec=args.skip_sec, normalize=normalize,
     )
-    log.info(f"  Model binned & z-scored: {emb.shape}")
+    log.info(f"  Model binned {'z-scored' if normalize else 'demeaned'}: {emb.shape}")
 
     # Enforce exact temporal alignment
     fmri_binned, emb = align_and_assert_bins(fmri_binned, emb)
@@ -693,7 +850,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     n_left = len(left_indices)
 
     # Shared geodesic cache: use explicit override if provided, else fall back to
-    # the preprocessing-specific subdir.  All callers in run_analysis.sh pass
+    # the preprocessing-specific subdir.  All callers in analysis.sh pass
     # --geodesic-cache-dir so the same .npy files are shared across preprocessing
     # variants and the k_max derivation (Level 2) works correctly.
     if getattr(args, "geodesic_cache_dir", None):
@@ -742,10 +899,12 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
     np.save(str(maps_out), corr_full)
     log.info(f"  Saved: {maps_out.name}  mean_r={corr_full.mean():.4f}  max_r={corr_full.max():.4f}")
 
-    # ── Merge into combined output ────────────────────────────────────────────
+    # ── Merge rho into combined output ────────────────────────────────────────
     if combined_path is not None:
         combined_path.parent.mkdir(parents=True, exist_ok=True)
         merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
+
+    _save_significance_maps(corr_full, n_bins, combined_path, map_name, out_root, full_tag, args)
 
     # ── Per-subject JSON report (flat directory, keyed by subject ID) ─────────
     reports_dir = Path(args.output_dir) / "subject_data" / "subject_reports"

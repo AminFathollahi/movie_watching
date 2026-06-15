@@ -1,0 +1,441 @@
+"""
+rsa/delta_rho.py
+================
+Post-hoc Δρ analysis: measures how much a target RSA model exceeds its
+best-performing baseline at every cortical vertex.
+
+  Δρ(v) = ρ_target(v) − max(ρ_baseline_1(v), ρ_baseline_2(v), ...)
+
+Per-subject rho maps are loaded for every model/modality, aligned to the
+common subject set, and Δρ is computed per subject before group inference
+(one-sample t-test + BH-FDR). This gives proper statistics on the advantage
+rather than just subtracting group means.
+
+Typical comparisons
+-------------------
+Within-architecture unimodal:
+  --target pe-av-small-16-frame av
+  --baselines pe-av-small-16-frame a  pe-av-small-16-frame v
+
+Cross-architecture unimodal:
+  --target pe-av-small-16-frame av
+  --baselines audiomae a  videomaev2-large v
+
+Bimodal-with-text baseline:
+  --target pe-av-small-16-frame av
+  --baselines pe-av-small-16-frame avt
+
+Usage
+-----
+python rsa/delta_rho.py \\
+    --output-dir /path/to/searchlight_rsa_output \\
+    --target pe-av-small-16-frame av \\
+    --baselines pe-av-small-16-frame a pe-av-small-16-frame v \\
+    --k 100 --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 \\
+    --method spearman --fmri-tag raw \\
+    --template-cifti /path/to/template.dscalar.nii \\
+    --out-dir /path/to/output
+
+Output CIFTI maps
+-----------------
+  delta_rho     — group mean Δρ
+  rho_target    — group mean ρ for the target model
+  rho_max_base  — vertex-wise maximum over baseline group mean ρ maps
+  t_stat        — one-sample t on per-subject Δρ
+  sigmap_uncorr — sign(Δρ) × −log10(p_uncorr)
+  sigmap_fdr    — sign(Δρ) × −log10(p_fdr)   [BH-FDR]
+
+A binary fdr_mask is saved as a companion dscalar.
+"""
+
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+
+import numpy as np
+from scipy import stats
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from cifti_io import (
+    get_combined_map_names,
+    save_cifti_map,
+    save_cifti_multimap,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+log = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Predefined runs
+# =============================================================================
+
+# Each entry: target (model, modality) and baselines [(model, modality), ...]
+# Mirrors the philosophy of PARTIAL_RSA_RUNS in model_registry.py but operates
+# on already-computed per-subject rho maps (no searchlight re-run needed).
+
+DELTA_RHO_RUNS: dict[str, dict] = {
+    # run_A: PE-AV joint vs its own unimodal decoders (within-architecture)
+    # Answers: does the joint embedding exceed the better of its own A or V modes?
+    "run_A": {
+        "target":      ("pe-av-small-16-frame", "av"),
+        "baselines":   [("pe-av-small-16-frame", "a"), ("pe-av-small-16-frame", "v")],
+        "description": (
+            "PE-AV/av vs max(PE-AV/a, PE-AV/v) — "
+            "within-architecture AV advantage over own unimodal decoders."
+        ),
+    },
+    # run_B: PE-AV joint vs independently-trained specialist unimodals (AudioMAE + VideoMAE)
+    # Stricter cross-architecture test: does PE-AV/av beat the best specialist available?
+    "run_B": {
+        "target":      ("pe-av-small-16-frame", "av"),
+        "baselines":   [("audiomae", "a"), ("videomaev2-large", "v")],
+        "description": (
+            "PE-AV/av vs max(AudioMAE/a, VideoMAEv2/v) — "
+            "cross-architecture AV advantage over independently-trained specialists."
+        ),
+    },
+    # run_C: PE-AV joint vs WavLM + PE-Core — strictest specialist baseline
+    # WavLM is the strongest speech/audio model; PE-Core is vision-only Perception Encoder.
+    "run_C": {
+        "target":      ("pe-av-small-16-frame", "av"),
+        "baselines":   [("wavlm-large", "a"), ("pe-core-l14", "v")],
+        "description": (
+            "PE-AV/av vs max(WavLM-Large/a, PE-Core-L14/v) — "
+            "strictest cross-family specialist baseline."
+        ),
+    },
+}
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Δρ = ρ_target − max(ρ_baselines): post-hoc advantage map.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog=(
+            "Predefined runs (--run): "
+            + "  ".join(f"{k}: {v['description']}" for k, v in DELTA_RHO_RUNS.items())
+        ),
+    )
+    p.add_argument("--output-dir",    required=True,
+                   help="Root RSA output directory containing per-subject subdirs.")
+    # Either use a predefined run OR specify target/baselines manually
+    grp = p.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--run",         choices=list(DELTA_RHO_RUNS.keys()),
+                     help="Predefined run key (see DELTA_RHO_RUNS above).")
+    grp.add_argument("--target",      nargs=2, metavar=("MODEL", "MODALITY"),
+                     help="Target model and modality.")
+    p.add_argument("--baselines",     nargs="+", metavar="TOKEN",
+                   help="Flat list of baseline MODEL MODALITY pairs (required if --target used).")
+    p.add_argument("--k",             type=int,   required=True)
+    p.add_argument("--bin-sec",       type=float, required=True)
+    p.add_argument("--skip-sec",      type=float, default=None, dest="skip_sec")
+    p.add_argument("--delay-sec",     type=float, default=5.0)
+    p.add_argument("--method",        default="spearman",
+                   choices=["spearman", "pearson", "rho_a"])
+    p.add_argument("--fmri-tag",      required=True, dest="fmri_tag")
+    p.add_argument("--template-cifti", required=True, dest="template_cifti")
+    p.add_argument("--out-dir",       required=True, dest="out_dir")
+    p.add_argument("--alpha",         type=float, default=0.05)
+    args = p.parse_args()
+
+    # Resolve predefined run into target/baselines
+    if args.run is not None:
+        cfg = DELTA_RHO_RUNS[args.run]
+        args.target    = list(cfg["target"])
+        args.baselines = [tok for pair in cfg["baselines"] for tok in pair]
+        log.info(f"Run {args.run}: {cfg['description']}")
+    elif args.baselines is None:
+        p.error("--baselines is required when --target is used.")
+
+    return args
+
+
+def _parse_baseline_pairs(tokens: list[str]) -> list[tuple[str, str]]:
+    if len(tokens) % 2 != 0:
+        raise ValueError(
+            f"--baselines requires an even number of tokens (MODEL MODALITY pairs); "
+            f"got {len(tokens)}: {tokens}"
+        )
+    return [(tokens[i], tokens[i + 1]) for i in range(0, len(tokens), 2)]
+
+
+# =============================================================================
+# Per-subject rho loading
+# =============================================================================
+
+def _config_path_parts(k, bin_sec, skip_sec, delay_sec, method):
+    bin_int  = int(bin_sec)
+    skip_int = int(skip_sec)
+    delay_tag = f"delay{int(delay_sec)}s"
+    config    = f"k{k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{method}"
+    fname     = (f"rsa_59k_{{fmri_tag}}_k{k}_{delay_tag}"
+                 f"_bin{bin_int}s_skip{skip_int}s_{method}_searchlight.npy")
+    return config, fname
+
+
+def load_rho_stack(
+    output_dir: str,
+    model: str,
+    modality: str,
+    k: int,
+    bin_sec: float,
+    skip_sec: float,
+    delay_sec: float,
+    method: str,
+    fmri_tag: str,
+) -> tuple[np.ndarray, list[str]]:
+    """Load per-subject rho .npy files for one model/modality.
+
+    Returns
+    -------
+    rho_stack  : (n_subs, n_verts) float32
+    subject_ids: list[str]  — parent dir names, one per subject
+    """
+    bin_int   = int(bin_sec)
+    skip_int  = int(skip_sec)
+    delay_tag = f"delay{int(delay_sec)}s"
+    config    = f"k{k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{method}"
+    fname     = (f"rsa_59k_{fmri_tag}_k{k}_{delay_tag}"
+                 f"_bin{bin_int}s_skip{skip_int}s_{method}_searchlight.npy")
+    model_mod = f"{model}_{modality}"
+
+    files = sorted(
+        Path(output_dir).glob(f"subject_data/*/{model_mod}/{config}/{fname}")
+    )
+    if not files:
+        raise FileNotFoundError(
+            f"No per-subject rho files found for {model}/{modality}.\n"
+            f"Pattern: {output_dir}/subject_data/*/{model_mod}/{config}/{fname}"
+        )
+
+    rho_maps = [np.load(str(f)).astype(np.float32) for f in files]
+    subject_ids = [f.parent.parent.parent.name for f in files]
+    log.info(f"  Loaded {len(files)} subjects for {model}/{modality}")
+    return np.stack(rho_maps, axis=0), subject_ids
+
+
+def _align_stacks(
+    target_stack: np.ndarray,
+    target_subs: list[str],
+    baseline_stacks: list[np.ndarray],
+    baseline_subs: list[list[str]],
+    baseline_labels: list[str],
+) -> tuple[np.ndarray, list[np.ndarray], list[str]]:
+    """Intersect subject sets and reindex all stacks to the common subset."""
+    common = set(target_subs)
+    for subs in baseline_subs:
+        common &= set(subs)
+    common = sorted(common)
+
+    if not common:
+        raise RuntimeError("No subjects in common across target and all baselines.")
+
+    n_before = len(target_subs)
+    if len(common) < n_before:
+        dropped = set(target_subs) - set(common)
+        log.warning(f"Subject alignment: keeping {len(common)}/{n_before}; "
+                    f"dropped {dropped}")
+
+    def _reindex(stack, subs):
+        idx = [subs.index(s) for s in common]
+        return stack[idx]
+
+    t_aligned = _reindex(target_stack, target_subs)
+    b_aligned = [_reindex(bs, bl) for bs, bl in zip(baseline_stacks, baseline_subs)]
+
+    for label, ba in zip(baseline_labels, b_aligned):
+        log.info(f"  {label}: aligned to {len(common)} subjects, "
+                 f"mean_rho={ba.mean():.4f}")
+
+    return t_aligned, b_aligned, common
+
+
+# =============================================================================
+# Group inference helpers (mirror group_stats.py)
+# =============================================================================
+
+def _fdr_sigmap(p_uncorr, sign_vec, alpha):
+    p_fdr = stats.false_discovery_control(p_uncorr, method="bh")
+    eps = np.finfo(np.float32).tiny
+    sigmap_fdr = (sign_vec * (-np.log10(np.maximum(p_fdr, eps)))).astype(np.float32)
+    fdr_mask   = (p_fdr < alpha).astype(np.float32)
+    return sigmap_fdr, fdr_mask, int(fdr_mask.sum())
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main():
+    args = parse_args()
+
+    if args.skip_sec is None:
+        args.skip_sec = args.bin_sec
+
+    baseline_pairs  = _parse_baseline_pairs(args.baselines)
+    baseline_labels = [f"{m}/{mod}" for m, mod in baseline_pairs]
+    target_label    = f"{args.target[0]}/{args.target[1]}"
+
+    log.info("=" * 70)
+    log.info(f"Δρ analysis")
+    log.info(f"  target   : {target_label}")
+    log.info(f"  baselines: {baseline_labels}")
+    log.info(f"  k={args.k}  bin={args.bin_sec}s  skip={args.skip_sec}s  "
+             f"delay={args.delay_sec}s  method={args.method}")
+    log.info("=" * 70)
+
+    # ── Build output path and skip-check ──────────────────────────────────────
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    base_slug = "+".join(f"{m}_{mod}" for m, mod in baseline_pairs)
+    tgt_slug  = f"{args.target[0]}_{args.target[1]}"
+    bin_int   = int(args.bin_sec)
+    skip_int  = int(args.skip_sec)
+    delay_tag = f"delay{int(args.delay_sec)}s"
+    config    = f"k{args.k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{args.method}"
+
+    # Placeholder n_subs name — resolved once stacks loaded
+    out_stem  = f"delta_rho_{tgt_slug}_vs_{base_slug}_{config}"
+
+    # ── Load rho stacks ───────────────────────────────────────────────────────
+    log.info("Loading target rho maps ...")
+    target_stack, target_subs = load_rho_stack(
+        args.output_dir, args.target[0], args.target[1],
+        args.k, args.bin_sec, args.skip_sec, args.delay_sec,
+        args.method, args.fmri_tag,
+    )
+
+    log.info("Loading baseline rho maps ...")
+    baseline_stacks = []
+    baseline_sub_lists = []
+    for model, modality in baseline_pairs:
+        bs, subs = load_rho_stack(
+            args.output_dir, model, modality,
+            args.k, args.bin_sec, args.skip_sec, args.delay_sec,
+            args.method, args.fmri_tag,
+        )
+        baseline_stacks.append(bs)
+        baseline_sub_lists.append(subs)
+
+    # ── Align subjects ────────────────────────────────────────────────────────
+    target_stack, baseline_stacks, common_subs = _align_stacks(
+        target_stack, target_subs,
+        baseline_stacks, baseline_sub_lists,
+        baseline_labels,
+    )
+
+    n_subs, n_verts = target_stack.shape
+    out_path      = out_dir / f"{out_stem}_{n_subs}subs.dscalar.nii"
+    fdr_mask_path = out_dir / f"{out_stem}_{n_subs}subs_fdr_mask.dscalar.nii"
+
+    existing = get_combined_map_names(str(out_path)) if out_path.exists() else []
+    if "sigmap_fdr" in existing:
+        log.info(f"Already computed: {out_path.name} — skipping.")
+        return
+
+    # ── Per-subject Δρ ────────────────────────────────────────────────────────
+    # max_baseline shape: (n_subs, n_verts)
+    max_baseline = baseline_stacks[0].copy()
+    for bs in baseline_stacks[1:]:
+        np.maximum(max_baseline, bs, out=max_baseline)
+
+    delta_stack = target_stack - max_baseline      # (n_subs, n_verts), float32
+
+    log.info(f"n_subjects = {n_subs}  n_verts = {n_verts:,}")
+    log.info(f"mean Δρ across subjects & vertices: {delta_stack.mean():.4f}")
+
+    # ── Group means ───────────────────────────────────────────────────────────
+    mean_delta     = delta_stack.mean(axis=0).astype(np.float32)
+    mean_target    = target_stack.mean(axis=0).astype(np.float32)
+    mean_max_base  = max_baseline.mean(axis=0).astype(np.float32)
+
+    # ── One-sample t-test on Δρ (H₀: mean Δρ = 0) ────────────────────────────
+    D = delta_stack.astype(np.float64)
+    t_vals, p_two = stats.ttest_1samp(D, popmean=0.0, axis=0)
+    t_vals = t_vals.astype(np.float32)
+
+    p_uncorr = np.where(t_vals > 0,
+                        p_two / 2.0,
+                        1.0 - p_two / 2.0).astype(np.float32)
+
+    eps = np.finfo(np.float32).tiny
+    sign_delta    = np.sign(mean_delta).astype(np.float32)
+    sigmap_uncorr = (sign_delta *
+                     (-np.log10(np.maximum(p_uncorr, eps)))).astype(np.float32)
+
+    sigmap_fdr, fdr_mask, n_sig_fdr = _fdr_sigmap(p_uncorr, sign_delta, args.alpha)
+
+    log.info(f"Δρ range: [{mean_delta.min():.4f}, {mean_delta.max():.4f}]")
+    log.info(f"Verts with Δρ > 0: {(mean_delta > 0).sum():,} / {n_verts:,}")
+    log.info(f"Uncorrected p<{args.alpha}: {(p_uncorr < args.alpha).sum():,} / {n_verts:,}")
+    log.info(f"BH-FDR p<{args.alpha}: {n_sig_fdr:,} / {n_verts:,}")
+
+    # ── Save CIFTI ────────────────────────────────────────────────────────────
+    maps = np.stack([
+        mean_delta,
+        mean_target,
+        mean_max_base,
+        t_vals,
+        sigmap_uncorr,
+        sigmap_fdr,
+    ], axis=0)
+
+    map_names = [
+        "delta_rho",
+        "rho_target",
+        "rho_max_base",
+        "t_stat",
+        "sigmap_uncorr",
+        "sigmap_fdr",
+    ]
+
+    save_cifti_multimap(maps, map_names, args.template_cifti, str(out_path))
+    log.info(f"Saved: {out_path.name}")
+
+    save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
+    log.info(f"Saved FDR mask: {fdr_mask_path.name}")
+
+    # ── Summary JSON ──────────────────────────────────────────────────────────
+    summary = {
+        "target":              target_label,
+        "baselines":           baseline_labels,
+        "config":              config,
+        "fmri_tag":            args.fmri_tag,
+        "n_subjects":          n_subs,
+        "n_grayordinates":     n_verts,
+        "alpha":               args.alpha,
+        "delta_rho_range":     [float(mean_delta.min()), float(mean_delta.max())],
+        "frac_positive":       float((mean_delta > 0).mean()),
+        "max_t_stat":          float(t_vals.max()),
+        "max_sigmap_uncorr":   float(sigmap_uncorr.max()),
+        "max_sigmap_fdr":      float(sigmap_fdr.max()),
+        "n_sig_uncorr":        int((p_uncorr < args.alpha).sum()),
+        "n_sig_fdr":           n_sig_fdr,
+        "rho_target_range":    [float(mean_target.min()), float(mean_target.max())],
+        "rho_max_base_range":  [float(mean_max_base.min()), float(mean_max_base.max())],
+        "subjects":            common_subs,
+    }
+
+    summary_path = out_dir / f"{out_stem}_{n_subs}subs_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    log.info(f"Summary: {summary_path.name}")
+    log.info(
+        f"Done. Δρ_mean={mean_delta.mean():.4f}  "
+        f"FDR sig={n_sig_fdr:,}/{n_verts:,}"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -6,14 +6,14 @@ Vertex-wise searchlight RSA and Glasser parcel RSA comparing cortical fMRI repre
 
 ```
 rsa/
-├── run_analysis.sh                  # master runner — all config lives here
+├── analysis.sh                  # master runner — all config lives here
 ├── environment.yml                  # conda env: movie
-├── run_searchlight.py               # geodesic neighbourhood RSA → .dscalar.nii
-├── run_glasser.py                   # Glasser parcel RSA → .dscalar.nii + ranked_report.csv
-├── run_group_stats.py               # aggregate per-subject maps → group stats CIFTI
-├── run_partial_rsa.py               # partial RSA controlling for individual modalities
-├── run_multimodal_decomposition.py  # variance decomposition across RSA modalities
-├── run_rdm_diagonal.py              # off-diagonal control for fMRI autocorrelation
+├── searchlight.py               # geodesic neighbourhood RSA → .dscalar.nii
+├── glasser.py                   # Glasser parcel RSA → .dscalar.nii + ranked_report.csv
+├── group_stats.py               # aggregate per-subject maps → group stats CIFTI
+├── partial_rsa.py               # partial RSA controlling for individual modalities
+├── multimodal_decomposition.py  # variance decomposition across RSA modalities
+├── rdm_diagonal.py              # off-diagonal control for fMRI autocorrelation
 ├── run_spin_permutations.py         # spin-test spatial null permutations
 ├── precompute_neighbors.py          # pre-build geodesic neighbourhood lookup
 ├── shared/
@@ -28,19 +28,19 @@ rsa/
 conda activate movie
 cd movie_watching   # run from repo root
 
-bash rsa/run_analysis.sh avg                         # group-average, all methods
-bash rsa/run_analysis.sh avg searchlight             # group-average, searchlight only
-bash rsa/run_analysis.sh avg glasser                 # group-average, Glasser only
-bash rsa/run_analysis.sh persubject                  # per-subject, streaming (default)
-bash rsa/run_analysis.sh persubject all 4            # 4 parallel jobs
-bash rsa/run_analysis.sh persubject all 8 100610     # resume from subject 100610
-bash rsa/run_analysis.sh groupstats                  # re-run group stats on existing maps
-bash rsa/run_analysis.sh all                         # avg + persubject + groupstats
+bash rsa/analysis.sh avg                         # group-average, all methods
+bash rsa/analysis.sh avg searchlight             # group-average, searchlight only
+bash rsa/analysis.sh avg glasser                 # group-average, Glasser only
+bash rsa/analysis.sh persubject                  # per-subject, streaming (default)
+bash rsa/analysis.sh persubject all 4            # 4 parallel jobs
+bash rsa/analysis.sh persubject all 8 100610     # resume from subject 100610
+bash rsa/analysis.sh groupstats                  # re-run group stats on existing maps
+bash rsa/analysis.sh all                         # avg + persubject + groupstats
 ```
 
 ## Configuration
 
-All parameters are set in `run_analysis.sh`:
+All parameters are set in `analysis.sh`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -67,7 +67,7 @@ All parameters are set in `run_analysis.sh`:
 ## fMRI Preprocessing Convention
 
 - **Continuous full-run CIFTIs** — `preprocess_individual.py` concatenates all 4 runs. Default is raw (no SG/PSC/GSR). No timing filtering is done during preprocessing.
-- **Timing applied at analysis time** — `run_searchlight.py` and `run_glasser.py` load `movie_timing.csv`, compute within-run onset TRs from global `onset_sec`, apply hemodynamic delay, bin to `BIN_SEC` resolution, z-score per run (training stats applied to test), and split train/test.
+- **Timing applied at analysis time** — `searchlight.py` and `glasser.py` load `movie_timing.csv`, compute within-run onset TRs from global `onset_sec`, apply hemodynamic delay, bin to `BIN_SEC` resolution, z-score per run (training stats applied to test), and split train/test.
 - **Z-scoring** — per run on training time bins; same mean/std applied to test bins from the same run (no leakage).
 
 ## Model Registry

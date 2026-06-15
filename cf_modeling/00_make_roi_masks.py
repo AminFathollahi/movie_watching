@@ -24,7 +24,7 @@ Usage
         --rois 3b V1 A1 V2 TA2 MST FFC A5 \\
         --masks-dir /path/to/cf_modeling_outputs/masks
 
-Or as part of run_analysis.sh:
+Or as part of analysis.sh:
     run_python 00_make_roi_masks.py --glasser-dlabel "$GLASSER_DLABEL" \\
         --rois 3b V1 --masks-dir "$MASKS_DIR"
 

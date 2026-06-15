@@ -3,11 +3,11 @@ rsa/shared/model_registry.py
 ==============================
 Central registry for model embeddings and partial RSA configurations.
 
-All RSA scripts (run_partial_rsa.py, run_rdm_diagonal.py,
-run_multimodal_decomposition.py) import from here so that model names,
+All RSA scripts (partial_rsa.py, rdm_diagonal.py,
+multimodal_decomposition.py) import from here so that model names,
 modality codes, and partial-RSA run definitions are defined exactly once.
 
-Embedding path convention (mirrors run_analysis.sh):
+Embedding path convention (mirrors analysis.sh):
   {embeddings_dir}/{model}/{bin_sec_int}s/{model}_{modality}.npy
 """
 
@@ -156,11 +156,25 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
             "interaction residual."
         ),
     ),
+    # Run C: regress out specialist unimodal models from different architectures
+    # (WavLM-Large for audio, PE-Core ViT-L/14 for vision).  Tests whether PE-AV
+    # captures something beyond strong specialist priors from independent model
+    # families — a stricter cross-architecture control than run_A.
+    "run_C": PartialRSARun(
+        target   = ("pe-av-small-16-frame", "av"),
+        nuisance = [("wavlm-large", "a"), ("pe-core-l14", "v")],
+        label    = "peav_av_partialout_wavlm_a+pecore_v",
+        description = (
+            "PE-AV (small 16-frame) AV joint embedding, controlling for "
+            "WavLM-Large (audio) + PE-Core ViT-L/14 (video) — strict cross-family "
+            "specialist baseline."
+        ),
+    ),
 }
 
 
 # ── Diagonal-masking configurations ──────────────────────────────────────────
-# Default model/modality used by run_rdm_diagonal.py.
+# Default model/modality used by rdm_diagonal.py.
 
 DIAGONAL_MASK_DEFAULT = {
     "model":    "pe-av-small-16-frame",

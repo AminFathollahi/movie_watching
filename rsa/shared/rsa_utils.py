@@ -603,3 +603,30 @@ def corrected_2factor_bootstrap(
     upper = np.maximum(var_both, lower)
     var_c2f = np.clip(var_c2f_raw, a_min=lower, a_max=upper)
     return var_c2f, var_subj, var_block
+
+
+def aggregate_blocks(block_stack: np.ndarray, n_target: int) -> np.ndarray:
+    """Average adjacent blocks to reduce from N_file to n_target.
+
+    Allows a single searchlight run at a large N to serve multiple group_stats
+    sweeps at smaller N values without re-running the expensive searchlight.
+
+    Parameters
+    ----------
+    block_stack : (n_subs, N_file, n_verts) — raw block RSA output from searchlight
+    n_target    : desired number of blocks; N_file must be divisible by n_target
+
+    Returns
+    -------
+    (n_subs, n_target, n_verts) same dtype as input
+    """
+    n_subs, n_file, n_verts = block_stack.shape
+    if n_file == n_target:
+        return block_stack
+    if n_file % n_target != 0:
+        raise ValueError(
+            f"Cannot aggregate {n_file} blocks to {n_target}: "
+            f"{n_file} must be divisible by {n_target}."
+        )
+    group = n_file // n_target
+    return block_stack.reshape(n_subs, n_target, group, n_verts).mean(axis=2).astype(block_stack.dtype)

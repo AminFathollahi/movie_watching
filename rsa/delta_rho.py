@@ -51,6 +51,7 @@ A binary fdr_mask is saved as a companion dscalar.
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -64,7 +65,7 @@ from cifti_io import (
     save_cifti_map,
     save_cifti_multimap,
 )
-from rsa.shared.rsa_utils import corrected_2factor_bootstrap
+from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap
 
 logging.basicConfig(
     level=logging.INFO,
@@ -244,7 +245,12 @@ def load_block_stack(
     fmri_tag: str,
     n_blocks: int,
 ) -> tuple[np.ndarray, list[str]]:
-    """Load per-subject block-wise rho .npy files for one model/modality.
+    """Load per-subject block-wise rho .npy files, with aggregation fallback.
+
+    If exact n_blocks files are not found, searches for the smallest available
+    N_file that (a) is larger than n_blocks and (b) divides evenly, then
+    aggregates via aggregate_blocks().  This lets a single searchlight run at
+    a large N serve multiple group_stats sweep values without re-running.
 
     Returns
     -------
@@ -255,23 +261,47 @@ def load_block_stack(
     skip_int  = int(skip_sec)
     delay_tag = f"delay{int(delay_sec)}s"
     config    = f"k{k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{method}"
-    fname     = (f"rsa_59k_{fmri_tag}_k{k}_{delay_tag}"
-                 f"_bin{bin_int}s_skip{skip_int}s_{method}_searchlight_nblocks{n_blocks}.npy")
     model_mod = f"{model}_{modality}"
 
-    files = sorted(
-        Path(output_dir).glob(f"subject_data/*/{model_mod}/{config}/{fname}")
-    )
+    def _collect(n_b):
+        fname = (f"rsa_59k_{fmri_tag}_k{k}_{delay_tag}"
+                 f"_bin{bin_int}s_skip{skip_int}s_{method}_searchlight_nblocks{n_b}.npy")
+        return sorted(Path(output_dir).glob(f"subject_data/*/{model_mod}/{config}/{fname}"))
+
+    files = _collect(n_blocks)
+    n_file = n_blocks
+
+    if not files:
+        available_ns = sorted(set(
+            int(m.group(1))
+            for f in Path(output_dir).glob(
+                f"subject_data/*/{model_mod}/{config}/*_nblocks*.npy"
+            )
+            for m in [re.search(r'_nblocks(\d+)\.npy$', f.name)]
+            if m
+        ))
+        candidates = [n for n in available_ns if n > n_blocks and n % n_blocks == 0]
+        if candidates:
+            n_file = min(candidates)
+            files = _collect(n_file)
+
     if not files:
         raise FileNotFoundError(
-            f"No block rho files found for {model}/{modality} (n_blocks={n_blocks}).\n"
-            f"Pattern: {output_dir}/subject_data/*/{model_mod}/{config}/{fname}"
+            f"No block rho files found for {model}/{modality} "
+            f"(n_blocks={n_blocks} or any divisible multiple).\n"
+            f"Pattern: {output_dir}/subject_data/*/{model_mod}/{config}/*_nblocks*.npy"
         )
 
-    block_maps = [np.load(str(f)).astype(np.float32) for f in files]
+    block_maps  = [np.load(str(f)).astype(np.float32) for f in files]
     subject_ids = [f.parent.parent.parent.name for f in files]
+    raw_stack   = np.stack(block_maps, axis=0)
+
+    if n_file != n_blocks:
+        raw_stack = aggregate_blocks(raw_stack, n_blocks)
+        log.info(f"  Aggregated {n_file}→{n_blocks} blocks for {model}/{modality}")
+
     log.info(f"  Loaded {len(files)} block stacks for {model}/{modality} ({n_blocks} blocks)")
-    return np.stack(block_maps, axis=0), subject_ids
+    return raw_stack, subject_ids
 
 
 def _align_stacks(

@@ -6,7 +6,7 @@
 #
 # Usage
 # -----
-#   bash rsa/analysis.sh [MODE] [METHOD] [BATCH_SIZE] [START_FROM]
+#   bash rsa/analysis.sh [MODE] [METHOD] [BATCH_SIZE] [START_FROM] [N_BLOCKS]
 #
 #   MODE        avg            Group-average RSA only (default)
 #               preprocess     Preprocess every subject listed in SUBJECTS_LIST:
@@ -32,6 +32,7 @@
 #                          In persubject mode, joblib threads per subject are
 #                          set to nproc / BATCH_SIZE.
 #   START_FROM  SUBID      Resume the per-subject loop starting at this subject ID.
+#   N_BLOCKS    N          Override CONFIG N_BLOCKS for the searchlight block count.
 #
 # Recommended workflow
 #   # 0. Preprocess all subjects + group average (skip in streaming mode)
@@ -202,12 +203,15 @@ MODELS=(
 )
 
 # ── Statistical inference (Schütt et al. 2023) ──────────────────────────
-# N_BLOCKS: non-overlapping temporal segments per subject for the corrected
-#   2-factor bootstrap (generalizes to new subjects AND new movie segments).
+# N_BLOCKS: number of temporal blocks searchlight.py creates per subject.
+#   All BLOCKS_SWEEP values must divide N_BLOCKS evenly (LCM rule).
 #   When N_BLOCKS == number of fMRI scan runs, searchlight.py aligns block
 #   boundaries to actual run boundaries (best practice: Schütt et al. 2023).
 #   Set to 1 to disable block RSA and run subject t-test only.
-N_BLOCKS=4  # matches the 4 fMRI scan runs
+N_BLOCKS=16  # LCM(4,8,16): supports all three sweep values below
+# BLOCKS_SWEEP: group_stats.py runs once per value, aggregating from N_BLOCKS.
+#   df = min(N_subjects-1, N-1) for each N; more blocks → less conservative.
+BLOCKS_SWEEP=(4 8 16)  # df ≈ 3, 7, 15 (with ~30 subjects)
 # N_BOOTSTRAP: bootstrap iterations for the corrected 2-factor variance estimate.
 N_BOOTSTRAP=2000
 
@@ -230,6 +234,9 @@ MODE=${1:-avg}
 METHOD_ARG=${2:-all}
 BATCH_SIZE=${3:-$DEFAULT_BATCH_SIZE}
 START_FROM=${4:-""}
+N_BLOCKS_ARG=${5:-""}
+# Override CONFIG N_BLOCKS when a specific value is passed positionally.
+[ -n "$N_BLOCKS_ARG" ] && N_BLOCKS="$N_BLOCKS_ARG"
 
 # Locate GNU parallel — prefer the copy inside the conda env so the script
 # works even when the caller's shell PATH doesn't include the env's bin dir.
@@ -876,7 +883,7 @@ run_persubject() {
 run_group_stats() {
     local MODE_TAG
     [ "$STREAM" = "true" ] && MODE_TAG="streaming" || MODE_TAG="disk"
-    log "=== Group stats (${MODE_TAG}, ${#MODELS[@]} models) ==="
+    log "=== Group stats (${MODE_TAG}, ${#MODELS[@]} models, blocks sweep: ${BLOCKS_SWEEP[*]}) ==="
 
     local MODELS_STR
     MODELS_STR=$(IFS=';'; echo "${MODELS[*]}")
@@ -887,24 +894,26 @@ run_group_stats() {
         IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
 
         for MOD in "${MODS[@]}"; do
-            log "  Group stats: ${MODEL_NAME} / ${MOD}"
-            run_python "${SCRIPT_DIR}/group_stats.py" \
-                --output-dir      "$OUTPUT_DIR" \
-                --model           "$MODEL_NAME" \
-                --modality        "$MOD" \
-                --k               "$K" \
-                --bin-sec         "$BIN_SEC" \
-                --skip-sec        "$SKIP_SEC" \
-                --delay-sec       "$DELAY_SEC" \
-                --method          "$METHOD" \
-                --fmri-tag        "$PREPROCESSING_FLAG" \
-                --template-cifti  "$TEMPLATE_CIFTI" \
-                --left-surface    "$LEFT_SURFACE" \
-                --right-surface   "$RIGHT_SURFACE" \
-                --workbench       "$WORKBENCH" \
-                --n-blocks        "$N_BLOCKS" \
-                --n-bootstrap     "$N_BOOTSTRAP" \
-                || log "  WARNING: group stats skipped for ${MODEL_NAME}/${MOD} (no per-subject data or error above)"
+            for N_B in "${BLOCKS_SWEEP[@]}"; do
+                log "  Group stats: ${MODEL_NAME} / ${MOD}  (n_blocks=${N_B}, df≈min(n_subs-1,$(( N_B - 1 ))))"
+                run_python "${SCRIPT_DIR}/group_stats.py" \
+                    --output-dir      "$OUTPUT_DIR" \
+                    --model           "$MODEL_NAME" \
+                    --modality        "$MOD" \
+                    --k               "$K" \
+                    --bin-sec         "$BIN_SEC" \
+                    --skip-sec        "$SKIP_SEC" \
+                    --delay-sec       "$DELAY_SEC" \
+                    --method          "$METHOD" \
+                    --fmri-tag        "$PREPROCESSING_FLAG" \
+                    --template-cifti  "$TEMPLATE_CIFTI" \
+                    --left-surface    "$LEFT_SURFACE" \
+                    --right-surface   "$RIGHT_SURFACE" \
+                    --workbench       "$WORKBENCH" \
+                    --n-blocks        "$N_B" \
+                    --n-bootstrap     "$N_BOOTSTRAP" \
+                    || log "  WARNING: group stats skipped for ${MODEL_NAME}/${MOD} n_blocks=${N_B}"
+            done
         done
     done
 

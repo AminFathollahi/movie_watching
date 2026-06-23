@@ -42,6 +42,7 @@ Binary masks are saved as separate standalone dscalar files:
 import argparse
 import json
 import logging
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -62,7 +63,7 @@ from cifti_io import (
     save_cifti_map,
     save_cifti_multimap,
 )
-from rsa.shared.rsa_utils import corrected_2factor_bootstrap
+from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap
 
 logging.basicConfig(
     level=logging.INFO,
@@ -260,39 +261,68 @@ def main():
     rho_stack = np.stack(rho_maps, axis=0)
     n_subs, n_grays = rho_stack.shape
 
-    # ── Try to load per-subject block maps for 2-factor bootstrap ────────────
-    block_fname_pattern = fname_pattern.replace(
-        "_searchlight.npy", f"_searchlight_nblocks{args.n_blocks}.npy"
-    )
-    block_files = sorted(
-        Path(args.output_dir).glob(
-            f"subject_data/*/{model_mod_dir}/{config}/{block_fname_pattern}"
-        )
-    )
-    have_blocks = (
-        args.n_blocks > 1
-        and len(block_files) == len(subject_rho_files)
-    )
-    if have_blocks:
-        log.info(
-            f"Block files found ({len(block_files)} subjects, {args.n_blocks} blocks) — "
-            f"will run corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)"
-        )
-        block_maps_list = [np.load(str(f)).astype(np.float32) for f in block_files]
-        block_stack = np.stack(block_maps_list, axis=0)  # (n_subs, n_blocks, n_grays)
-    elif args.n_blocks > 1:
-        log.info(
-            f"Block files not found for all subjects "
-            f"({len(block_files)}/{len(subject_rho_files)}) — "
-            f"skipping 2-factor bootstrap. Run searchlight.py --n-blocks {args.n_blocks} first."
-        )
-
-    out_path = out_dir / f"group_stats_{n_subs}subs.dscalar.nii"
+    # ── Output path (n_blocks suffix separates sweep results) ────────────────
+    out_path = (out_dir / f"group_stats_{n_subs}subs_nblocks{args.n_blocks}.dscalar.nii"
+                if args.n_blocks > 1
+                else out_dir / f"group_stats_{n_subs}subs.dscalar.nii")
 
     existing_map_names = get_combined_map_names(str(out_path)) if out_path.exists() else []
     if "sigmap_fdr" in existing_map_names:
         log.info(f"FDR significance map already present in {out_path.name} — skipping computation.")
         return
+
+    # ── Try to load per-subject block maps for 2-factor bootstrap ────────────
+    # Exact n_blocks match is tried first; falls back to aggregating from a larger
+    # N that is divisible by args.n_blocks (avoids re-running the searchlight).
+    have_blocks = False
+    block_stack = None
+    if args.n_blocks > 1:
+        def _collect_blocks(n_b):
+            pat = fname_pattern.replace("_searchlight.npy", f"_searchlight_nblocks{n_b}.npy")
+            return sorted(Path(args.output_dir).glob(
+                f"subject_data/*/{model_mod_dir}/{config}/{pat}"
+            ))
+
+        block_files = _collect_blocks(args.n_blocks)
+        n_file_blocks = args.n_blocks
+
+        if len(block_files) != len(subject_rho_files):
+            available_ns = sorted(set(
+                int(m.group(1))
+                for f in Path(args.output_dir).glob(
+                    f"subject_data/*/{model_mod_dir}/{config}/*_nblocks*.npy"
+                )
+                for m in [re.search(r'_nblocks(\d+)\.npy$', f.name)]
+                if m
+            ))
+            candidates = [n for n in available_ns
+                          if n > args.n_blocks and n % args.n_blocks == 0]
+            if candidates:
+                n_file_blocks = min(candidates)
+                block_files = _collect_blocks(n_file_blocks)
+                if len(block_files) == len(subject_rho_files):
+                    log.info(
+                        f"Exact n_blocks={args.n_blocks} not found; "
+                        f"aggregating {n_file_blocks}→{args.n_blocks} blocks"
+                    )
+
+        if len(block_files) == len(subject_rho_files):
+            raw_stack = np.stack(
+                [np.load(str(f)).astype(np.float32) for f in block_files], axis=0
+            )
+            block_stack = (aggregate_blocks(raw_stack, args.n_blocks)
+                           if n_file_blocks != args.n_blocks else raw_stack)
+            have_blocks = True
+            log.info(
+                f"Block files loaded ({len(block_files)} subjects, {args.n_blocks} blocks) — "
+                f"will run corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)"
+            )
+        else:
+            log.info(
+                f"No usable block files found for n_blocks={args.n_blocks} "
+                f"(tried exact match and aggregation from larger N). "
+                f"Run searchlight.py --n-blocks {args.n_blocks} (or a multiple) first."
+            )
 
     # ── Raw Performance Estimates ─────────────────────────────────────────────
     X = rho_stack.astype(np.float64)
@@ -395,12 +425,16 @@ def main():
     save_cifti_multimap(np.stack(maps, axis=0), map_names, args.template_cifti, str(out_path))
     log.info(f"Saved: {out_path}")
 
-    fdr_mask_path = out_dir / f"group_stats_{n_subs}subs_fdr_mask.dscalar.nii"
+    fdr_mask_path = (
+        out_dir / f"group_stats_{n_subs}subs_nblocks{args.n_blocks}_fdr_mask.dscalar.nii"
+        if args.n_blocks > 1
+        else out_dir / f"group_stats_{n_subs}subs_fdr_mask.dscalar.nii"
+    )
     save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
     log.info(f"Saved FDR mask: {fdr_mask_path.name}")
 
     if have_blocks and fdr_c2f_mask is not None:
-        fdr_c2f_path = out_dir / f"group_stats_{n_subs}subs_fdr_c2f_mask.dscalar.nii"
+        fdr_c2f_path = out_dir / f"group_stats_{n_subs}subs_nblocks{args.n_blocks}_fdr_c2f_mask.dscalar.nii"
         save_cifti_map(fdr_c2f_mask, args.template_cifti, str(fdr_c2f_path), "fdr_c2f_mask")
         log.info(f"Saved 2-factor FDR mask: {fdr_c2f_path.name}")
 

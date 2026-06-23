@@ -175,7 +175,7 @@ GEODESIC_CACHE_DIR="${OUTPUTS_BASE}/rsa/_geodesic_cache"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-BIN_SEC=5.0
+BIN_SEC=1.0
 SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
 HRF=false
 NORMALIZE=false  # true → per-run z-score; false → demean only (adds _demean suffix to outputs)
@@ -186,11 +186,11 @@ K=100
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
     "pe-av-small-16-frame:av,a,v"
-    "omni3b_layer35:av,a,v"
-    "omni3b_layer27:av,a,v"
-    "omni3b_layer18:av,a,v"
-    "omni3b_layer9:av,a,v"
-    "omni3b_layer1:av,a,v"
+    # "omni3b_layer35:av,a,v"
+    # "omni3b_layer27:av,a,v"
+    # "omni3b_layer18:av,a,v"
+    # "omni3b_layer9:av,a,v"
+    # "omni3b_layer1:av,a,v"
     #"imagebind:a,v,av"
     # "pe-av-small-16-frame:av,v,a,at,vt,avt,t"
     # "audiomae:a"
@@ -199,6 +199,14 @@ MODELS=(
     # "whisper-large-v3:a"
     # "pe-core-l14:v"
 )
+
+# ── Statistical inference (Schütt et al. 2023) ──────────────────────────
+# N_BLOCKS: non-overlapping temporal segments per subject for the corrected
+#   2-factor bootstrap (generalizes to new subjects AND new movie segments).
+#   Set to 1 to disable block RSA and run subject t-test only.
+N_BLOCKS=4
+# N_BOOTSTRAP: bootstrap iterations for the corrected 2-factor variance estimate.
+N_BOOTSTRAP=2000
 
 # ── GPU acceleration ─────────────────────────────────────────────────────
 # GPU is attempted automatically when CUDA is available; OOM falls back to CPU.
@@ -357,6 +365,7 @@ _run_avg_one_model() {
                 --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
                 --combined-output    "$COMBINED_OUT" \
                 --gpu-batch-size "$GPU_BATCH_SIZE" \
+                --n-blocks           "$N_BLOCKS" \
                 $(_hrf_flag) $(_normalize_flag)
         fi
 
@@ -509,6 +518,7 @@ _run_one_subject() {
                         --geodesic-cache-dir "$_RSA_GEODESIC_CACHE_DIR" \
                         --combined-output    "$COMBINED_OUT" \
                         --gpu-batch-size 512 \
+                        --n-blocks           "$_RSA_N_BLOCKS" \
                         $HRF_FLAG \
                         >> "$LOG" 2>&1 || STATUS=$?
                 fi
@@ -840,6 +850,7 @@ run_persubject() {
     export _RSA_MIDTHICKNESS_DIR="$MIDTHICKNESS_DIR"
     export _RSA_GEODESIC_CACHE_DIR="$GEODESIC_CACHE_DIR"
     export _RSA_N_JOBS="$N_JOBS_PER_SUBJECT"
+    export _RSA_N_BLOCKS="$N_BLOCKS"
 
     if [ -n "$PARALLEL_BIN" ]; then
         echo "$SUBJECTS" | "$PARALLEL_BIN" --jobs "$BATCH_SIZE" --line-buffer \
@@ -887,6 +898,8 @@ run_group_stats() {
                 --left-surface    "$LEFT_SURFACE" \
                 --right-surface   "$RIGHT_SURFACE" \
                 --workbench       "$WORKBENCH" \
+                --n-blocks        "$N_BLOCKS" \
+                --n-bootstrap     "$N_BOOTSTRAP" \
                 || log "  WARNING: group stats skipped for ${MODEL_NAME}/${MOD} (no per-subject data or error above)"
         done
     done
@@ -903,7 +916,10 @@ run_noise_ceiling() {
         return
     fi
 
-    mapfile -t _NC_SUBJECTS < "$SUBJECTS_LIST"
+    mapfile -t _NC_SUBJECTS < <(grep -v '^\s*#' "$SUBJECTS_LIST" \
+                                 | sed 's/#.*//' \
+                                 | awk '{print $1}' \
+                                 | grep -v '^$')
     local N_SUBS="${#_NC_SUBJECTS[@]}"
 
     if [ "$N_SUBS" -lt 2 ]; then
@@ -913,10 +929,22 @@ run_noise_ceiling() {
 
     log "=== Noise ceiling (${N_SUBS} subjects, k=${K}, ${METHOD}) ==="
 
+    local SG_FLAG="" PSC_FLAG="" GSR_FLAG="--no-gsr"
+    [ "$SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
+    [ "$PSC"       = "true" ] && PSC_FLAG="--psc"
+    [ "$GSR"       = "true" ] && GSR_FLAG="--gsr"
+
+    local FMRI_SOURCE_ARGS
+    if [ "$STREAM" = "true" ]; then
+        FMRI_SOURCE_ARGS="--raw-dir ${CIFTI_DIR} ${SG_FLAG} ${PSC_FLAG} ${GSR_FLAG}"
+    else
+        FMRI_SOURCE_ARGS="--preprocessed-root ${PREPROCESSED_INDIV_DIR} --fmri-suffix ${PREPROCESSING_FLAG}"
+    fi
+
+    # shellcheck disable=SC2086
     run_python "${SCRIPT_DIR}/noise_ceiling.py" \
-        --preprocessed-root  "$PREPROCESSED_INDIV_DIR" \
+        $FMRI_SOURCE_ARGS \
         --subjects           "${_NC_SUBJECTS[@]}" \
-        --fmri-suffix        "$PREPROCESSING_FLAG" \
         --timing-csv         "$TIMING_CSV" \
         --k                  "$K" \
         --bin-sec            "$BIN_SEC" \

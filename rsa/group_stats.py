@@ -7,17 +7,36 @@ following the inference framework of Schütt et al. (2023).
 For each vertex across subjects:
   1. Stack per-subject raw ρ maps → (n_subjects, n_grayords)
   2. One-sample t-test on raw ρ (H₀: mean ρ = 0) → one-tailed t/p for ρ > 0
-     * Note: Fisher-z is omitted. Inference is performed directly on the 
+     * Note: Fisher-z is omitted. Inference is performed directly on the
        variance of the performance estimates.
   3. BH-FDR correction on the one-tailed p-values → FDR-corrected sigmap + mask
-  4. Cluster border: wb_command traces the contour of the surviving FDR mask 
+  4. Cluster border: wb_command traces the contour of the surviving FDR mask
      on the midthickness surface → per-hemisphere .border files
 
-Output: multi-map CIFTI dscalar with 4 continuous maps:
+INFERENCE SCOPE
+---------------
+subject t-test (existing, always run):
+    Generalizes to new *subjects*, conditional on the exact movie segments
+    used. Valid for ROI localization within this stimulus set.
+
+corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5; added as extra maps):
+    Generalizes to new *subjects AND movie segments* simultaneously.
+    Requires --n-blocks > 1 and per-subject block .npy files from
+    searchlight.py --n-blocks. Uses non-overlapping temporal blocks as
+    a proxy for condition resampling (adapted for naturalistic paradigms
+    where full per-bin RDM resampling is not feasible).
+    Use this for model-comparison claims that should generalize beyond
+    the specific movie content used.
+
+Output: multi-map CIFTI dscalar with 4 continuous maps (always):
   mean_rho  | t_stat | sigmap_uncorr | sigmap_fdr
 
-Binary masks are saved as a separate standalone dscalar file:
+When block files are present, 3 additional maps are appended:
+  mean_rho_c2f | t_c2f | sigmap_c2f
+
+Binary masks are saved as separate standalone dscalar files:
   group_stats_{n}subs_fdr_mask.dscalar.nii
+  group_stats_{n}subs_fdr_c2f_mask.dscalar.nii  (if have_blocks)
 """
 
 import argparse
@@ -43,6 +62,7 @@ from cifti_io import (
     save_cifti_map,
     save_cifti_multimap,
 )
+from rsa.shared.rsa_utils import corrected_2factor_bootstrap
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,6 +104,12 @@ def parse_args():
                    help="FDR significance threshold (q < alpha).")
     p.add_argument("--min-cluster-size", type=int, default=10,
                    help="Minimum vertices to form a valid ROI contour in the border file.")
+    p.add_argument("--n-blocks",         type=int, default=4, dest="n_blocks",
+                   help="Number of temporal blocks expected in per-subject block .npy files "
+                        "(from searchlight.py --n-blocks). Set to 1 to skip 2-factor bootstrap.")
+    p.add_argument("--n-bootstrap",      type=int, default=2000, dest="n_bootstrap",
+                   help="Bootstrap iterations for the corrected 2-factor variance estimate "
+                        "(Schütt et al. 2023, Eq. 5).")
     return p.parse_args()
 
 
@@ -234,6 +260,33 @@ def main():
     rho_stack = np.stack(rho_maps, axis=0)
     n_subs, n_grays = rho_stack.shape
 
+    # ── Try to load per-subject block maps for 2-factor bootstrap ────────────
+    block_fname_pattern = fname_pattern.replace(
+        "_searchlight.npy", f"_searchlight_nblocks{args.n_blocks}.npy"
+    )
+    block_files = sorted(
+        Path(args.output_dir).glob(
+            f"subject_data/*/{model_mod_dir}/{config}/{block_fname_pattern}"
+        )
+    )
+    have_blocks = (
+        args.n_blocks > 1
+        and len(block_files) == len(subject_rho_files)
+    )
+    if have_blocks:
+        log.info(
+            f"Block files found ({len(block_files)} subjects, {args.n_blocks} blocks) — "
+            f"will run corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)"
+        )
+        block_maps_list = [np.load(str(f)).astype(np.float32) for f in block_files]
+        block_stack = np.stack(block_maps_list, axis=0)  # (n_subs, n_blocks, n_grays)
+    elif args.n_blocks > 1:
+        log.info(
+            f"Block files not found for all subjects "
+            f"({len(block_files)}/{len(subject_rho_files)}) — "
+            f"skipping 2-factor bootstrap. Run searchlight.py --n-blocks {args.n_blocks} first."
+        )
+
     out_path = out_dir / f"group_stats_{n_subs}subs.dscalar.nii"
 
     existing_map_names = get_combined_map_names(str(out_path)) if out_path.exists() else []
@@ -302,27 +355,54 @@ def main():
             log.info(f"  FDR LH border: {fdr_border_lh}")
             log.info(f"  FDR RH border: {fdr_border_rh}")
 
+    # ── Corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5) ─────────────
+    n_sig_c2f   = 0
+    fdr_c2f_mask = None
+    if have_blocks:
+        log.info(
+            f"Running corrected 2-factor bootstrap "
+            f"(n_boot={args.n_bootstrap}, n_blocks={args.n_blocks}) ..."
+        )
+        var_c2f, var_subj_boot, var_block_boot = corrected_2factor_bootstrap(
+            rho_stack, block_stack, n_boot=args.n_bootstrap
+        )
+
+        mean_rho_c2f = rho_stack.mean(axis=0).astype(np.float32)
+        se_c2f = np.sqrt(np.maximum(var_c2f, 0.0)).astype(np.float64)
+
+        # t-statistic: use same df as the subject t-test (conservative)
+        df_c2f = max(n_subs - 1, 1)
+        safe_se = np.where(se_c2f > 0, se_c2f, 1.0)  # avoid divide-by-zero; masked below
+        t_c2f = np.where(se_c2f > 0, mean_rho_c2f.astype(np.float64) / safe_se, 0.0).astype(np.float32)
+        p_two_c2f = stats.t.sf(np.abs(t_c2f.astype(np.float64)), df=df_c2f) * 2.0
+        p_c2f = np.where(t_c2f > 0, p_two_c2f / 2.0, 1.0 - p_two_c2f / 2.0).astype(np.float32)
+
+        sigmap_c2f, fdr_c2f_mask, n_sig_c2f = _compute_fdr_maps(p_c2f, mean_rho_c2f, args.alpha)
+
+        log.info(
+            f"Corrected 2-factor bootstrap: df={df_c2f}, "
+            f"FDR sig verts = {n_sig_c2f:,} / {n_grays:,}"
+        )
+
     # ── Save CIFTI Outputs ────────────────────────────────────────────────────
-    maps = np.stack([
-        mean_rho,
-        t_vals,
-        sigmap_uncorr,
-        sigmap_fdr,
-    ], axis=0)
+    maps = [mean_rho, t_vals, sigmap_uncorr, sigmap_fdr]
+    map_names = ["mean_rho", "t_stat", "sigmap_uncorr", "sigmap_fdr"]
 
-    map_names = [
-        "mean_rho",
-        "t_stat",
-        "sigmap_uncorr",
-        "sigmap_fdr",
-    ]
+    if have_blocks:
+        maps += [mean_rho_c2f, t_c2f, sigmap_c2f]
+        map_names += ["mean_rho_c2f", "t_c2f", "sigmap_c2f"]
 
-    save_cifti_multimap(maps, map_names, args.template_cifti, str(out_path))
+    save_cifti_multimap(np.stack(maps, axis=0), map_names, args.template_cifti, str(out_path))
     log.info(f"Saved: {out_path}")
 
     fdr_mask_path = out_dir / f"group_stats_{n_subs}subs_fdr_mask.dscalar.nii"
     save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
     log.info(f"Saved FDR mask: {fdr_mask_path.name}")
+
+    if have_blocks and fdr_c2f_mask is not None:
+        fdr_c2f_path = out_dir / f"group_stats_{n_subs}subs_fdr_c2f_mask.dscalar.nii"
+        save_cifti_map(fdr_c2f_mask, args.template_cifti, str(fdr_c2f_path), "fdr_c2f_mask")
+        log.info(f"Saved 2-factor FDR mask: {fdr_c2f_path.name}")
 
     # ── Summary JSON ──────────────────────────────────────────────────────────
     summary = {
@@ -342,6 +422,10 @@ def main():
         "mean_rho_range":         [float(mean_rho.min()), float(mean_rho.max())],
         "border_fdr_lh":          fdr_border_lh,
         "border_fdr_rh":          fdr_border_rh,
+        "have_blocks":            have_blocks,
+        "n_blocks":               args.n_blocks,
+        "n_bootstrap":            args.n_bootstrap,
+        "n_sig_c2f":              n_sig_c2f,
         "subjects":               [f.parent.parent.parent.name for f in subject_rho_files],
     }
 

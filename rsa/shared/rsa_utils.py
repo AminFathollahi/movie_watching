@@ -427,11 +427,36 @@ def compute_rdm(data: np.ndarray, method: str = "correlation") -> np.ndarray:
 
     Returns:
         (n_conditions, n_conditions) float64 — symmetric RDM with zero diagonal
+
+    NOTE: This computes a naive (biased) distance estimator. For naturalistic movie
+    paradigms without repeated stimulus segments, crossvalidated (Crossnobis) distances
+    are not feasible. Bias is uniform across the RDM when noise is homoscedastic, so
+    rank-based comparators (Spearman, rho_a) are less affected than Pearson/Euclidean.
+    Ref: Schütt et al. 2023 §5.1.1; Walther et al. 2016.
     """
     if method == "cosine":
         sim = cosine_similarity(data)
         return 1.0 - sim
     return squareform(pdist(data, metric="correlation"))
+
+
+def correlate_rdms_rho_a(rdm1: np.ndarray, rdm2: np.ndarray) -> float:
+    """Compute rho_a (Kendall's tau_a) between two RDMs.
+
+    rho_a is the recommended RDM comparator from Schütt et al. 2023 §3.5:
+    computationally efficient, has an analytically derived noise ceiling,
+    and is unaffected by linear scaling of either RDM. Equivalent to
+    Kendall's tau_a on the lower-triangle vectors.
+
+    Returns float in [-1, 1].
+    """
+    from scipy.stats import kendalltau
+    n = rdm1.shape[0]
+    idx = np.tril_indices(n, k=-1)
+    v1 = rdm1[idx].astype(np.float64)
+    v2 = rdm2[idx].astype(np.float64)
+    tau, _ = kendalltau(v1, v2, method="auto")
+    return float(tau)
 
 
 def correlate_rdms(rdm1: np.ndarray, rdm2: np.ndarray,
@@ -441,10 +466,10 @@ def correlate_rdms(rdm1: np.ndarray, rdm2: np.ndarray,
     Args:
         rdm1: (n, n) float64 — symmetric RDM
         rdm2: (n, n) float64 — symmetric RDM
-        method: str — "spearman" or "pearson"
+        method: str — "spearman", "pearson", or "rho_a"
 
     Returns:
-        (r, p): correlation coefficient and p-value
+        (r, p): correlation coefficient and p-value (nan for rho_a, use bootstrap)
     """
     n = rdm1.shape[0]
     idx = np.tril_indices(n, k=-1)
@@ -454,6 +479,74 @@ def correlate_rdms(rdm1: np.ndarray, rdm2: np.ndarray,
         r, p = spearmanr(v1, v2)
     elif method == "pearson":
         r, p = pearsonr(v1, v2)
+    elif method == "rho_a":
+        r = correlate_rdms_rho_a(rdm1, rdm2)
+        p = float("nan")  # no analytical p-value; use bootstrap (Schütt et al. 2023 §3.5)
     else:
-        raise ValueError(f"Unknown method: {method}. Use 'spearman' or 'pearson'.")
+        raise ValueError(f"Unknown method: {method}. Use 'spearman', 'pearson', or 'rho_a'.")
     return float(r), float(p)
+
+
+def corrected_2factor_bootstrap(
+    rho_stack: np.ndarray,
+    block_stack: np.ndarray,
+    n_boot: int = 2000,
+    rng: np.random.Generator = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Corrected 2-factor bootstrap variance (Schütt et al. 2023, Eq. 5).
+
+    Estimates the variance of the group-mean RSA correlation when generalizing
+    to both new subjects AND new movie segments (time-bin blocks).
+
+    The naive 2-factor bootstrap triple-counts the measurement noise variance.
+    The corrected estimate cancels this surplus:
+        σ̂²_c2f = 2(σ̂²_subj + σ̂²_block) − σ̂²_both   (Eq. 5)
+    Bounded: clip(σ̂²_c2f, min=max(σ̂²_subj, σ̂²_block), max=σ̂²_both)
+
+    Parameters
+    ----------
+    rho_stack  : (n_subs, n_verts) float32 — full-series RSA ρ per subject
+    block_stack: (n_subs, n_blocks, n_verts) float32 — per-block RSA ρ
+    n_boot     : number of bootstrap iterations (default 2000)
+    rng        : numpy Generator (default: default_rng(42))
+
+    Returns
+    -------
+    var_c2f  : (n_verts,) float64 — corrected 2-factor variance (SE² of the mean)
+    var_subj : (n_verts,) float64 — 1-factor subject bootstrap variance
+    var_block: (n_verts,) float64 — 1-factor block bootstrap variance
+    """
+    if rng is None:
+        rng = np.random.default_rng(42)
+
+    n_subs, n_verts       = rho_stack.shape
+    n_subs2, n_blocks, n_verts2 = block_stack.shape
+    assert n_subs == n_subs2 and n_verts == n_verts2, (
+        "rho_stack and block_stack shape mismatch"
+    )
+
+    rho_f64   = rho_stack.astype(np.float64)
+    block_f64 = block_stack.astype(np.float64)
+
+    means_subj  = np.empty((n_boot, n_verts), dtype=np.float64)
+    means_block = np.empty((n_boot, n_verts), dtype=np.float64)
+    means_both  = np.empty((n_boot, n_verts), dtype=np.float64)
+
+    for i in range(n_boot):
+        si = rng.integers(0, n_subs,   size=n_subs)
+        bi = rng.integers(0, n_blocks, size=n_blocks)
+
+        means_subj[i]  = rho_f64[si].mean(axis=0)
+        means_block[i] = block_f64[:, bi, :].mean(axis=(0, 1))
+        means_both[i]  = block_f64[si][:, bi, :].mean(axis=(0, 1))
+
+    var_subj  = means_subj.var(axis=0,  ddof=1)
+    var_block = means_block.var(axis=0, ddof=1)
+    var_both  = means_both.var(axis=0,  ddof=1)
+
+    var_c2f_raw = 2.0 * (var_subj + var_block) - var_both
+    lower = np.maximum(var_subj, var_block)
+    # Ensure upper ≥ lower; finite-sample fluctuations can make var_both < lower.
+    upper = np.maximum(var_both, lower)
+    var_c2f = np.clip(var_c2f_raw, a_min=lower, a_max=upper)
+    return var_c2f, var_subj, var_block

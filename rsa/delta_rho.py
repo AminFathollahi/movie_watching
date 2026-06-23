@@ -64,6 +64,7 @@ from cifti_io import (
     save_cifti_map,
     save_cifti_multimap,
 )
+from rsa.shared.rsa_utils import corrected_2factor_bootstrap
 
 logging.basicConfig(
     level=logging.INFO,
@@ -147,6 +148,12 @@ def parse_args():
     p.add_argument("--template-cifti", required=True, dest="template_cifti")
     p.add_argument("--out-dir",       required=True, dest="out_dir")
     p.add_argument("--alpha",         type=float, default=0.05)
+    p.add_argument("--n-blocks",      type=int, default=4, dest="n_blocks",
+                   help="Number of temporal blocks expected in per-subject block .npy files "
+                        "(from searchlight.py --n-blocks). Set to 1 to skip 2-factor bootstrap.")
+    p.add_argument("--n-bootstrap",   type=int, default=2000, dest="n_bootstrap",
+                   help="Bootstrap iterations for the corrected 2-factor variance estimate "
+                        "(Schütt et al. 2023, Eq. 5).")
     args = p.parse_args()
 
     # Resolve predefined run into target/baselines
@@ -223,6 +230,48 @@ def load_rho_stack(
     subject_ids = [f.parent.parent.parent.name for f in files]
     log.info(f"  Loaded {len(files)} subjects for {model}/{modality}")
     return np.stack(rho_maps, axis=0), subject_ids
+
+
+def load_block_stack(
+    output_dir: str,
+    model: str,
+    modality: str,
+    k: int,
+    bin_sec: float,
+    skip_sec: float,
+    delay_sec: float,
+    method: str,
+    fmri_tag: str,
+    n_blocks: int,
+) -> tuple[np.ndarray, list[str]]:
+    """Load per-subject block-wise rho .npy files for one model/modality.
+
+    Returns
+    -------
+    block_stack : (n_subs, n_blocks, n_verts) float32
+    subject_ids : list[str]
+    """
+    bin_int   = int(bin_sec)
+    skip_int  = int(skip_sec)
+    delay_tag = f"delay{int(delay_sec)}s"
+    config    = f"k{k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{method}"
+    fname     = (f"rsa_59k_{fmri_tag}_k{k}_{delay_tag}"
+                 f"_bin{bin_int}s_skip{skip_int}s_{method}_searchlight_nblocks{n_blocks}.npy")
+    model_mod = f"{model}_{modality}"
+
+    files = sorted(
+        Path(output_dir).glob(f"subject_data/*/{model_mod}/{config}/{fname}")
+    )
+    if not files:
+        raise FileNotFoundError(
+            f"No block rho files found for {model}/{modality} (n_blocks={n_blocks}).\n"
+            f"Pattern: {output_dir}/subject_data/*/{model_mod}/{config}/{fname}"
+        )
+
+    block_maps = [np.load(str(f)).astype(np.float32) for f in files]
+    subject_ids = [f.parent.parent.parent.name for f in files]
+    log.info(f"  Loaded {len(files)} block stacks for {model}/{modality} ({n_blocks} blocks)")
+    return np.stack(block_maps, axis=0), subject_ids
 
 
 def _align_stacks(
@@ -337,6 +386,43 @@ def main():
     )
 
     n_subs, n_verts = target_stack.shape
+
+    # ── Try to load block stacks for 2-factor bootstrap ───────────────────────
+    have_blocks = False
+    if args.n_blocks > 1:
+        try:
+            target_block_stack, tgt_blk_subs = load_block_stack(
+                args.output_dir, args.target[0], args.target[1],
+                args.k, args.bin_sec, args.skip_sec, args.delay_sec,
+                args.method, args.fmri_tag, args.n_blocks,
+            )
+            baseline_block_stacks = []
+            for model, modality in baseline_pairs:
+                bs_blk, _ = load_block_stack(
+                    args.output_dir, model, modality,
+                    args.k, args.bin_sec, args.skip_sec, args.delay_sec,
+                    args.method, args.fmri_tag, args.n_blocks,
+                )
+                baseline_block_stacks.append(bs_blk)
+            # Align block stacks to the same subject set as the full-series stacks
+            blk_idx_map = {s: i for i, s in enumerate(tgt_blk_subs)}
+            common_idx  = [blk_idx_map[s] for s in common_subs if s in blk_idx_map]
+            if len(common_idx) == n_subs:
+                target_block_stack  = target_block_stack[common_idx]
+                baseline_block_stacks = [b[common_idx] for b in baseline_block_stacks]
+                have_blocks = True
+                log.info(
+                    f"Block files found ({n_subs} subjects, {args.n_blocks} blocks) — "
+                    f"will run corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)"
+                )
+            else:
+                log.warning(
+                    f"Block subject set doesn't fully overlap ({len(common_idx)}/{n_subs}) — "
+                    f"skipping 2-factor bootstrap."
+                )
+        except FileNotFoundError as e:
+            log.info(f"Block files not available — skipping 2-factor bootstrap.\n  {e}")
+
     out_path      = out_dir / f"{out_stem}_{n_subs}subs.dscalar.nii"
     fdr_mask_path = out_dir / f"{out_stem}_{n_subs}subs_fdr_mask.dscalar.nii"
 
@@ -352,6 +438,14 @@ def main():
         np.maximum(max_baseline, bs, out=max_baseline)
 
     delta_stack = target_stack - max_baseline      # (n_subs, n_verts), float32
+
+    # ── Per-subject per-block Δρ (for 2-factor bootstrap) ────────────────────
+    delta_block_stack = None
+    if have_blocks:
+        max_base_block = baseline_block_stacks[0].copy()
+        for bs_blk in baseline_block_stacks[1:]:
+            np.maximum(max_base_block, bs_blk, out=max_base_block)
+        delta_block_stack = target_block_stack - max_base_block  # (n_subs, n_blocks, n_verts)
 
     log.info(f"n_subjects = {n_subs}  n_verts = {n_verts:,}")
     log.info(f"mean Δρ across subjects & vertices: {delta_stack.mean():.4f}")
@@ -382,30 +476,56 @@ def main():
     log.info(f"Uncorrected p<{args.alpha}: {(p_uncorr < args.alpha).sum():,} / {n_verts:,}")
     log.info(f"BH-FDR p<{args.alpha}: {n_sig_fdr:,} / {n_verts:,}")
 
+    # ── Corrected 2-factor bootstrap on Δρ (Schütt et al. 2023, Eq. 5) ──────
+    n_sig_c2f_delta = 0
+    fdr_c2f_delta_mask = None
+    if have_blocks and delta_block_stack is not None:
+        log.info(
+            f"Running corrected 2-factor bootstrap on Δρ "
+            f"(n_boot={args.n_bootstrap}, n_blocks={args.n_blocks}) ..."
+        )
+        var_c2f, var_subj_boot, var_block_boot = corrected_2factor_bootstrap(
+            delta_stack, delta_block_stack, n_boot=args.n_bootstrap
+        )
+        se_c2f = np.sqrt(np.maximum(var_c2f, 0.0)).astype(np.float64)
+        df_c2f = max(n_subs - 1, 1)
+        mean_delta_f64 = mean_delta.astype(np.float64)
+        safe_se = np.where(se_c2f > 0, se_c2f, 1.0)  # avoid divide-by-zero; masked below
+        t_c2f_delta = np.where(
+            se_c2f > 0, mean_delta_f64 / safe_se, 0.0
+        ).astype(np.float32)
+        p_two_c2f = stats.t.sf(np.abs(t_c2f_delta.astype(np.float64)), df=df_c2f) * 2.0
+        p_c2f = np.where(
+            t_c2f_delta > 0, p_two_c2f / 2.0, 1.0 - p_two_c2f / 2.0
+        ).astype(np.float32)
+        sigmap_c2f_delta, fdr_c2f_delta_mask, n_sig_c2f_delta = _fdr_sigmap(
+            p_c2f, np.sign(mean_delta).astype(np.float32), args.alpha
+        )
+        log.info(
+            f"2-factor Δρ bootstrap: df={df_c2f}, "
+            f"FDR sig verts = {n_sig_c2f_delta:,} / {n_verts:,}"
+        )
+
     # ── Save CIFTI ────────────────────────────────────────────────────────────
-    maps = np.stack([
-        mean_delta,
-        mean_target,
-        mean_max_base,
-        t_vals,
-        sigmap_uncorr,
-        sigmap_fdr,
-    ], axis=0)
+    maps_list = [mean_delta, mean_target, mean_max_base, t_vals, sigmap_uncorr, sigmap_fdr]
+    map_names = ["delta_rho", "rho_target", "rho_max_base", "t_stat", "sigmap_uncorr", "sigmap_fdr"]
 
-    map_names = [
-        "delta_rho",
-        "rho_target",
-        "rho_max_base",
-        "t_stat",
-        "sigmap_uncorr",
-        "sigmap_fdr",
-    ]
+    if have_blocks and delta_block_stack is not None:
+        maps_list += [t_c2f_delta, sigmap_c2f_delta]
+        map_names += ["t_c2f_delta", "sigmap_c2f_delta"]
 
-    save_cifti_multimap(maps, map_names, args.template_cifti, str(out_path))
+    save_cifti_multimap(np.stack(maps_list, axis=0), map_names, args.template_cifti, str(out_path))
     log.info(f"Saved: {out_path.name}")
 
     save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
     log.info(f"Saved FDR mask: {fdr_mask_path.name}")
+
+    if have_blocks and fdr_c2f_delta_mask is not None:
+        fdr_c2f_delta_path = out_dir / f"{out_stem}_{n_subs}subs_fdr_c2f_mask.dscalar.nii"
+        save_cifti_map(
+            fdr_c2f_delta_mask, args.template_cifti, str(fdr_c2f_delta_path), "fdr_c2f_delta_mask"
+        )
+        log.info(f"Saved 2-factor FDR mask: {fdr_c2f_delta_path.name}")
 
     # ── Summary JSON ──────────────────────────────────────────────────────────
     summary = {
@@ -423,6 +543,10 @@ def main():
         "max_sigmap_fdr":      float(sigmap_fdr.max()),
         "n_sig_uncorr":        int((p_uncorr < args.alpha).sum()),
         "n_sig_fdr":           n_sig_fdr,
+        "have_blocks":         have_blocks,
+        "n_blocks":            args.n_blocks,
+        "n_bootstrap":         args.n_bootstrap,
+        "n_sig_c2f_delta":     n_sig_c2f_delta,
         "rho_target_range":    [float(mean_target.min()), float(mean_target.max())],
         "rho_max_base_range":  [float(mean_max_base.min()), float(mean_max_base.max())],
         "subjects":            common_subs,

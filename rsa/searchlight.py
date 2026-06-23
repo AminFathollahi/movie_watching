@@ -195,7 +195,16 @@ def parse_args():
                    help="Convolve embeddings with SPM HRF.")
     p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec",
                    help="Window stride in seconds (default: bin-sec, i.e. no overlap).")
-    p.add_argument("--method", required=True, choices=["spearman", "pearson"])
+    p.add_argument("--method", required=True, choices=["spearman", "pearson"],
+                   help="RDM comparator for the GPU/CPU searchlight kernel. "
+                        "Note: rho_a (Kendall's tau_a, Schütt et al. 2023 §3.5) is NOT "
+                        "supported here — Kendall's tau is O(n_pairs²) per vertex, making it "
+                        "prohibitively slow in the searchlight inner loop. Use --method spearman "
+                        "for the searchlight; rho_a can be applied post-hoc at the RDM level.")
+    p.add_argument("--n-blocks", type=int, default=4, dest="n_blocks",
+                   help="Number of non-overlapping temporal blocks for the condition bootstrap "
+                        "(Schütt et al. 2023, Eq. 5). Each block gets its own RSA map, saved as "
+                        "_nblocks{N}.npy alongside the full-series map. Set to 1 to disable.")
     p.add_argument("--tr", type=float, required=True)
     p.add_argument("--combined-output", default=None, dest="combined_output",
                    help="Path to a combined .dscalar.nii that accumulates maps from "
@@ -891,6 +900,75 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
 
         del neighbors, vertex_to_col, corr_hem
         gc.collect()
+
+    # ── Block RSA pass (Schütt et al. 2023, Eq. 5 condition bootstrap) ──────
+    # Split the time series into n_blocks non-overlapping segments and compute
+    # a separate RSA correlation per block per vertex.  group_stats.py uses
+    # these to run the corrected 2-factor bootstrap (subjects × time segments)
+    # which generalizes to both new subjects AND new movie content.
+    n_blocks = getattr(args, "n_blocks", 1)
+    if n_blocks > 1:
+        blocks_out = maps_out.with_name(maps_out.stem.replace("_searchlight", f"_searchlight_nblocks{n_blocks}") + ".npy")
+        if blocks_out.exists():
+            log.info(f"  Block maps already exist — skipping block pass: {blocks_out.name}")
+        else:
+            n_bins_total = fmri_binned.shape[0]
+            if n_bins_total < n_blocks * 6:
+                log.warning(
+                    f"  Too few bins ({n_bins_total}) for {n_blocks} blocks "
+                    f"(need ≥{n_blocks * 6}); skipping block pass."
+                )
+            else:
+                block_edges = np.round(
+                    np.linspace(0, n_bins_total, n_blocks + 1)
+                ).astype(int)
+                block_maps = np.zeros((n_blocks, n_total), dtype=np.float32)
+                log.info(
+                    f"  Block RSA: {n_blocks} blocks of ~{n_bins_total // n_blocks} bins each"
+                )
+                for b, (b_start, b_end) in enumerate(
+                    zip(block_edges[:-1], block_edges[1:])
+                ):
+                    if b_end - b_start < 6:
+                        log.warning(
+                            f"  Block {b}: only {b_end - b_start} bins — skipping."
+                        )
+                        continue
+                    fmri_block = fmri_binned[b_start:b_end]
+                    emb_block  = emb[b_start:b_end]
+                    blk_offset = 0
+                    for hem, (surf_path, _, surf_indices) in surfaces.items():
+                        neighbors_blk = get_neighbors(
+                            surf_path, args.workbench, args.subject,
+                            hem, args.k, cache_dir,
+                        )
+                        surf_indices_blk = surf_indices.astype(np.int32)
+                        n_surf_verts_blk = neighbors_blk.shape[0]
+                        vtc_blk = np.full(n_surf_verts_blk, -1, dtype=np.int32)
+                        vtc_blk[surf_indices_blk] = np.arange(
+                            len(surf_indices_blk), dtype=np.int32
+                        )
+                        n_hem_blk = len(surf_indices_blk)
+                        fmri_hem_blk = fmri_block[:, blk_offset:blk_offset + n_hem_blk]
+                        corr_hem_blk = run_searchlight(
+                            fmri_hem_blk, emb_block, neighbors_blk,
+                            surface_indices=surf_indices_blk,
+                            vertex_to_col=vtc_blk,
+                            method=args.method, n_jobs=N_JOBS,
+                            batch_size=args.gpu_batch_size,
+                        )
+                        block_maps[b, blk_offset:blk_offset + n_hem_blk] = corr_hem_blk
+                        blk_offset += n_hem_blk
+                        del neighbors_blk, vtc_blk, corr_hem_blk
+                        gc.collect()
+                    log.info(
+                        f"  Block {b}: bins [{b_start},{b_end})  "
+                        f"mean_r={block_maps[b].mean():.4f}"
+                    )
+                np.save(str(blocks_out), block_maps)
+                log.info(
+                    f"  Block maps saved: {blocks_out.name}  shape={block_maps.shape}"
+                )
 
     del fmri_binned, emb
     gc.collect()

@@ -67,7 +67,7 @@ from scipy.stats import rankdata
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from rsa.shared.rsa_utils import (
-    load_fmri_cifti, preprocess_fmri,
+    load_fmri_cifti, preprocess_fmri, get_run_bin_counts,
     process_model_embeddings, align_and_assert_bins,
     assert_segment_timing,
 )
@@ -919,13 +919,28 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
                     f"(need ≥{n_blocks * 6}); skipping block pass."
                 )
             else:
-                block_edges = np.round(
-                    np.linspace(0, n_bins_total, n_blocks + 1)
-                ).astype(int)
+                n_runs = len(run_trs)
+                if n_blocks == n_runs:
+                    # Align blocks to actual fMRI run boundaries (best practice per
+                    # Schütt et al. 2023: blocks should correspond to independent
+                    # data acquisition segments, not arbitrary equal-length splits).
+                    per_run_counts = get_run_bin_counts(
+                        timing_df, run_trs, args.bin_sec, args.tr,
+                        args.delay_sec, args.skip_sec,
+                    )
+                    block_edges = np.concatenate([[0], np.cumsum(per_run_counts)]).astype(int)
+                    log.info(
+                        f"  Block RSA: {n_blocks} blocks aligned to run boundaries "
+                        f"(bins per run: {per_run_counts.tolist()})"
+                    )
+                else:
+                    block_edges = np.round(
+                        np.linspace(0, n_bins_total, n_blocks + 1)
+                    ).astype(int)
+                    log.info(
+                        f"  Block RSA: {n_blocks} blocks of ~{n_bins_total // n_blocks} bins each"
+                    )
                 block_maps = np.zeros((n_blocks, n_total), dtype=np.float32)
-                log.info(
-                    f"  Block RSA: {n_blocks} blocks of ~{n_bins_total // n_blocks} bins each"
-                )
                 for b, (b_start, b_end) in enumerate(
                     zip(block_edges[:-1], block_edges[1:])
                 ):

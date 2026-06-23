@@ -488,7 +488,8 @@ def main():
             delta_stack, delta_block_stack, n_boot=args.n_bootstrap
         )
         se_c2f = np.sqrt(np.maximum(var_c2f, 0.0)).astype(np.float64)
-        df_c2f = max(n_subs - 1, 1)
+        # df = min(N_s-1, N_c-1) per Schütt et al. 2023 §5.1.4 (conservative choice)
+        df_c2f = max(min(n_subs - 1, args.n_blocks - 1), 1)
         mean_delta_f64 = mean_delta.astype(np.float64)
         safe_se = np.where(se_c2f > 0, se_c2f, 1.0)  # avoid divide-by-zero; masked below
         t_c2f_delta = np.where(

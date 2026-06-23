@@ -304,6 +304,59 @@ def process_model_embeddings_with_hrf(emb_path_tr: str, timing_df: pd.DataFrame,
     return np.concatenate(processed_runs, axis=0).astype(np.float32)
 
 
+def get_run_bin_counts(timing_df: pd.DataFrame, run_trs: np.ndarray,
+                       bin_sec: float, tr: float,
+                       delay_sec: float = 0.0,
+                       skip_sec: float = None) -> np.ndarray:
+    """Return the number of temporal bins produced by preprocess_fmri for each run.
+
+    Mirrors preprocess_fmri logic exactly. Used by searchlight.py to align
+    block boundaries with fMRI run boundaries (Schütt et al. 2023 §5.1.3).
+
+    Returns
+    -------
+    (n_runs,) int — bin count for each run, sums to total bins in fmri_binned
+    """
+    if skip_sec is None:
+        skip_sec = bin_sec
+    bin_trs  = max(1, int(np.round(bin_sec  / tr)))
+    skip_trs = max(1, int(np.round(skip_sec / tr)))
+    run_col = ('run' if 'run' in timing_df.columns
+               else ('run_id' if 'run_id' in timing_df.columns else None))
+
+    if run_col is None:
+        groups = [(None, timing_df)]
+    else:
+        groups = list(timing_df.groupby(run_col, sort=False))
+
+    counts = []
+    for run_idx, (run_id, run_df) in enumerate(groups):
+        run_tr_count  = run_trs[run_idx]
+        run_start_sec = float(np.sum(run_trs[:run_idx])) * tr
+        run_count     = 0
+
+        for _, row in run_df.iterrows():
+            dur    = row["duration_sec"]
+            n_wins = (max(0, int(np.floor((dur - bin_sec) / skip_sec)) + 1)
+                      if dur >= bin_sec else 0)
+            if n_wins == 0:
+                continue
+            within_run_onset = row["onset_sec"] - run_start_sec
+            start_tr = int(np.round((within_run_onset + delay_sec) / tr))
+            if start_tr >= run_tr_count or start_tr < 0:
+                continue
+            for i in range(n_wins):
+                w_start = start_tr + i * skip_trs
+                w_end   = w_start + bin_trs
+                if w_start >= run_tr_count or w_end > run_tr_count:
+                    break
+                run_count += 1
+
+        counts.append(run_count)
+
+    return np.array(counts, dtype=int)
+
+
 def align_and_assert_bins(fmri_binned: np.ndarray, model_binned: np.ndarray) -> tuple:
     """
     Ensures exact structural alignment between brain and model before RSA.

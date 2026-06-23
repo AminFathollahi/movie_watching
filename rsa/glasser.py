@@ -105,8 +105,9 @@ def parse_args():
                    help="Convolve embeddings with SPM HRF.")
     p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec",
                    help="Window stride in seconds (default: bin-sec, i.e. no overlap).")
-    p.add_argument("--method", required=True, choices=["spearman", "pearson"],
-                   help="RDM correlation method.")
+    p.add_argument("--method", required=True, choices=["spearman", "pearson", "rho_a"],
+                   help="RDM correlation method. rho_a = Kendall's tau_a "
+                        "(Schütt et al. 2023 §3.5 recommended comparator).")
     p.add_argument("--tr", type=float, required=True,
                    help="TR in seconds.")
     p.add_argument("--combined-output", default=None, dest="combined_output",

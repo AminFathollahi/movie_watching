@@ -370,8 +370,8 @@ def main():
         mean_rho_c2f = rho_stack.mean(axis=0).astype(np.float32)
         se_c2f = np.sqrt(np.maximum(var_c2f, 0.0)).astype(np.float64)
 
-        # t-statistic: use same df as the subject t-test (conservative)
-        df_c2f = max(n_subs - 1, 1)
+        # df = min(N_s-1, N_c-1) per Schütt et al. 2023 §5.1.4 (conservative choice)
+        df_c2f = max(min(n_subs - 1, args.n_blocks - 1), 1)
         safe_se = np.where(se_c2f > 0, se_c2f, 1.0)  # avoid divide-by-zero; masked below
         t_c2f = np.where(se_c2f > 0, mean_rho_c2f.astype(np.float64) / safe_se, 0.0).astype(np.float32)
         p_two_c2f = stats.t.sf(np.abs(t_c2f.astype(np.float64)), df=df_c2f) * 2.0

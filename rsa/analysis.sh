@@ -203,8 +203,10 @@ MODELS=(
 # ── Statistical inference (Schütt et al. 2023) ──────────────────────────
 # N_BLOCKS: non-overlapping temporal segments per subject for the corrected
 #   2-factor bootstrap (generalizes to new subjects AND new movie segments).
+#   When N_BLOCKS == number of fMRI scan runs, searchlight.py aligns block
+#   boundaries to actual run boundaries (best practice: Schütt et al. 2023).
 #   Set to 1 to disable block RSA and run subject t-test only.
-N_BLOCKS=4
+N_BLOCKS=4  # matches the 4 fMRI scan runs
 # N_BOOTSTRAP: bootstrap iterations for the corrected 2-factor variance estimate.
 N_BOOTSTRAP=2000
 

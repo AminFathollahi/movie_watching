@@ -198,9 +198,13 @@ def parse_args():
     p.add_argument("--method", required=True, choices=["spearman", "pearson"],
                    help="RDM comparator for the GPU/CPU searchlight kernel. "
                         "Note: rho_a (Kendall's tau_a, Schütt et al. 2023 §3.5) is NOT "
-                        "supported here — Kendall's tau is O(n_pairs²) per vertex, making it "
-                        "prohibitively slow in the searchlight inner loop. Use --method spearman "
-                        "for the searchlight; rho_a can be applied post-hoc at the RDM level.")
+                        "supported here. Spearman reduces to a rank-vector dot product, "
+                        "which is fully vectorizable on GPU (thousands of vertices in parallel). "
+                        "Kendall's tau requires pairwise concordance counting with no equivalent "
+                        "GPU batch formulation — scipy's O(n log n) CPU path is still too slow "
+                        "for 60k vertices × ~1M pairs each. Use spearman for the searchlight; "
+                        "rho_a is used at the parcel level (glasser.py) where it is feasible "
+                        "and the noise-ceiling advantage matters most.")
     p.add_argument("--n-blocks", type=int, default=4, dest="n_blocks",
                    help="Number of non-overlapping temporal blocks for the condition bootstrap "
                         "(Schütt et al. 2023, Eq. 5). Each block gets its own RSA map, saved as "

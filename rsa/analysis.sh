@@ -375,7 +375,7 @@ _run_avg_one_model() {
                 --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
                 --combined-output    "$COMBINED_OUT" \
                 --gpu-batch-size "$GPU_BATCH_SIZE" \
-                --n-blocks           "$N_BLOCKS" \
+                --n-blocks           1 \
                 $(_hrf_flag) $(_normalize_flag)
         fi
 

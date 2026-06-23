@@ -179,7 +179,8 @@ BIN_SEC=1.0
 SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
 HRF=false
 NORMALIZE=false  # true → per-run z-score; false → demean only (adds _demean suffix to outputs)
-METHOD="spearman"
+METHOD="spearman"       # searchlight comparator: spearman or pearson
+GLASSER_METHOD="rho_a"  # parcel comparator: rho_a recommended (Schütt et al. 2023 §3.5)
 K=100
 
 
@@ -385,7 +386,7 @@ _run_avg_one_model() {
                 --bin-sec          "$BIN_SEC" \
                 --skip-sec         "$SKIP_SEC" \
                 --delay-sec        "$DELAY_SEC" \
-                --method           "$METHOD" \
+                --method           "$GLASSER_METHOD" \
                 --tr               "$TR" \
                 --glasser-dlabel   "$GLASSER_DLABEL" \
                 --combined-output  "$COMBINED_OUT" \
@@ -546,7 +547,7 @@ _run_one_subject() {
                         --bin-sec          "$_RSA_BIN_SEC" \
                         --skip-sec         "$_RSA_SKIP_SEC" \
                         --delay-sec        "$_RSA_DELAY_SEC" \
-                        --method           "$_RSA_METHOD" \
+                        --method           "$_RSA_GLASSER_METHOD" \
                         --tr               "$_RSA_TR" \
                         --glasser-dlabel   "$_RSA_GLASSER_DLABEL" \
                         --combined-output  "$COMBINED_OUT" \
@@ -853,6 +854,7 @@ run_persubject() {
     export _RSA_GEODESIC_CACHE_DIR="$GEODESIC_CACHE_DIR"
     export _RSA_N_JOBS="$N_JOBS_PER_SUBJECT"
     export _RSA_N_BLOCKS="$N_BLOCKS"
+    export _RSA_GLASSER_METHOD="$GLASSER_METHOD"
 
     if [ -n "$PARALLEL_BIN" ]; then
         echo "$SUBJECTS" | "$PARALLEL_BIN" --jobs "$BATCH_SIZE" --line-buffer \

@@ -158,7 +158,7 @@ LEFT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs
 RIGHT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
 
 # Per-subject midthickness surfaces (used when available for the searchlight loop)
-MIDTHICKNESS_DIR="${DATA_BASE}/midthickness_1.6"
+MIDTHICKNESS_DIR="/media/amin/EXTERNAL_USB/SMAF/Research/Representation/Movie/data/midthickness_1.6"
 
 # Glasser parcellation, 59k version (must match TEMPLATE_CIFTI and the surfaces)
 GLASSER_DLABEL="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
@@ -176,30 +176,30 @@ GEODESIC_CACHE_DIR="${OUTPUTS_BASE}/rsa/_geodesic_cache"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-BIN_SEC=1.0
+BIN_SEC=5.0
 SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
 HRF=false
-NORMALIZE=false  # true → per-run z-score; false → demean only (adds _demean suffix to outputs)
-METHOD="spearman"       # searchlight comparator: spearman or pearson
-GLASSER_METHOD="rho_a"  # parcel comparator: rho_a recommended (Schütt et al. 2023 §3.5)
+NORMALIZE=true  # true → per-run z-score; false → demean only (adds _demean suffix to outputs)
+METHOD="spearman"       # searchlight comparator
+GLASSER_METHOD="spearman"  # parcel comparator: rho_a recommended (Schütt et al. 2023 )
 K=100
 
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
-    "pe-av-small-16-frame:av,a,v"
-    # "omni3b_layer35:av,a,v"
-    # "omni3b_layer27:av,a,v"
-    # "omni3b_layer18:av,a,v"
-    # "omni3b_layer9:av,a,v"
-    # "omni3b_layer1:av,a,v"
-    #"imagebind:a,v,av"
-    # "pe-av-small-16-frame:av,v,a,at,vt,avt,t"
-    # "audiomae:a"
-    # "videomaev2-large:v"
-    # "wavlm-large:a"
-    # "whisper-large-v3:a"
-    # "pe-core-l14:v"
+    "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
+    "cav-mae-sync:av,a,v"
+    "omni3b_layer35:av,a,v"
+    "omni3b_layer27:av,a,v"
+    "omni3b_layer18:av,a,v"
+    "omni3b_layer9:av,a,v"
+    "omni3b_layer1:av,a,v"
+    "imagebind:a,v,av"
+    "audiomae:a"
+    "videomaev2-large:v"
+    "wavlm-large:a"
+    "whisper-large-v3:a"
+    "pe-core-l14:v"
 )
 
 # ── Statistical inference (Schütt et al. 2023) ──────────────────────────
@@ -211,9 +211,19 @@ MODELS=(
 N_BLOCKS=16  # LCM(4,8,16): supports all three sweep values below
 # BLOCKS_SWEEP: group_stats.py runs once per value, aggregating from N_BLOCKS.
 #   df = min(N_subjects-1, N-1) for each N; more blocks → less conservative.
-BLOCKS_SWEEP=(4 8 16)  # df ≈ 3, 7, 15 (with ~30 subjects)
+BLOCKS_SWEEP=(4 8 16)  # df ≈ 3, 7, 15 
 # N_BOOTSTRAP: bootstrap iterations for the corrected 2-factor variance estimate.
 N_BOOTSTRAP=2000
+
+# ── Permutation test ─────────────────────────────────────────────────────
+# Set to false by default
+RUN_PERM=false
+
+# ── Crossnobis RSA ────────────────────────────────────────────────────────
+# Fixed at 5s: needs long enough bins for reliable RDM pairs from 82s repeated clips.
+# Independent of BIN_SEC; runs alongside any searchlight call.
+CROSSNOBIS_BIN_SEC=5.0
+CROSSNOBIS_SKIP_SEC=5.0
 
 # ── GPU acceleration ─────────────────────────────────────────────────────
 # GPU is attempted automatically when CUDA is available; OOM falls back to CPU.
@@ -377,6 +387,56 @@ _run_avg_one_model() {
                 --gpu-batch-size "$GPU_BATCH_SIZE" \
                 --n-blocks           1 \
                 $(_hrf_flag) $(_normalize_flag)
+
+            if [ "$RUN_PERM" = "true" ]; then
+                # Permutation test on group-average result (skip logic inside script)
+                run_python "${SCRIPT_DIR}/perm_searchlight.py" \
+                    --preprocessed-dir   "$PREPROCESSED_DIR" \
+                    --fmri-suffix        "$FMRI_SUFFIX" \
+                    --timing-csv         "$TIMING_CSV" \
+                    --embeddings-dir     "$EMBEDDINGS_DIR" \
+                    --template-cifti     "$TEMPLATE_CIFTI" \
+                    --output-dir         "$OUTPUT_DIR" \
+                    --subject            "group_average" \
+                    --model              "$MODEL_NAME" \
+                    --modality           "$MOD" \
+                    --k                  "$K" \
+                    --bin-sec            "$BIN_SEC" \
+                    --skip-sec           "$SKIP_SEC" \
+                    --delay-sec          "$DELAY_SEC" \
+                    --method             "$METHOD" \
+                    --tr                 "$TR" \
+                    --left-surface       "$LEFT_SURFACE" \
+                    --right-surface      "$RIGHT_SURFACE" \
+                    --workbench          "$WORKBENCH" \
+                    --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
+                    --combined-output    "$COMBINED_OUT" \
+                    --gpu-batch-size     "$GPU_BATCH_SIZE" \
+                    $(_hrf_flag) $(_normalize_flag)
+            fi
+
+            # Crossnobis RSA (fixed 5s bins; skip logic handled inside the script)
+            local CN_BIN_INT="${CROSSNOBIS_BIN_SEC%.*}"
+            local CN_SKIP_INT="${CROSSNOBIS_SKIP_SEC%.*}"
+            run_python "${SCRIPT_DIR}/crossnobis_searchlight.py" \
+                --preprocessed-dir   "$PREPROCESSED_DIR" \
+                --fmri-suffix        "$FMRI_SUFFIX" \
+                --timing-csv         "$TIMING_CSV" \
+                --embeddings-dir     "$EMBEDDINGS_DIR" \
+                --template-cifti     "$TEMPLATE_CIFTI" \
+                --left-surface       "$LEFT_SURFACE" \
+                --right-surface      "$RIGHT_SURFACE" \
+                --workbench          "$WORKBENCH" \
+                --output-dir         "$OUTPUT_DIR" \
+                --subject            "group_average" \
+                --model              "$MODEL_NAME" \
+                --modality           "$MOD" \
+                --k                  "$K" \
+                --bin-sec            "$CROSSNOBIS_BIN_SEC" \
+                --skip-sec           "$CROSSNOBIS_SKIP_SEC" \
+                --delay-sec          "$DELAY_SEC" \
+                --tr                 "$TR" \
+                --geodesic-cache-dir "$GEODESIC_CACHE_DIR"
         fi
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "glasser" ]; then
@@ -562,6 +622,32 @@ _run_one_subject() {
                         >> "$LOG" 2>&1 || STATUS=$?
                 fi
             fi
+
+            # Crossnobis RSA (disk mode only — needs pre-saved per-subject CIFTIs)
+            if { [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "searchlight" ]; } \
+               && [ "$_RSA_STREAM" = "false" ]; then
+                conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
+                    "${_RSA_SCRIPT_DIR}/crossnobis_searchlight.py" \
+                    --preprocessed-dir   "$_RSA_PREPROCESSED_DIR" \
+                    --fmri-suffix        "$_RSA_FMRI_SUFFIX" \
+                    --timing-csv         "$_RSA_TIMING_CSV" \
+                    --embeddings-dir     "$_RSA_EMBEDDINGS_DIR" \
+                    --template-cifti     "$_RSA_TEMPLATE_CIFTI" \
+                    --left-surface       "$LEFT_SURF" \
+                    --right-surface      "$RIGHT_SURF" \
+                    --workbench          "$_RSA_WORKBENCH" \
+                    --output-dir         "$_RSA_OUTPUT_DIR" \
+                    --subject            "$SUB" \
+                    --model              "$MODEL_NAME" \
+                    --modality           "$MOD" \
+                    --k                  "$_RSA_K" \
+                    --bin-sec            "$_RSA_CROSSNOBIS_BIN_SEC" \
+                    --skip-sec           "$_RSA_CROSSNOBIS_SKIP_SEC" \
+                    --delay-sec          "$_RSA_DELAY_SEC" \
+                    --tr                 "$_RSA_TR" \
+                    --geodesic-cache-dir "$_RSA_GEODESIC_CACHE_DIR" \
+                    >> "$LOG" 2>&1 || STATUS=$?
+            fi
         done
     done
 
@@ -579,6 +665,75 @@ _run_one_subject() {
     fi
 }
 export -f _run_one_subject
+
+# Worker for per-subject crossnobis — always disk mode, parallel-safe.
+_run_crossnobis_one_subject() {
+    local SUB="$1"
+
+    local LOG_DIR="${_RSA_OUTPUT_DIR}/subject_data/${SUB}"
+    mkdir -p "$LOG_DIR"
+    local LOG="${LOG_DIR}/pipeline.log"
+
+    local DELAY_INT="${_RSA_DELAY_SEC%.*}"
+    local CN_BIN_INT="${_RSA_CROSSNOBIS_BIN_SEC%.*}"
+    local CN_SKIP_INT="${_RSA_CROSSNOBIS_SKIP_SEC%.*}"
+    local STATUS=0
+
+    IFS=';' read -ra MODEL_ENTRIES <<< "$_RSA_MODELS_STR"
+    for MODEL_ENTRY in "${MODEL_ENTRIES[@]}"; do
+        IFS=':' read -r MODEL_NAME MODALITIES_ENTRY <<< "$MODEL_ENTRY"
+        IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
+
+        for MOD in "${MODS[@]}"; do
+            local EMB="${_RSA_EMBEDDINGS_DIR}/${MODEL_NAME}/bin${CN_BIN_INT}s_skip${CN_SKIP_INT}s/${MODEL_NAME}_${MOD}.npy"
+            if [ ! -f "$EMB" ]; then
+                echo "[$(date +%H:%M:%S)] ${SUB}: skip ${MODEL_NAME}/${MOD} crossnobis: embedding not found" \
+                    | tee -a "$LOG"
+                continue
+            fi
+
+            local CN_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/k${_RSA_K}_delay${DELAY_INT}s_bin${CN_BIN_INT}s_skip${CN_SKIP_INT}s_rho_a"
+            local CN_NPY="${CN_OUT}/crossnobis_rho_a_k${_RSA_K}_delay${DELAY_INT}s_bin${CN_BIN_INT}s_skip${CN_SKIP_INT}s.npy"
+            local CN_CIFTI="${CN_OUT}/crossnobis_rho_a_k${_RSA_K}_delay${DELAY_INT}s_bin${CN_BIN_INT}s_skip${CN_SKIP_INT}s.dscalar.nii"
+
+            if [ -f "$CN_NPY" ] && [ -f "$CN_CIFTI" ]; then
+                echo "[$(date +%H:%M:%S)] ${SUB}: crossnobis ${MODEL_NAME}/${MOD} already done; skipping" \
+                    | tee -a "$LOG"
+                continue
+            fi
+
+            conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
+                "${_RSA_SCRIPT_DIR}/crossnobis_searchlight.py" \
+                --preprocessed-dir   "$_RSA_PREPROCESSED_DIR" \
+                --fmri-suffix        "$_RSA_FMRI_SUFFIX" \
+                --timing-csv         "$_RSA_TIMING_CSV" \
+                --embeddings-dir     "$_RSA_EMBEDDINGS_DIR" \
+                --template-cifti     "$_RSA_TEMPLATE_CIFTI" \
+                --left-surface       "$_RSA_LEFT_SURFACE" \
+                --right-surface      "$_RSA_RIGHT_SURFACE" \
+                --workbench          "$_RSA_WORKBENCH" \
+                --output-dir         "$_RSA_OUTPUT_DIR" \
+                --subject            "$SUB" \
+                --model              "$MODEL_NAME" \
+                --modality           "$MOD" \
+                --k                  "$_RSA_K" \
+                --bin-sec            "$_RSA_CROSSNOBIS_BIN_SEC" \
+                --skip-sec           "$_RSA_CROSSNOBIS_SKIP_SEC" \
+                --delay-sec          "$_RSA_DELAY_SEC" \
+                --tr                 "$_RSA_TR" \
+                --geodesic-cache-dir "$_RSA_GEODESIC_CACHE_DIR" \
+                >> "$LOG" 2>&1 || STATUS=$?
+        done
+    done
+
+    if [ $STATUS -eq 0 ]; then
+        echo "[$(date +%H:%M:%S)] ${SUB} crossnobis complete" | tee -a "$LOG"
+    else
+        echo "[$(date +%H:%M:%S)] ${SUB} crossnobis failed (exit $STATUS)" | tee -a "$LOG"
+        return $STATUS
+    fi
+}
+export -f _run_crossnobis_one_subject
 
 # =============================================================================
 # NEIGHBOUR PRE-COMPUTE PIPELINE
@@ -862,6 +1017,8 @@ run_persubject() {
     export _RSA_N_JOBS="$N_JOBS_PER_SUBJECT"
     export _RSA_N_BLOCKS="$N_BLOCKS"
     export _RSA_GLASSER_METHOD="$GLASSER_METHOD"
+    export _RSA_CROSSNOBIS_BIN_SEC="$CROSSNOBIS_BIN_SEC"
+    export _RSA_CROSSNOBIS_SKIP_SEC="$CROSSNOBIS_SKIP_SEC"
 
     if [ -n "$PARALLEL_BIN" ]; then
         echo "$SUBJECTS" | "$PARALLEL_BIN" --jobs "$BATCH_SIZE" --line-buffer \
@@ -875,6 +1032,61 @@ run_persubject() {
     fi
 
     log "=== Per-subject RSA complete ==="
+}
+
+# =============================================================================
+# PER-SUBJECT CROSSNOBIS PIPELINE
+# =============================================================================
+# Sweeps all subjects in parallel (disk mode only — requires pre-saved per-subject
+# CIFTIs in PREPROCESSED_INDIV_DIR).  Skip logic is inside the worker.
+# =============================================================================
+run_crossnobis_persubject() {
+    if [ ! -d "$PREPROCESSED_INDIV_DIR" ]; then
+        log "WARNING: PREPROCESSED_INDIV_DIR not found (${PREPROCESSED_INDIV_DIR}) — skipping per-subject crossnobis."
+        return
+    fi
+
+    local SUBJECTS
+    SUBJECTS=$(grep -v '^\s*#' "$SUBJECTS_LIST" \
+               | sed 's/#.*//' \
+               | awk '{print $1}' \
+               | grep -v '^$')
+    local N_TOTAL
+    N_TOTAL=$(echo "$SUBJECTS" | wc -l)
+    log "=== Per-subject crossnobis (${N_TOTAL} subjects, BATCH_SIZE=${BATCH_SIZE}) ==="
+
+    local MODELS_STR
+    MODELS_STR=$(IFS=';'; echo "${MODELS[*]}")
+    export _RSA_SCRIPT_DIR="$SCRIPT_DIR"
+    export _RSA_CONDA_ENV="$CONDA_ENV"
+    export _RSA_PREPROCESSED_DIR="$PREPROCESSED_INDIV_DIR"
+    export _RSA_FMRI_SUFFIX="$FMRI_SUFFIX"
+    export _RSA_OUTPUT_DIR="$OUTPUT_DIR"
+    export _RSA_TIMING_CSV="$TIMING_CSV"
+    export _RSA_EMBEDDINGS_DIR="$EMBEDDINGS_DIR"
+    export _RSA_TEMPLATE_CIFTI="$TEMPLATE_CIFTI"
+    export _RSA_LEFT_SURFACE="$LEFT_SURFACE"
+    export _RSA_RIGHT_SURFACE="$RIGHT_SURFACE"
+    export _RSA_WORKBENCH="$WORKBENCH"
+    export _RSA_MODELS_STR="$MODELS_STR"
+    export _RSA_K="$K"
+    export _RSA_DELAY_SEC="$DELAY_SEC"
+    export _RSA_TR="$TR"
+    export _RSA_GEODESIC_CACHE_DIR="$GEODESIC_CACHE_DIR"
+    export _RSA_CROSSNOBIS_BIN_SEC="$CROSSNOBIS_BIN_SEC"
+    export _RSA_CROSSNOBIS_SKIP_SEC="$CROSSNOBIS_SKIP_SEC"
+
+    if [ -n "$PARALLEL_BIN" ]; then
+        echo "$SUBJECTS" | "$PARALLEL_BIN" --jobs "$BATCH_SIZE" --line-buffer \
+            _run_crossnobis_one_subject {}
+    else
+        log "GNU parallel not found — running sequentially"
+        for SUB in $SUBJECTS; do
+            _run_crossnobis_one_subject "$SUB"
+        done
+    fi
+
+    log "=== Per-subject crossnobis complete ==="
 }
 
 # =============================================================================
@@ -914,6 +1126,26 @@ run_group_stats() {
                     --n-bootstrap     "$N_BOOTSTRAP" \
                     || log "  WARNING: group stats skipped for ${MODEL_NAME}/${MOD} n_blocks=${N_B}"
             done
+
+            # Crossnobis group aggregation (rho_a, fixed 5s bins, no block sweep)
+            log "  Crossnobis group stats: ${MODEL_NAME} / ${MOD}"
+            run_python "${SCRIPT_DIR}/group_stats.py" \
+                --output-dir      "$OUTPUT_DIR" \
+                --model           "$MODEL_NAME" \
+                --modality        "$MOD" \
+                --k               "$K" \
+                --bin-sec         "$CROSSNOBIS_BIN_SEC" \
+                --skip-sec        "$CROSSNOBIS_SKIP_SEC" \
+                --delay-sec       "$DELAY_SEC" \
+                --method          "rho_a" \
+                --fmri-tag        "$PREPROCESSING_FLAG" \
+                --template-cifti  "$TEMPLATE_CIFTI" \
+                --left-surface    "$LEFT_SURFACE" \
+                --right-surface   "$RIGHT_SURFACE" \
+                --workbench       "$WORKBENCH" \
+                --n-blocks        1 \
+                --n-bootstrap     "$N_BOOTSTRAP" \
+                || log "  WARNING: crossnobis group stats skipped for ${MODEL_NAME}/${MOD}"
         done
     done
 
@@ -985,8 +1217,8 @@ case "$MODE" in
     neighbors_avg)  run_precompute_neighbors_avg ;;
     neighbors)      run_precompute_neighbors ;;
     persubject)     run_persubject; run_group_stats; run_noise_ceiling ;;
-    groupstats)     run_group_stats; run_noise_ceiling ;;
-    all)            run_avg; run_persubject; run_group_stats; run_noise_ceiling ;;
+    groupstats)     run_crossnobis_persubject; run_group_stats; run_noise_ceiling ;;
+    all)            run_avg; run_persubject; run_crossnobis_persubject; run_group_stats; run_noise_ceiling ;;
     *)
         echo "Unknown mode: $MODE" >&2
         echo "Use: preprocess | avg | neighbors_avg | neighbors | persubject | groupstats | all" >&2

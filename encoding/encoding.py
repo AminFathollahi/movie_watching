@@ -63,6 +63,10 @@ from nibabel.gifti import GiftiDataArray, GiftiImage
 from scipy import stats
 
 ROOT = Path(__file__).resolve().parents[1]
+# Remove the script's own directory from sys.path so that encoding.py doesn't
+# shadow the encoding/ package when resolving "encoding.shared".
+_script_dir = str(Path(__file__).resolve().parent)
+sys.path = [p for p in sys.path if p != _script_dir]
 sys.path.insert(0, str(ROOT))
 from encoding.shared.encoding_utils import (
     _bin_and_split_fmri, build_fmri_arrays,

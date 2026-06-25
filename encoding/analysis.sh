@@ -117,7 +117,7 @@ OUTPUT_DIR="${OUTPUTS_BASE}/encoding"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-BIN_SEC=5.0
+BIN_SEC=1.0
 SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
 HRF=false       # true → SPM HRF convolution; false → boxcar delay
 NORMALIZE=true  # per-run z-score normalization of embeddings
@@ -137,13 +137,14 @@ TEST_VIDEO_IDS="video5,video9,video14,video18"
 # ── Model registry ─────────────────────────────────────────────────────────
 # Format: "model_name:modalities"
 MODELS=(
-    "pe-av-small-16-frame:v,a,av"
+    "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
+    "cav-mae-sync:av,a,v"
     "omni3b_layer35:av,a,v"
     "omni3b_layer27:av,a,v"
     "omni3b_layer18:av,a,v"
-    # "pe-av-base:v,a,av"
-    # "pe-av-large:v,a,av"
-    "cav-mae-sync:v,a,av"
+    "omni3b_layer9:av,a,v"
+    "omni3b_layer1:av,a,v"
+    # "imagebind:a,v,av"
     "audiomae:a"
     "videomaev2-large:v"
     "wavlm-large:a"

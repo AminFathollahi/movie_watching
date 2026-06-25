@@ -237,8 +237,12 @@ def main():
                f"{args.model}_{args.modality}" / config)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
-                     f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy")
+    if args.method == "rho_a":
+        fname_pattern = (f"crossnobis_rho_a_k{args.k}_{delay_tag}"
+                         f"_bin{bin_sec_int}s_skip{skip_int}s.npy")
+    else:
+        fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
+                         f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy")
 
     model_mod_dir = f"{args.model}_{args.modality}"
     subject_rho_files = sorted(

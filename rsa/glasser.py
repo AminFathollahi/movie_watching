@@ -95,8 +95,9 @@ def parse_args():
 
     p.add_argument("--model", required=True,
                    help="Model name (must match subdirectory in --embeddings-dir).")
-    p.add_argument("--modality", required=True, choices=["v", "a", "av", "at", "vt", "avt", "t"],
-                   help="Embedding modality: v=video, a=audio, av=joint, at/vt/avt=text-conditioned.")
+    p.add_argument("--modality", required=True,
+                   choices=["v", "a", "av", "at", "vt", "avt", "t", "caption_t", "transcript_t", "event_t", "transcript_avt", "event_avt"],
+                   help="Embedding modality.")
     p.add_argument("--bin-sec", type=float, required=True,
                    help="Temporal bin size in seconds.")
     p.add_argument("--delay-sec", type=float, default=5.0,

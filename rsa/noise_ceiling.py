@@ -91,13 +91,21 @@ def parse_args():
         description="Vertex-wise inter-subject noise ceiling for searchlight RSA.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--preprocessed-root", required=True, dest="preprocessed_root",
-                   help="Root dir.  Subject S CIFTI resolved as "
-                        "{root}/{S}/{S}_{suffix}_cortex_59k.dtseries.nii "
-                        "(or flat: {root}/{S}_{suffix}_cortex_59k.dtseries.nii).")
+    inp = p.add_mutually_exclusive_group(required=True)
+    inp.add_argument("--raw-dir", default=None, dest="raw_dir",
+                     help="[streaming mode] Root dir of raw per-run 7T CIFTI files.")
+    inp.add_argument("--preprocessed-root", default=None, dest="preprocessed_root",
+                     help="[disk mode] Root dir.  Subject S resolved as "
+                          "{root}/{S}/{S}_{suffix}_cortex_59k.dtseries.nii "
+                          "(or flat: {root}/{S}_{suffix}_cortex_59k.dtseries.nii).")
     p.add_argument("--subjects",          nargs="+", required=True,
                    help="Subject IDs (used for file naming).")
-    p.add_argument("--fmri-suffix",       default="raw", dest="fmri_suffix")
+    p.add_argument("--fmri-suffix",       default="raw", dest="fmri_suffix",
+                   help="[disk mode only] Filename suffix.")
+    prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
+    prep.add_argument("--sg-filter", default=False, action="store_true", dest="sg_filter")
+    prep.add_argument("--psc",       default=False, action="store_true")
+    prep.add_argument("--gsr",       default=False, action=argparse.BooleanOptionalAction)
     p.add_argument("--timing-csv",        required=True, dest="timing_csv")
     p.add_argument("--k",                 type=int, required=True)
     p.add_argument("--bin-sec",           type=float, required=True, dest="bin_sec")
@@ -112,7 +120,7 @@ def parse_args():
     p.add_argument("--geodesic-cache-dir", default=None, dest="geodesic_cache_dir")
     p.add_argument("--template-cifti",    required=True, dest="template_cifti")
     p.add_argument("--output-dir",        required=True, dest="output_dir")
-    p.add_argument("--batch-size",        type=int, default=32, dest="batch_size",
+    p.add_argument("--batch-size",        type=int, default=256, dest="batch_size",
                    help="Vertices per GPU batch.  Reduce if OOM.")
     return p.parse_args()
 
@@ -121,44 +129,59 @@ def parse_args():
 # Data loading
 # =============================================================================
 
-def _resolve_paths(root: str, subject: str, suffix: str) -> tuple[Path, Path]:
-    """Return (cifti_path, run_trs_path) for a subject, trying nested then flat."""
+def _load_and_bin_disk(subject: str, root: str, suffix: str,
+                       timing_df: pd.DataFrame, bin_sec: float, skip_sec: float,
+                       delay_sec: float, tr: float) -> np.ndarray:
+    """Disk mode: load pre-saved CIFTI + run_trs.npy → (n_bins, n_verts) float32."""
     r = Path(root)
     nested_cifti = r / subject / f"{subject}_{suffix}_cortex_59k.dtseries.nii"
     flat_cifti   = r / f"{subject}_{suffix}_cortex_59k.dtseries.nii"
     nested_trs   = r / subject / f"{subject}_{suffix}_run_trs.npy"
     flat_trs     = r / f"{subject}_{suffix}_run_trs.npy"
 
-    cifti = nested_cifti if nested_cifti.exists() else flat_cifti
-    trs   = nested_trs   if nested_trs.exists()   else flat_trs
+    cifti_path = nested_cifti if nested_cifti.exists() else flat_cifti
+    trs_path   = nested_trs   if nested_trs.exists()   else flat_trs
 
-    if not cifti.exists():
+    if not cifti_path.exists():
         raise FileNotFoundError(
             f"CIFTI not found for {subject}.\n"
             f"  Tried: {nested_cifti}\n"
             f"         {flat_cifti}"
         )
-    if not trs.exists():
+    if not trs_path.exists():
         raise FileNotFoundError(
             f"run_trs.npy not found for {subject}.\n"
             f"  Tried: {nested_trs}\n"
             f"         {flat_trs}"
         )
-    return cifti, trs
 
-
-def _load_and_bin(subject: str, root: str, suffix: str,
-                  timing_df: pd.DataFrame, bin_sec: float, skip_sec: float,
-                  delay_sec: float, tr: float) -> np.ndarray:
-    """Load + bin one subject's fMRI → (n_bins, n_verts) float32."""
-    cifti_path, trs_path = _resolve_paths(root, subject, suffix)
-    fmri_raw = load_fmri_cifti(str(cifti_path))          # (n_verts, T)
+    fmri_raw = load_fmri_cifti(str(cifti_path))
     run_trs  = np.load(str(trs_path))
     binned   = preprocess_fmri(
         fmri_raw, timing_df, run_trs,
         bin_sec=bin_sec, tr=tr, delay_sec=delay_sec, skip_sec=skip_sec,
-    )                                                      # (n_bins, n_verts)
+    )
     del fmri_raw
+    return binned.astype(np.float32)
+
+
+def _load_and_bin_streaming(subject: str, raw_dir: str, prep_args,
+                             timing_df: pd.DataFrame, bin_sec: float, skip_sec: float,
+                             delay_sec: float, tr: float) -> np.ndarray:
+    """Streaming mode: preprocess raw per-run CIFTIs on-the-fly → (n_bins, n_verts) float32."""
+    import types as _types
+    import sys as _sys
+    ROOT_P = Path(__file__).resolve().parents[1]
+    if str(ROOT_P) not in _sys.path:
+        _sys.path.insert(0, str(ROOT_P))
+    from preprocess_individual import preprocess_subject
+
+    data, _bm, run_trs = preprocess_subject(subject, Path(raw_dir), tr, prep_args)
+    binned = preprocess_fmri(
+        data, timing_df, run_trs,
+        bin_sec=bin_sec, tr=tr, delay_sec=delay_sec, skip_sec=skip_sec,
+    )
+    del data
     return binned.astype(np.float32)
 
 
@@ -202,10 +225,9 @@ def _compute_nc_gpu(
     tril_r  = torch.tensor(tril[0], dtype=torch.long, device=device)
     tril_c  = torch.tensor(tril[1], dtype=torch.long, device=device)
 
-    # All subjects' fMRI on GPU: list of (n_hem_verts, n_bins)
-    fmri_t = [
-        torch.from_numpy(f.T.astype(np.float32)).to(device) for f in fmri_subs
-    ]
+    # Keep fMRI on CPU; transpose to (n_hem_verts, n_bins) for fast row indexing.
+    # Preloading all N subjects × full hemisphere onto GPU would OOM (N×54k×626×4B ≫ VRAM).
+    fmri_cpu = [f.T for f in fmri_subs]  # list of (n_hem_verts, n_bins) float32
 
     ncols_for_v = vertex_to_col[neighbors[surface_indices.astype(np.int32)]]  # (n_verts, k)
     full_k_mask = np.all(ncols_for_v >= 0, axis=1)
@@ -218,60 +240,57 @@ def _compute_nc_gpu(
     nc_upper = np.zeros(n_verts, dtype=np.float32)
     nc_lower = np.zeros(n_verts, dtype=np.float32)
 
+    def _rdm_for_sub(sub_f_T: np.ndarray, nc: np.ndarray) -> "torch.Tensor":
+        """Gather neighbourhood from CPU numpy, compute correlation-distance RDM.
+        sub_f_T: (n_hem_verts, n_bins)  nc: (B, k) int64 numpy
+        Returns:  (B, n_pairs) float32 on device.
+        """
+        hood = torch.from_numpy(sub_f_T[nc].astype(np.float32)).to(device)  # (B, k, n_bins)
+        hood = hood.permute(0, 2, 1)                                          # (B, n_bins, k)
+        mu   = hood.mean(dim=2, keepdim=True)
+        hc   = hood - mu
+        nm   = hc.norm(dim=2, keepdim=True).clamp(min=1e-10)
+        hn   = hc / nm
+        rdm  = torch.bmm(hn, hn.permute(0, 2, 1))                           # (B, n_bins, n_bins)
+        return (1.0 - rdm)[:, tril_r, tril_c]                                # (B, n_pairs)
+
     for start in range(0, len(full_k_verts), batch_size):
         batch_v  = full_k_verts[start : start + batch_size]
         B        = len(batch_v)
-        batch_nc = torch.from_numpy(ncols_for_v[batch_v].astype(np.int64)).to(device)  # (B, k)
+        batch_nc = ncols_for_v[batch_v].astype(np.int64)  # (B, k) numpy — used as CPU index
 
-        # ── Compute raw RDMs for every subject: (N, B, n_pairs) ──────────────
-        raw_rdms = []
-        for sub_f in fmri_t:
-            hood = sub_f[batch_nc]                              # (B, k, n_bins)
-            hood = hood.permute(0, 2, 1).float()                # (B, n_bins, k)
-            mu   = hood.mean(dim=2, keepdim=True)
-            hc   = hood - mu
-            nm   = hc.norm(dim=2, keepdim=True).clamp(min=1e-10)
-            hn   = hc / nm
-            rdm  = torch.bmm(hn, hn.permute(0, 2, 1))          # (B, n_bins, n_bins)
-            raw_rdms.append((1.0 - rdm)[:, tril_r, tril_c])    # (B, n_pairs)
+        # ── Pass 1: accumulate group mean one subject at a time ───────────────
+        # Peak GPU: ~2×(B, n_pairs) ≈ 2×batch_size×n_pairs×4B — independent of N.
+        group_sum = torch.zeros(B, n_pairs, dtype=torch.float32, device=device)
+        for sub_f in fmri_cpu:
+            group_sum.add_(_rdm_for_sub(sub_f, batch_nc))
+        group_mean = group_sum / N                                 # (B, n_pairs)
+        del group_sum
+        ranked_gm = _rank_rows(group_mean) if method == "spearman" else group_mean
 
-        raw_rdms = torch.stack(raw_rdms, dim=0)                 # (N, B, n_pairs)
+        # ── Pass 2: NC_upper and NC_lower, one subject at a time ─────────────
+        nc_up_sum = torch.zeros(B, dtype=torch.float32, device=device)
+        nc_lo_sum = torch.zeros(B, dtype=torch.float32, device=device)
+        for sub_f in fmri_cpu:
+            rdm_i = _rdm_for_sub(sub_f, batch_nc)                 # (B, n_pairs)
+            r_i   = _rank_rows(rdm_i) if method == "spearman" else rdm_i
 
-        # ── Group mean of raw RDMs ────────────────────────────────────────────
-        group_mean = raw_rdms.mean(dim=0)                       # (B, n_pairs)
+            nc_up_sum.add_(_pearson_rows(r_i, ranked_gm))
 
-        # ── Rank individual RDMs (for Spearman) ──────────────────────────────
-        if method == "spearman":
-            ranked_rdms = _rank_rows(raw_rdms)                  # (N, B, n_pairs)
-            ranked_gm   = _rank_rows(group_mean)                # (B, n_pairs)
-        else:
-            ranked_rdms = raw_rdms
-            ranked_gm   = group_mean
+            loo   = (N * group_mean - rdm_i) / (N - 1)
+            r_loo = _rank_rows(loo) if method == "spearman" else loo
+            nc_lo_sum.add_(_pearson_rows(r_i, r_loo))
+            del rdm_i, r_i, loo, r_loo
 
-        # ── NC_upper: Pearson(rank(RDM_i), rank(group_mean)) avg over i ──────
-        # Broadcast ranked_gm to (N, B, n_pairs)
-        nc_up = _pearson_rows(
-            ranked_rdms,
-            ranked_gm.unsqueeze(0).expand_as(ranked_rdms),
-        )                                                        # (N, B)
-        nc_upper[batch_v] = nc_up.mean(dim=0).cpu().numpy()
-
-        # ── NC_lower: LOO mean per subject ────────────────────────────────────
-        nc_lo_sum = torch.zeros(B, device=device)
-        for i in range(N):
-            loo_mean = (N * group_mean - raw_rdms[i]) / (N - 1)   # (B, n_pairs)
-            if method == "spearman":
-                ranked_loo = _rank_rows(loo_mean)                  # (B, n_pairs)
-            else:
-                ranked_loo = loo_mean
-            nc_lo_sum += _pearson_rows(ranked_rdms[i], ranked_loo) # (B,)
-
+        nc_upper[batch_v] = (nc_up_sum / N).cpu().numpy()
         nc_lower[batch_v] = (nc_lo_sum / N).cpu().numpy()
+        del group_mean, ranked_gm, nc_up_sum, nc_lo_sum
+        torch.cuda.empty_cache()
 
     # ── CPU fallback for partial-k border vertices ────────────────────────────
     if len(partial_k_verts) > 0:
         log.info(f"  CPU fallback: {len(partial_k_verts):,} partial-k vertices ...")
-        fmri_cpu = [f.copy() for f in fmri_subs]   # list of (n_bins, n_hem_verts)
+        fmri_cpu_cols = [f.copy() for f in fmri_subs]  # list of (n_bins, n_hem_verts)
         tril_np  = np.tril_indices(n_bins, k=-1)
 
         for v in partial_k_verts:
@@ -283,7 +302,7 @@ def _compute_nc_gpu(
 
             # Raw RDMs from each subject
             raw_list = []
-            for f in fmri_cpu:
+            for f in fmri_cpu_cols:
                 hood = f[:, nc].astype(np.float64)              # (n_bins, k)
                 mu   = hood.mean(axis=1, keepdims=True)
                 hc   = hood - mu
@@ -457,14 +476,28 @@ def main():
         return
 
     # ── Load + bin fMRI for all subjects ──────────────────────────────────────
+    import types as _types
     timing_df = pd.read_csv(args.timing_csv)
+
+    streaming = args.raw_dir is not None
+    if streaming:
+        prep_args = _types.SimpleNamespace(
+            sg_filter=args.sg_filter, psc=args.psc, gsr=args.gsr,
+        )
+
     fmri_all  = []
     for sub in args.subjects:
         log.info(f"Loading {sub} ...")
-        binned = _load_and_bin(
-            sub, args.preprocessed_root, args.fmri_suffix,
-            timing_df, args.bin_sec, args.skip_sec, args.delay_sec, args.tr,
-        )
+        if streaming:
+            binned = _load_and_bin_streaming(
+                sub, args.raw_dir, prep_args,
+                timing_df, args.bin_sec, args.skip_sec, args.delay_sec, args.tr,
+            )
+        else:
+            binned = _load_and_bin_disk(
+                sub, args.preprocessed_root, args.fmri_suffix,
+                timing_df, args.bin_sec, args.skip_sec, args.delay_sec, args.tr,
+            )
         log.info(f"  {sub}: binned shape = {binned.shape}")
         fmri_all.append(binned)   # (n_bins, n_verts_total)
 
@@ -493,7 +526,7 @@ def main():
         nc_up, nc_lo = _dispatch_hemisphere(
             hem, fmri_hem, surf_path, h_indices,
             workbench=args.workbench,
-            subject=args.subjects[0],
+            subject="group_average",
             k=args.k, cache_dir=cache_dir,
             method=args.method, batch_size=args.batch_size,
         )

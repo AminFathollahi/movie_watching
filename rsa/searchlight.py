@@ -186,7 +186,7 @@ def parse_args():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--subject", default="group_average")
     p.add_argument("--model", required=True)
-    p.add_argument("--modality", required=True, choices=["v", "a", "av", "at", "vt", "avt", "t"])
+    p.add_argument("--modality", required=True, choices=["v", "a", "av", "at", "vt", "avt", "t", "caption_t", "transcript_t", "event_t", "transcript_avt", "event_avt"])
     p.add_argument("--k", type=int, required=True)
     p.add_argument("--bin-sec", type=float, required=True)
     p.add_argument("--delay-sec", type=float, default=5.0,
@@ -537,6 +537,13 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                 )
             except _oom_types as e:
                 log.warning(f"  GPU OOM ({type(e).__name__}) — falling back to CPU searchlight")
+                _torch.cuda.empty_cache()
+            except RuntimeError as e:
+                # CUBLAS_STATUS_ALLOC_FAILED and similar CUDA errors after prior OOM
+                # surface as plain RuntimeError rather than OutOfMemoryError.
+                if not any(kw in str(e) for kw in ("CUDA", "cuda", "cublas", "cuBLAS")):
+                    raise
+                log.warning(f"  GPU CUDA error ({type(e).__name__}: {e}) — falling back to CPU searchlight")
                 _torch.cuda.empty_cache()
         else:
             log.info("  CUDA not available — using CPU searchlight")
@@ -984,6 +991,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
                         f"  Block {b}: bins [{b_start},{b_end})  "
                         f"mean_r={block_maps[b].mean():.4f}"
                     )
+                out_root.mkdir(parents=True, exist_ok=True)
                 np.save(str(blocks_out), block_maps)
                 log.info(
                     f"  Block maps saved: {blocks_out.name}  shape={block_maps.shape}"

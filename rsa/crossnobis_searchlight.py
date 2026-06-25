@@ -43,8 +43,9 @@ Usage (disk mode)
 
 Output
 ------
-  crossnobis_rho_a_k{k}_{delay_tag}_bin{bin}s_skip{skip}s.npy   (n_verts,) float32
-  crossnobis_rho_a_k{k}_{delay_tag}_bin{bin}s_skip{skip}s.dscalar.nii
+  {model}_{modality}/k{k}_{delay_tag}_bin{bin}s_skip{skip}s_rho_a/
+    crossnobis_rho_a_k{k}_{delay_tag}_bin{bin}s_skip{skip}s.npy   (n_verts,) float32
+    crossnobis_rho_a_k{k}_{delay_tag}_bin{bin}s_skip{skip}s.dscalar.nii
 """
 
 import argparse
@@ -103,7 +104,7 @@ def parse_args():
     p.add_argument("--subject", default="group_average")
     p.add_argument("--model", required=True)
     p.add_argument("--modality", required=True,
-                   choices=["v", "a", "av", "at", "vt", "avt", "t"])
+                   choices=["v", "a", "av", "at", "vt", "avt", "t", "caption_t", "transcript_t", "event_t", "transcript_avt", "event_avt"])
     p.add_argument("--k", type=int, required=True,
                    help="Searchlight neighbourhood size (vertices).")
     p.add_argument("--bin-sec", type=float, required=True)
@@ -556,7 +557,7 @@ def main():
     skip_int    = int(args.skip_sec)
     out_root    = (sub_dir / f"{args.model}_{args.modality}" /
                    f"k{args.k}_delay{int(args.delay_sec)}s"
-                   f"_bin{bin_sec_int}s_skip{skip_int}s")
+                   f"_bin{bin_sec_int}s_skip{skip_int}s_rho_a")
 
     _run_analysis(args, fmri, run_trs, timing_df, out_root)
     log.info("Done.")

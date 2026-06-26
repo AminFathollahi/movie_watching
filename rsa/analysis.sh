@@ -187,19 +187,20 @@ K=100
 
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
-    "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
-    "cav-mae-sync:av,a,v"
-    "omni3b_layer35:av,a,v"
-    "omni3b_layer27:av,a,v"
-    "omni3b_layer18:av,a,v"
-    "omni3b_layer9:av,a,v"
-    "omni3b_layer1:av,a,v"
-    "imagebind:a,v,av"
-    "audiomae:a"
-    "videomaev2-large:v"
-    "wavlm-large:a"
-    "whisper-large-v3:a"
-    "pe-core-l14:v"
+    "pe-av-small-16-frame:av"
+    # "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
+    # "cav-mae-sync:av,a,v"
+    # "omni3b_layer35:av,a,v"
+    # "omni3b_layer27:av,a,v"
+    # "omni3b_layer18:av,a,v"
+    # "omni3b_layer9:av,a,v"
+    # "omni3b_layer1:av,a,v"
+    # "imagebind:a,v,av"
+    # "audiomae:a"
+    # "videomaev2-large:v"
+    # "wavlm-large:a"
+    # "whisper-large-v3:a"
+    # "pe-core-l14:v"
 )
 
 # ── Statistical inference (Schütt et al. 2023) ──────────────────────────
@@ -1203,7 +1204,6 @@ run_noise_ceiling() {
         --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
         --template-cifti     "$TEMPLATE_CIFTI" \
         --output-dir         "${OUTPUT_DIR}/noise_ceiling" \
-        --binned-cache-dir   "${OUTPUT_DIR}/noise_ceiling/_binned_cache" \
         || log "WARNING: noise ceiling failed (see output above)"
 
     log "=== Noise ceiling done ==="

@@ -117,7 +117,7 @@ OUTPUT_DIR="${OUTPUTS_BASE}/encoding"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-BIN_SEC=1.0
+BIN_SEC=5.0
 SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
 HRF=false       # true → SPM HRF convolution; false → boxcar delay
 NORMALIZE=true  # per-run z-score normalization of embeddings

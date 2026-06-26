@@ -1203,6 +1203,7 @@ run_noise_ceiling() {
         --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
         --template-cifti     "$TEMPLATE_CIFTI" \
         --output-dir         "${OUTPUT_DIR}/noise_ceiling" \
+        --binned-cache-dir   "${OUTPUT_DIR}/noise_ceiling/_binned_cache" \
         || log "WARNING: noise ceiling failed (see output above)"
 
     log "=== Noise ceiling done ==="

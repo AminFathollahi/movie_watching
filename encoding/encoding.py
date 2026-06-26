@@ -325,8 +325,16 @@ def _run_modalities(args, timing_df, test_ids, alphas, config,
     prefix = f"[{subject_tag}] " if subject_tag else ""
     for mod in modalities:
         out_path = out_root / f"encoding_r_{mod}.dscalar.nii"
-        if out_path.exists():
+        r2_path  = out_root / f"encoding_r2_{mod}.dscalar.nii"
+        if out_path.exists() and r2_path.exists():
             log.info(f"{prefix}Skipping {mod} — output exists")
+            continue
+        if out_path.exists() and not r2_path.exists():
+            r_vals = nib.load(str(out_path)).get_fdata(dtype=np.float32).squeeze()
+            r2_vals = (r_vals * np.abs(r_vals)).astype(np.float32)
+            save_cifti(r2_vals, args.template_cifti, str(r2_path),
+                       map_name=f"encoding_r2_{mod}")
+            log.info(f"{prefix}[{mod}] Saved r2 from existing r: {r2_path.name}")
             continue
 
         emb_file = (Path(args.embeddings_dir) / args.model /
@@ -348,6 +356,10 @@ def _run_modalities(args, timing_df, test_ids, alphas, config,
         )
         save_cifti(r_vals, args.template_cifti, str(out_path),
                    map_name=f"encoding_r_{mod}")
+        r2_vals = (r_vals * np.abs(r_vals)).astype(np.float32)
+        r2_path = out_root / f"encoding_r2_{mod}.dscalar.nii"
+        save_cifti(r2_vals, args.template_cifti, str(r2_path),
+                   map_name=f"encoding_r2_{mod}")
         log.info(f"{prefix}[{mod}] Saved: {out_path.name}  "
                  f"(mean r={r_vals.mean():.4f}, max r={r_vals.max():.4f})")
 
@@ -373,11 +385,23 @@ def _run_disk(args):
 
     out_root  = Path(args.output_dir) / args.subject / args.model / config
     out_paths = {mod: out_root / f"encoding_r_{mod}.dscalar.nii" for mod in modalities}
+    r2_paths  = {mod: out_root / f"encoding_r2_{mod}.dscalar.nii" for mod in modalities}
     if all(p.exists() for p in out_paths.values()):
         if args.subject == "group_average":
             _run_sigmap_fastpath(out_paths, out_root, args, timing_df, test_ids)
-        else:
-            log.info(f"Outputs already exist — skipping: {out_root}")
+        # Generate missing r2 files from existing r files without re-running the model
+        for mod, r_path in out_paths.items():
+            r2_path = r2_paths[mod]
+            if r_path.exists() and not r2_path.exists():
+                r_vals = nib.load(str(r_path)).get_fdata(dtype=np.float32).squeeze()
+                r2_vals = (r_vals * np.abs(r_vals)).astype(np.float32)
+                save_cifti(r2_vals, args.template_cifti, str(r2_path),
+                           map_name=f"encoding_r2_{mod}")
+                log.info(f"[{mod}] Saved r2 from existing r: {r2_path.name}")
+        if all(r2_paths[m].exists() for m in modalities):
+            return
+        # If some r2 still missing (shouldn't happen), fall through to full refit
+        log.info(f"Outputs already exist — skipping: {out_root}")
         return
 
     cifti = _cifti_path(args)

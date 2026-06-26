@@ -122,6 +122,11 @@ def parse_args():
     p.add_argument("--output-dir",        required=True, dest="output_dir")
     p.add_argument("--batch-size",        type=int, default=256, dest="batch_size",
                    help="Vertices per GPU batch.  Reduce if OOM.")
+    p.add_argument("--binned-cache-dir", default=None, dest="binned_cache_dir",
+                   help="Directory to cache per-subject binned fMRI .npy files so "
+                        "the script can resume without re-preprocessing.  If a "
+                        "cached file exists for a subject it is loaded from disk; "
+                        "otherwise the subject is preprocessed and the result saved.")
     return p.parse_args()
 
 
@@ -485,19 +490,33 @@ def main():
             sg_filter=args.sg_filter, psc=args.psc, gsr=args.gsr,
         )
 
+    binned_cache_dir = (Path(args.binned_cache_dir) if args.binned_cache_dir
+                        else None)
+    if binned_cache_dir is not None:
+        binned_cache_dir.mkdir(parents=True, exist_ok=True)
+
     fmri_all  = []
     for sub in args.subjects:
-        log.info(f"Loading {sub} ...")
-        if streaming:
-            binned = _load_and_bin_streaming(
-                sub, args.raw_dir, prep_args,
-                timing_df, args.bin_sec, args.skip_sec, args.delay_sec, args.tr,
-            )
+        cache_npy = (binned_cache_dir / f"{sub}_binned_{config}.npy"
+                     if binned_cache_dir is not None else None)
+        if cache_npy is not None and cache_npy.exists():
+            log.info(f"Loading {sub} from cache ...")
+            binned = np.load(str(cache_npy))
         else:
-            binned = _load_and_bin_disk(
-                sub, args.preprocessed_root, args.fmri_suffix,
-                timing_df, args.bin_sec, args.skip_sec, args.delay_sec, args.tr,
-            )
+            log.info(f"Loading {sub} ...")
+            if streaming:
+                binned = _load_and_bin_streaming(
+                    sub, args.raw_dir, prep_args,
+                    timing_df, args.bin_sec, args.skip_sec, args.delay_sec, args.tr,
+                )
+            else:
+                binned = _load_and_bin_disk(
+                    sub, args.preprocessed_root, args.fmri_suffix,
+                    timing_df, args.bin_sec, args.skip_sec, args.delay_sec, args.tr,
+                )
+            if cache_npy is not None:
+                np.save(str(cache_npy), binned)
+                log.info(f"  Cached binned fMRI → {cache_npy.name}")
         log.info(f"  {sub}: binned shape = {binned.shape}")
         fmri_all.append(binned)   # (n_bins, n_verts_total)
 

@@ -295,7 +295,7 @@ def _compute_nc_gpu(
     # ── CPU fallback for partial-k border vertices ────────────────────────────
     if len(partial_k_verts) > 0:
         log.info(f"  CPU fallback: {len(partial_k_verts):,} partial-k vertices ...")
-        fmri_cpu_cols = [f.copy() for f in fmri_subs]  # list of (n_bins, n_hem_verts)
+        fmri_cpu_cols = fmri_subs  # (n_bins, n_hem_verts) already — no copy needed
         tril_np  = np.tril_indices(n_bins, k=-1)
 
         for v in partial_k_verts:

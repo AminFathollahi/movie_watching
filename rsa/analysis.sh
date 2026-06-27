@@ -416,12 +416,17 @@ _run_avg_one_model() {
                     $(_hrf_flag) $(_normalize_flag)
             fi
 
-            # Crossnobis RSA (fixed 5s bins; skip logic handled inside the script)
+            # Inter-subject crossnobis RSA (Option A; N=175, full movie, K≈626 bins)
             local CN_BIN_INT="${CROSSNOBIS_BIN_SEC%.*}"
             local CN_SKIP_INT="${CROSSNOBIS_SKIP_SEC%.*}"
+            local CN_SG_FLAG="" CN_PSC_FLAG="" CN_GSR_FLAG=""
+            [ "$SG_FILTER" = "true" ] && CN_SG_FLAG="--sg-filter"
+            [ "$PSC"       = "true" ] && CN_PSC_FLAG="--psc"
+            [ "$GSR"       = "true" ] && CN_GSR_FLAG="--gsr"
             run_python "${SCRIPT_DIR}/crossnobis_searchlight.py" \
-                --preprocessed-dir   "$PREPROCESSED_DIR" \
-                --fmri-suffix        "$FMRI_SUFFIX" \
+                --subjects-list      "$SUBJECTS_LIST" \
+                --raw-dir            "$CIFTI_DIR" \
+                $CN_SG_FLAG $CN_PSC_FLAG $CN_GSR_FLAG \
                 --timing-csv         "$TIMING_CSV" \
                 --embeddings-dir     "$EMBEDDINGS_DIR" \
                 --template-cifti     "$TEMPLATE_CIFTI" \
@@ -429,7 +434,6 @@ _run_avg_one_model() {
                 --right-surface      "$RIGHT_SURFACE" \
                 --workbench          "$WORKBENCH" \
                 --output-dir         "$OUTPUT_DIR" \
-                --subject            "group_average" \
                 --model              "$MODEL_NAME" \
                 --modality           "$MOD" \
                 --k                  "$K" \
@@ -1128,25 +1132,8 @@ run_group_stats() {
                     || log "  WARNING: group stats skipped for ${MODEL_NAME}/${MOD} n_blocks=${N_B}"
             done
 
-            # Crossnobis group aggregation (rho_a, fixed 5s bins, no block sweep)
-            log "  Crossnobis group stats: ${MODEL_NAME} / ${MOD}"
-            run_python "${SCRIPT_DIR}/group_stats.py" \
-                --output-dir      "$OUTPUT_DIR" \
-                --model           "$MODEL_NAME" \
-                --modality        "$MOD" \
-                --k               "$K" \
-                --bin-sec         "$CROSSNOBIS_BIN_SEC" \
-                --skip-sec        "$CROSSNOBIS_SKIP_SEC" \
-                --delay-sec       "$DELAY_SEC" \
-                --method          "rho_a" \
-                --fmri-tag        "$PREPROCESSING_FLAG" \
-                --template-cifti  "$TEMPLATE_CIFTI" \
-                --left-surface    "$LEFT_SURFACE" \
-                --right-surface   "$RIGHT_SURFACE" \
-                --workbench       "$WORKBENCH" \
-                --n-blocks        1 \
-                --n-bootstrap     "$N_BOOTSTRAP" \
-                || log "  WARNING: crossnobis group stats skipped for ${MODEL_NAME}/${MOD}"
+            # Note: inter-subject crossnobis (crossnobis_searchlight.py) already
+            # produces a single group-level map; no further aggregation needed.
         done
     done
 

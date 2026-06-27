@@ -1,51 +1,45 @@
 """
 rsa/crossnobis_searchlight.py
 ==============================
-Crossvalidated Mahalanobis (crossnobis) searchlight RSA using the 4 repeated
-end-of-run clips in the HCP 7T movie dataset.
+Inter-subject crossvalidated Mahalanobis (crossnobis) searchlight RSA.
 
-Background
-----------
-Each fMRI run ends with the same ~82-second clip (video5/9/14/18 in
-movie_timing.csv).  Having N=4 independent measurements of the same stimulus
-allows unbiased distance estimation via the crossnobis formula:
+Cross-validates across N=175 subjects watching the same full movie, using
+K≈626 five-second bins (vs the old design: N=4 runs, K=15 bins per clip).
 
-    d̂(i,j) = 1/(N·(N-1)) · Σ_{m≠n} (xᵐᵢ−xᵐⱼ)ᵀ Σ⁻¹ (xⁿᵢ−xⁿⱼ)
+Formula (Euclidean metric, i.e. identity precision matrix):
 
-where xᵐᵢ is the searchlight-neighbourhood response to bin i in run m, and
-Σ is the noise covariance estimated by Ledoit-Wolf shrinkage.  The expected
-value of d̂ equals the true neural distance (noise cancels because runs are
-independent), unlike the standard Pearson-based distance which is inflated by
-noise.  Ref: Walther et al. 2016; Schütt et al. 2023 §5.1.1.
+    d̂(t1,t2) = 1/(N(N−1)) × [||Σᵢ xᵢ(t1) − Σᵢ xᵢ(t2)||²
+                               − Σᵢ ||xᵢ(t1) − xᵢ(t2)||²]
 
-The resulting crossnobis RDM (K×K, where K = bins per clip) is compared to the
-model RDM using ρ_a (Kendall's τ_a), the bias-robust comparator recommended
-by Schütt et al. 2023 §3.5.
+The expected value equals the true Euclidean neural distance (noise cancels
+because subjects are independent). Power gain over 4-run repeated-clip design:
+~75× reduction in τ_a variance (K=626 vs K=15, n_pairs=195k vs 105).
 
-This is a per-subject analysis.  Run it on every subject then aggregate with
-group_stats.py (point --method rho_a at the crossnobis output directory).
+The gram-matrix decomposition avoids materialising subject-pair differences:
+    ||Σᵢ d_i||² − Σᵢ ||d_i||² is computed from sum_X and gram_sum alone.
 
-Usage (disk mode)
------------------
-  python rsa/crossnobis_searchlight.py \\
-      --preprocessed-dir /path/to/preprocessed \\
-      --fmri-suffix raw \\
-      --timing-csv /path/to/movie_timing.csv \\
-      --embeddings-dir /path/to/embeddings \\
-      --template-cifti /path/to/template.dscalar.nii \\
-      --left-surface /path/to/L.surf.gii \\
-      --right-surface /path/to/R.surf.gii \\
-      --workbench /path/to/wb_command \\
-      --output-dir /path/to/output \\
-      --subject 100610 \\
-      --model pe-av-small-16-frame --modality av \\
-      --k 100 --bin-sec 5.0 --delay-sec 5.0 --tr 1.0
+Ref: Walther et al. 2016; Schütt et al. 2023 §5.1.1.
 
-Output
-------
-  {model}_{modality}/k{k}_{delay_tag}_bin{bin}s_skip{skip}s_rho_a/
-    crossnobis_rho_a_k{k}_{delay_tag}_bin{bin}s_skip{skip}s.npy   (n_verts,) float32
-    crossnobis_rho_a_k{k}_{delay_tag}_bin{bin}s_skip{skip}s.dscalar.nii
+Usage:
+    python rsa/crossnobis_searchlight.py \\
+        --subjects-list /path/to/subjects.txt \\
+        --raw-dir       /path/to/individual-59k/ \\
+        --sg-filter --psc \\
+        --timing-csv    /path/to/movie_timing.csv \\
+        --embeddings-dir /path/to/model_embeddings \\
+        --template-cifti /path/to/template.dscalar.nii \\
+        --left-surface  /path/to/L.surf.gii \\
+        --right-surface /path/to/R.surf.gii \\
+        --workbench     /path/to/wb_command \\
+        --output-dir    /path/to/outputs/rsa/raw \\
+        --model pe-av-small-16-frame --modality av \\
+        --k 100 --bin-sec 5.0 --delay-sec 5.0 --tr 1.0
+
+Output:
+    {output_dir}/groupstats/{model}_{modality}/
+        k{k}_delay{d}s_bin{b}s_skip{s}s_rho_a_isub/
+            crossnobis_isub_rho_a_k{k}_delay{d}s_bin{b}s_skip{s}s.npy
+            crossnobis_isub_rho_a_k{k}_delay{d}s_bin{b}s_skip{s}s.dscalar.nii
 """
 
 import argparse
@@ -53,26 +47,22 @@ import gc
 import logging
 import os
 import sys
+import types
 from pathlib import Path
 
-import nibabel as nib
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from scipy.stats import kendalltau
-from sklearn.covariance import LedoitWolf
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from rsa.shared.rsa_utils import load_fmri_cifti, spm_hrf
-from rsa.searchlight import get_neighbors, _rho_sigmap, _fdr_sigmap
+from rsa.shared.rsa_utils import preprocess_fmri, process_model_embeddings
+from rsa.searchlight import get_neighbors, _rho_sigmap
 from cifti_io import get_bm_axis, get_cortex_vertex_indices, save_cifti_map
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 N_JOBS = int(os.environ.get("_RSA_N_JOBS", -1))
@@ -85,250 +75,103 @@ N_JOBS = int(os.environ.get("_RSA_N_JOBS", -1))
 def parse_args():
     p = argparse.ArgumentParser(
         description=(
-            "Crossnobis searchlight RSA on the repeated end-of-run clips "
-            "(Walther 2016; Schütt et al. 2023 §5.1.1)."
+            "Inter-subject crossnobis searchlight RSA (full movie, N subjects). "
+            "Walther et al. 2016; Schütt et al. 2023."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--preprocessed-dir", required=True, dest="preprocessed_dir",
-                   help="Directory of continuous cleaned CIFTIs from preprocess_individual.py.")
-    p.add_argument("--fmri-suffix", default="raw", dest="fmri_suffix",
-                   help="Filename suffix encoding preprocessing.")
-    p.add_argument("--timing-csv", required=True)
+    p.add_argument("--subjects-list", required=True, dest="subjects_list",
+                   help="Text file with one subject ID per line.")
+    p.add_argument("--raw-dir",       required=True, dest="raw_dir",
+                   help="Directory of raw 7T CIFTI files (individual-59k/).")
+    p.add_argument("--sg-filter",  action="store_true", dest="sg_filter",
+                   help="Apply Savitzky-Golay high-pass filter per run.")
+    p.add_argument("--psc",        action="store_true",
+                   help="Convert to percent signal change per run.")
+    p.add_argument("--gsr",        action="store_true",
+                   help="Apply global signal regression per run.")
+    p.add_argument("--timing-csv",     required=True)
     p.add_argument("--embeddings-dir", required=True)
     p.add_argument("--template-cifti", required=True)
-    p.add_argument("--left-surface", required=True)
-    p.add_argument("--right-surface", required=True)
-    p.add_argument("--workbench", required=True)
-    p.add_argument("--output-dir", required=True)
-    p.add_argument("--subject", default="group_average")
-    p.add_argument("--model", required=True)
-    p.add_argument("--modality", required=True,
-                   choices=["v", "a", "av", "at", "vt", "avt", "t", "caption_t", "transcript_t", "event_t", "transcript_avt", "event_avt"])
-    p.add_argument("--k", type=int, required=True,
+    p.add_argument("--left-surface",   required=True)
+    p.add_argument("--right-surface",  required=True)
+    p.add_argument("--workbench",      required=True)
+    p.add_argument("--output-dir",     required=True)
+    p.add_argument("--model",          required=True)
+    p.add_argument("--modality",       required=True)
+    p.add_argument("--k",   type=int,   required=True,
                    help="Searchlight neighbourhood size (vertices).")
-    p.add_argument("--bin-sec", type=float, required=True)
+    p.add_argument("--bin-sec",  type=float, required=True)
     p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec",
-                   help="Window stride in seconds (default: bin-sec, no overlap).")
-    p.add_argument("--delay-sec", type=float, default=5.0)
-    p.add_argument("--hrf", action="store_true",
-                   help="Convolve model embeddings with SPM HRF.")
-    p.add_argument("--tr", type=float, required=True)
+                   help="Window stride (default: bin-sec, no overlap).")
+    p.add_argument("--delay-sec",type=float, default=5.0)
+    p.add_argument("--hrf",  action="store_true",
+                   help="Convolve model embeddings with SPM canonical HRF.")
+    p.add_argument("--tr",   type=float, required=True)
     p.add_argument("--geodesic-cache-dir", default=None, dest="geodesic_cache_dir")
-    p.add_argument("--n-jobs", type=int, default=N_JOBS, dest="n_jobs",
-                   help="Joblib parallel workers for CPU searchlight (-1 = all CPUs).")
+    p.add_argument("--n-jobs", type=int, default=N_JOBS, dest="n_jobs")
     return p.parse_args()
 
 
 # =============================================================================
-# Identify the repeated clips
+# Helpers
 # =============================================================================
 
-def find_repeated_clips(timing_df: pd.DataFrame) -> list[dict]:
-    """Return the last clip per run from timing_df.
-
-    Validates that all runs end with clips of the same duration (sanity check
-    that they really are the same stimulus repeated).
-    """
-    run_col = "run" if "run" in timing_df.columns else "run_id"
-    clips = []
-    for run_id, run_df in timing_df.groupby(run_col, sort=True):
-        last = run_df.iloc[-1]
-        clips.append({
-            "run_id":       int(run_id),
-            "video_id":     last["video_id"],
-            "onset_sec":    float(last["onset_sec"]),
-            "end_sec":      float(last["end_sec"]),
-            "duration_sec": float(last["duration_sec"]),
-        })
-    durations = [c["duration_sec"] for c in clips]
-    if len(set(durations)) > 1:
-        raise ValueError(
-            f"Last clips do not all have the same duration: {durations}. "
-            "Crossnobis requires repeated measurements of the same stimulus."
-        )
-    log.info(
-        f"Repeated clips: "
-        + ", ".join(f"{c['video_id']} (run {c['run_id']}, {c['duration_sec']:.0f}s)" for c in clips)
-    )
-    return clips
+def load_subjects(subjects_list: str) -> list[str]:
+    subs = []
+    for ln in Path(subjects_list).read_text().strip().splitlines():
+        ln = ln.strip()
+        if ln and not ln.startswith("#"):
+            subs.append(ln.split()[0])
+    return subs
 
 
-# =============================================================================
-# Brain data extraction
-# =============================================================================
-
-def extract_repeated_bins(
-    fmri: np.ndarray,
-    run_trs: np.ndarray,
-    repeated_clips: list[dict],
-    bin_sec: float,
-    tr: float,
-    delay_sec: float,
-    skip_sec: float,
-) -> np.ndarray:
-    """Extract per-run binned fMRI for the repeated clips.
-
-    Parameters
-    ----------
-    fmri          : (n_verts, T_total) float32 — continuous preprocessed CIFTI
-    run_trs       : (n_runs,) int — TRs per run
-    repeated_clips: output of find_repeated_clips()
-    bin_sec / tr / delay_sec / skip_sec : binning parameters
-
-    Returns
-    -------
-    (N_runs, K_bins, n_verts) float32
-    """
-    bin_trs  = max(1, int(np.round(bin_sec  / tr)))
-    skip_trs = max(1, int(np.round(skip_sec / tr)))
-    n_verts  = fmri.shape[0]
-    n_runs   = len(repeated_clips)
-
-    # K_bins from the shared duration
-    dur    = repeated_clips[0]["duration_sec"]
-    k_bins = max(0, int(np.floor((dur - bin_sec) / skip_sec)) + 1) if dur >= bin_sec else 0
-    if k_bins < 2:
-        raise ValueError(f"Only {k_bins} bins in the repeated clip ({dur}s, bin={bin_sec}s). "
-                         "Need at least 2 to form an RDM.")
-
-    clips_binned = np.zeros((n_runs, k_bins, n_verts), dtype=np.float32)
-    run_offset = 0
-
-    for m, clip in enumerate(repeated_clips):
-        n_trs_run    = int(run_trs[m])
-        run_start_sec = float(np.sum(run_trs[:m])) * tr
-        within_run_onset = clip["onset_sec"] - run_start_sec
-        start_tr = int(np.round((within_run_onset + delay_sec) / tr))
-
-        run_data = fmri[:, run_offset : run_offset + n_trs_run]  # (n_verts, n_trs)
-
-        for k in range(k_bins):
-            w_start = start_tr + k * skip_trs
-            w_end   = w_start + bin_trs
-            if w_end > n_trs_run:
-                log.warning(
-                    f"Run {clip['run_id']}: bin {k} [{w_start},{w_end}) exceeds "
-                    f"run boundary ({n_trs_run} TRs); truncating K_bins to {k}."
-                )
-                clips_binned = clips_binned[:, :k, :]
-                return clips_binned
-            clips_binned[m, k, :] = run_data[:, w_start:w_end].mean(axis=1)
-
-        run_offset += n_trs_run
-
-    return clips_binned
-
-
-# =============================================================================
-# Model embeddings extraction
-# =============================================================================
-
-def extract_model_rdm(
+def build_model_rdm(
     emb_path: str,
     timing_df: pd.DataFrame,
-    target_video_id,
     bin_sec: float,
     tr: float,
+    run_trs: np.ndarray,
     delay_sec: float,
     skip_sec: float,
-    run_trs: np.ndarray,
-    hrf: bool = False,
+    hrf: bool,
 ) -> np.ndarray:
-    """Extract the model RDM for the repeated clip.
-
-    Since all 4 repetitions are the same stimulus, we use the first occurrence
-    (target_video_id) to build the K×K model RDM.
-
-    Returns
-    -------
-    (K_bins, K_bins) float64 — correlation-distance model RDM
-    """
-    bin_trs  = max(1, int(np.round(bin_sec  / tr)))
-    skip_trs = max(1, int(np.round(skip_sec / tr)))
-
-    embeddings = np.load(emb_path).astype(np.float64)
-    hrf_kernel = spm_hrf(bin_sec) if hrf else None
-
-    run_col = "run" if "run" in timing_df.columns else "run_id"
-    seg_idx = 0
-
-    for run_id, run_df in timing_df.groupby(run_col, sort=True):
-        run_idx = list(timing_df.groupby(run_col, sort=True).groups.keys()).index(run_id)
-        n_trs_run     = int(run_trs[run_idx])
-        run_start_sec = float(np.sum(run_trs[:run_idx])) * tr
-
-        for _, row in run_df.iterrows():
-            dur    = row["duration_sec"]
-            n_wins = (max(0, int(np.floor((dur - bin_sec) / skip_sec)) + 1)
-                      if dur >= bin_sec else 0)
-
-            if row["video_id"] == target_video_id and n_wins > 0:
-                # Apply same boundary truncation as preprocess_fmri
-                within_run_onset = row["onset_sec"] - run_start_sec
-                start_tr = int(np.round((within_run_onset + delay_sec) / tr))
-                actual_wins = 0
-                if 0 <= start_tr < n_trs_run:
-                    for i in range(n_wins):
-                        w_s = start_tr + i * skip_trs
-                        w_e = w_s + bin_trs
-                        if w_s >= n_trs_run or w_e > n_trs_run:
-                            break
-                        actual_wins += 1
-
-                if actual_wins == 0:
-                    seg_idx += n_wins
-                    continue
-
-                seg = embeddings[seg_idx : seg_idx + actual_wins]
-                if hrf_kernel is not None:
-                    from scipy.signal import fftconvolve
-                    out = np.zeros_like(seg)
-                    for j in range(seg.shape[1]):
-                        conv = fftconvolve(seg[:, j], hrf_kernel, mode="full")
-                        out[:, j] = conv[:len(seg)]
-                    seg = out
-
-                # Build model RDM: (K, K) correlation distance
-                mu   = seg.mean(axis=1, keepdims=True)
-                ec   = seg - mu
-                nrms = np.linalg.norm(ec, axis=1, keepdims=True)
-                nrms[nrms < 1e-10] = 1.0
-                en  = ec / nrms
-                sim = en @ en.T
-                rdm = np.clip(1.0 - sim, 0.0, 2.0)
-                np.fill_diagonal(rdm, 0.0)
-                return rdm
-
-            seg_idx += n_wins
-
-    raise ValueError(f"video_id '{target_video_id}' not found in timing_df.")
+    """Full-movie model correlation-distance RDM, shape (K, K) float64."""
+    emb = process_model_embeddings(
+        emb_path, timing_df, bin_sec, tr, run_trs,
+        delay_sec=delay_sec, hrf=hrf, skip_sec=skip_sec, normalize=True,
+    ).astype(np.float64)
+    mu   = emb.mean(axis=1, keepdims=True)
+    ec   = emb - mu
+    nrms = np.linalg.norm(ec, axis=1, keepdims=True)
+    nrms[nrms < 1e-10] = 1.0
+    en   = ec / nrms
+    rdm  = np.clip(1.0 - en @ en.T, 0.0, 2.0)
+    np.fill_diagonal(rdm, 0.0)
+    return rdm
 
 
 # =============================================================================
-# Per-vertex crossnobis
+# Per-vertex computation
 # =============================================================================
 
-def _crossnobis_vertex(
+def _crossnobis_isub_vertex(
     surf_v: int,
-    clips: np.ndarray,           # (N_runs, K_bins, n_hem_verts) float32
-    model_rdm_tril: np.ndarray,  # (n_pairs,) float64 — lower-triangle of model RDM
+    all_data_hem: np.ndarray,    # (N_subs, K_bins, n_hem_verts) float32  [shared]
+    model_rdm_tril: np.ndarray,  # (n_pairs,) float64
     neighbors: np.ndarray,       # (n_surf_verts, k) int32
-    vertex_to_col: np.ndarray,   # (n_surf_verts,) int32 — -1 for medial wall
-    tril_idx: tuple,             # np.tril_indices(K_bins, k=-1)
+    vertex_to_col: np.ndarray,   # (n_surf_verts,) int32  (-1 = medial wall)
+    tril_idx: tuple,             # (rows, cols) from np.tril_indices(K, k=-1)
 ) -> float:
-    """Compute crossnobis RSA at one searchlight vertex.
+    """Inter-subject crossnobis RSA at one searchlight vertex.
 
     Steps
     -----
-    1. Gather neighbourhood data: (N_runs, K_bins, n_nb)
-    2. Estimate noise residuals by subtracting per-bin run-mean
-    3. Fit Ledoit-Wolf precision matrix on the (N*K, n_nb) residual matrix
-    4. Compute crossnobis distance for every bin pair using the identity:
-         Σ_{m≠n} diff_m @ Σ⁻¹ @ diff_n
-         = (Σ_m diff_m) @ Σ⁻¹ @ (Σ_m diff_m) - Σ_m (diff_m @ Σ⁻¹ @ diff_m)
-       which avoids an explicit double loop over runs.
-    5. Compare the crossnobis RDM to the model RDM with ρ_a (Kendall's τ_a).
+    1. Gather neighbourhood: hood (N, K, n_nb)
+    2. Cross term via sum_X (K, n_nb): ||sum_X(t1) - sum_X(t2)||²
+    3. Self term via gram_sum (K, K): Σᵢ ||xᵢ(t1) - xᵢ(t2)||²
+    4. xnobis = (cross - self) / (N*(N-1))
+    5. τ_a (Kendall) vs model RDM lower triangle
     """
     neighbor_surf = neighbors[surf_v]
     neighbor_cols = vertex_to_col[neighbor_surf]
@@ -337,191 +180,64 @@ def _crossnobis_vertex(
     if n_nb < 2:
         return 0.0
 
-    # (N_runs, K_bins, n_nb)
-    hood = clips[:, :, neighbor_cols].astype(np.float64)
-    N_runs, K_bins, _ = hood.shape
+    # (N, K, n_nb) — copy from shared array to avoid cache thrashing
+    hood = all_data_hem[:, :, neighbor_cols].astype(np.float64)
+    N, K, _ = hood.shape
+    rows, cols = tril_idx
 
-    # Noise residuals: subtract per-bin mean across runs
-    # Shape: (N_runs, K_bins, n_nb) → flatten to (N_runs*K_bins, n_nb)
-    residuals = (hood - hood.mean(axis=0, keepdims=True)).reshape(-1, n_nb)
+    # Cross term: ||Σᵢ(xᵢ(t1)-xᵢ(t2))||² = ||sum_X(t1) - sum_X(t2)||²
+    sum_X    = hood.sum(axis=0)                                     # (K, n_nb)
+    sum_X_sq = np.einsum("kv,kv->k", sum_X, sum_X)                 # (K,)
+    sum_XXT  = sum_X @ sum_X.T                                      # (K, K)
+    cross_sq = sum_X_sq[rows] + sum_X_sq[cols] - 2.0 * sum_XXT[rows, cols]  # (n_pairs,)
 
-    # Ledoit-Wolf precision matrix — handles n_samples < n_features gracefully
-    try:
-        lw        = LedoitWolf(assume_centered=True).fit(residuals)
-        precision = lw.precision_  # (n_nb, n_nb) float64
-    except Exception:
-        return 0.0
+    # Self term: Σᵢ||xᵢ(t1)-xᵢ(t2)||² via gram matrix
+    # gram_sum[t1,t2] = Σᵢ xᵢ(t1)·xᵢ(t2)  — accumulated per subject
+    gram_sum = np.zeros((K, K), dtype=np.float64)
+    for i in range(N):
+        h = hood[i]        # (K, n_nb)
+        gram_sum += h @ h.T
+    sum_sq  = np.diag(gram_sum)                                     # (K,)
+    self_sq = sum_sq[rows] + sum_sq[cols] - 2.0 * gram_sum[rows, cols]  # (n_pairs,)
 
-    # Vectorised crossnobis distances
-    # diff[m, pair] = hood[m, i, :] - hood[m, j, :]   shape: (N_runs, n_pairs, n_nb)
-    rows, cols   = tril_idx
-    diff         = hood[:, rows, :] - hood[:, cols, :]  # (N_runs, n_pairs, n_nb)
-    sum_diff     = diff.sum(axis=0)                      # (n_pairs, n_nb)
-
-    # Cross term: (Σ_m diff_m) Σ⁻¹ (Σ_m diff_m) per pair
-    Pp            = sum_diff @ precision                  # (n_pairs, n_nb)
-    cross_term    = (Pp * sum_diff).sum(axis=1)           # (n_pairs,)
-
-    # Self term: Σ_m diff_m Σ⁻¹ diff_m per pair
-    Pp_m          = diff @ precision                      # (N_runs, n_pairs, n_nb)
-    self_term     = (Pp_m * diff).sum(axis=2).sum(axis=0)  # (n_pairs,)
-
-    xnobis = (cross_term - self_term) / (N_runs * (N_runs - 1))  # (n_pairs,)
+    xnobis = (cross_sq - self_sq) / (N * (N - 1))
 
     tau, _ = kendalltau(xnobis, model_rdm_tril, method="auto")
     return float(tau) if np.isfinite(tau) else 0.0
 
 
 # =============================================================================
-# Full hemisphere searchlight
+# Hemisphere searchlight
 # =============================================================================
 
-def run_crossnobis_hemisphere(
-    clips_hem: np.ndarray,      # (N_runs, K_bins, n_hem_verts) float32
-    model_rdm_tril: np.ndarray, # (n_pairs,) float64
-    neighbors: np.ndarray,      # (n_surf_verts, k) int32
-    surface_indices: np.ndarray,# (n_hem_verts,) int32 — surface vertex per grayordinate
-    vertex_to_col: np.ndarray,  # (n_surf_verts,) int32
+def run_isub_hemisphere(
+    all_data_hem: np.ndarray,    # (N, K, n_hem_verts) float32
+    model_rdm_tril: np.ndarray,  # (n_pairs,) float64
+    neighbors: np.ndarray,       # (n_surf_verts, k) int32
+    surface_indices: np.ndarray, # (n_hem_verts,) int32
+    vertex_to_col: np.ndarray,   # (n_surf_verts,) int32
     n_jobs: int = -1,
 ) -> np.ndarray:
-    """Run crossnobis searchlight over all grayordinate vertices in one hemisphere."""
-    K_bins   = clips_hem.shape[1]
-    tril_idx = np.tril_indices(K_bins, k=-1)
-    n_verts  = clips_hem.shape[2]
-
-    log.info(f"  Running crossnobis searchlight: {n_verts:,} vertices, {K_bins} bins, "
-             f"{clips_hem.shape[0]} runs (n_jobs={n_jobs})")
-
-    corr_map = np.array(
+    K        = all_data_hem.shape[1]
+    tril_idx = np.tril_indices(K, k=-1)
+    n_verts  = all_data_hem.shape[2]
+    n_pairs  = len(tril_idx[0])
+    log.info(
+        f"  Inter-subject crossnobis searchlight: {n_verts:,} vertices, "
+        f"K={K} bins, N={all_data_hem.shape[0]} subjects, "
+        f"n_pairs={n_pairs:,}  (n_jobs={n_jobs})"
+    )
+    return np.array(
         Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(_crossnobis_vertex)(
+            delayed(_crossnobis_isub_vertex)(
                 int(surface_indices[v]),
-                clips_hem,
-                model_rdm_tril,
-                neighbors,
-                vertex_to_col,
-                tril_idx,
+                all_data_hem, model_rdm_tril,
+                neighbors, vertex_to_col, tril_idx,
             )
             for v in range(n_verts)
         ),
         dtype=np.float32,
     )
-    return corr_map
-
-
-# =============================================================================
-# Core analysis
-# =============================================================================
-
-def _run_analysis(args, fmri: np.ndarray, run_trs: np.ndarray,
-                  timing_df: pd.DataFrame, out_root: Path):
-
-    bin_sec_int = int(args.bin_sec)
-    skip_int    = int(args.skip_sec)
-    delay_tag   = f"delay{int(args.delay_sec)}s"
-    stem        = (f"crossnobis_rho_a_k{args.k}_{delay_tag}"
-                   f"_bin{bin_sec_int}s_skip{skip_int}s")
-    npy_out     = out_root / f"{stem}.npy"
-    cifti_out   = out_root / f"{stem}.dscalar.nii"
-
-    if npy_out.exists() and cifti_out.exists():
-        log.info(f"Output already exists — skipping: {npy_out.name}")
-        return
-
-    # ── Identify repeated clips ───────────────────────────────────────────────
-    repeated_clips = find_repeated_clips(timing_df)
-    n_runs = len(repeated_clips)
-
-    # ── Extract brain data for each run's repeated clip ───────────────────────
-    log.info("Extracting per-run binned data for repeated clips ...")
-    clips_all = extract_repeated_bins(
-        fmri, run_trs, repeated_clips,
-        args.bin_sec, args.tr, args.delay_sec, args.skip_sec,
-    )
-    N_runs, K_bins, n_verts_total = clips_all.shape
-    n_pairs = K_bins * (K_bins - 1) // 2
-    log.info(f"  clips_all: {clips_all.shape}  "
-             f"K_bins={K_bins}  n_pairs={n_pairs}  N_runs={N_runs}")
-
-    if N_runs < 2:
-        raise RuntimeError(f"Need ≥2 runs for crossnobis; got {N_runs}.")
-
-    # ── Build model RDM ───────────────────────────────────────────────────────
-    emb_file = (Path(args.embeddings_dir) / args.model /
-                f"bin{bin_sec_int}s_skip{skip_int}s" /
-                f"{args.model}_{args.modality}.npy")
-    log.info(f"Building model RDM from embeddings: {emb_file.name}")
-    target_video_id = repeated_clips[0]["video_id"]
-
-    model_rdm = extract_model_rdm(
-        str(emb_file), timing_df, target_video_id,
-        args.bin_sec, args.tr, args.delay_sec, args.skip_sec,
-        run_trs, hrf=args.hrf,
-    )
-    tril_idx        = np.tril_indices(K_bins, k=-1)
-    model_rdm_tril  = model_rdm[tril_idx].astype(np.float64)
-    log.info(f"  Model RDM: {model_rdm.shape}  "
-             f"range=[{model_rdm_tril.min():.3f}, {model_rdm_tril.max():.3f}]")
-
-    # ── Per-hemisphere searchlight ────────────────────────────────────────────
-    bm_axis = get_bm_axis(args.template_cifti)
-    left_indices, right_indices = get_cortex_vertex_indices(bm_axis)
-    n_left = len(left_indices)
-
-    if args.geodesic_cache_dir:
-        cache_dir = Path(args.geodesic_cache_dir)
-    else:
-        cache_dir = Path(args.output_dir) / "_geodesic_cache"
-
-    corr_full = np.zeros(n_verts_total, dtype=np.float32)
-    offset    = 0
-
-    for hem, surf_path, surf_indices in [
-        ("left",  args.left_surface,  left_indices),
-        ("right", args.right_surface, right_indices),
-    ]:
-        n_hem = len(surf_indices)
-        log.info(f"  Hemisphere: {hem}  ({n_hem:,} vertices)")
-
-        neighbors = get_neighbors(
-            surf_path, args.workbench, args.subject, hem, args.k, cache_dir,
-        )
-        surf_indices_i32 = surf_indices.astype(np.int32)
-        n_surf_verts     = neighbors.shape[0]
-        vertex_to_col    = np.full(n_surf_verts, -1, dtype=np.int32)
-        vertex_to_col[surf_indices_i32] = np.arange(n_hem, dtype=np.int32)
-
-        clips_hem = clips_all[:, :, offset : offset + n_hem]  # (N_runs, K, n_hem)
-
-        corr_hem = run_crossnobis_hemisphere(
-            clips_hem, model_rdm_tril, neighbors,
-            surf_indices_i32, vertex_to_col,
-            n_jobs=args.n_jobs,
-        )
-        corr_full[offset : offset + n_hem] = corr_hem
-
-        del neighbors, vertex_to_col, clips_hem, corr_hem
-        gc.collect()
-        offset += n_hem
-
-    # ── Save outputs ──────────────────────────────────────────────────────────
-    out_root.mkdir(parents=True, exist_ok=True)
-    np.save(str(npy_out), corr_full)
-    log.info(f"  Saved .npy: {npy_out.name}  "
-             f"mean={corr_full.mean():.4f}  max={corr_full.max():.4f}")
-
-    save_cifti_map(corr_full, args.template_cifti, str(cifti_out), "crossnobis_rho_a")
-    log.info(f"  Saved CIFTI: {cifti_out.name}")
-
-    # Quick significance map using rho approximation (analytical; for group
-    # inference use group_stats.py across per-subject maps).
-    p_uncorr, sigmap = _rho_sigmap(corr_full, n_pairs)
-    sigmap_path = out_root / f"{stem}_sigmap.dscalar.nii"
-    save_cifti_map(sigmap, args.template_cifti, str(sigmap_path), "crossnobis_sigmap")
-    log.info(f"  Saved sigmap: {sigmap_path.name}")
-
-    del fmri, clips_all
-    gc.collect()
 
 
 # =============================================================================
@@ -530,36 +246,182 @@ def _run_analysis(args, fmri: np.ndarray, run_trs: np.ndarray,
 
 def main():
     args = parse_args()
-
     if args.skip_sec is None:
         args.skip_sec = args.bin_sec
 
     timing_df = pd.read_csv(args.timing_csv)
+    subjects  = load_subjects(args.subjects_list)
+    N_req     = len(subjects)
 
-    cifti_path = (Path(args.preprocessed_dir) /
-                  f"{args.subject}_{args.fmri_suffix}_cortex_59k.dtseries.nii")
-    trs_path   = (Path(args.preprocessed_dir) /
-                  f"{args.subject}_{args.fmri_suffix}_run_trs.npy")
+    bin_int   = int(args.bin_sec)
+    skip_int  = int(args.skip_sec)
+    delay_tag = f"delay{int(args.delay_sec)}s"
+    stem      = (f"crossnobis_isub_rho_a_k{args.k}_{delay_tag}"
+                 f"_bin{bin_int}s_skip{skip_int}s")
+    out_root  = (Path(args.output_dir) / "groupstats" /
+                 f"{args.model}_{args.modality}" /
+                 f"k{args.k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_rho_a_isub")
+    npy_out   = out_root / f"{stem}.npy"
+    cifti_out = out_root / f"{stem}.dscalar.nii"
 
-    log.info(f"Crossnobis searchlight RSA: {args.subject} / {args.model} / {args.modality}")
-    log.info(f"  fMRI: {cifti_path}")
+    if npy_out.exists() and cifti_out.exists():
+        log.info(f"Output already exists — skipping: {npy_out.name}")
+        return
 
-    fmri    = load_fmri_cifti(str(cifti_path))
-    run_trs = np.load(str(trs_path))
-    log.info(f"  fMRI loaded: {fmri.shape}  run_trs: {run_trs.tolist()}")
+    log.info(
+        f"Inter-subject crossnobis: {N_req} subjects requested, "
+        f"model={args.model}, modality={args.modality}"
+    )
 
-    if args.subject == "group_average":
-        sub_dir = Path(args.output_dir) / "group_average"
-    else:
-        sub_dir = Path(args.output_dir) / "subject_data" / args.subject
+    # CIFTI vertex structure (left/right split)
+    bm_axis = get_bm_axis(args.template_cifti)
+    left_indices, right_indices = get_cortex_vertex_indices(bm_axis)
+    n_left  = len(left_indices)
+    n_right = len(right_indices)
+    n_total = n_left + n_right
 
-    bin_sec_int = int(args.bin_sec)
-    skip_int    = int(args.skip_sec)
-    out_root    = (sub_dir / f"{args.model}_{args.modality}" /
-                   f"k{args.k}_delay{int(args.delay_sec)}s"
-                   f"_bin{bin_sec_int}s_skip{skip_int}s_rho_a")
+    # Pre-processing args for preprocess_subject()
+    prep_args = types.SimpleNamespace(
+        sg_filter=args.sg_filter, psc=args.psc, gsr=args.gsr
+    )
 
-    _run_analysis(args, fmri, run_trs, timing_df, out_root)
+    # ── Load and bin all subjects ─────────────────────────────────────────────
+    from preprocess_individual import preprocess_subject
+
+    all_data  = None       # (N_valid, K, n_total) float32 — allocated on first subject
+    K_bins    = None
+    ref_run_trs = None
+    n_valid   = 0
+
+    for idx, sub in enumerate(subjects):
+        log.info(f"  [{idx+1}/{N_req}] Loading {sub} ...")
+        try:
+            data, _, run_trs = preprocess_subject(
+                sub, Path(args.raw_dir), args.tr, prep_args
+            )
+        except Exception as e:
+            log.warning(f"  {sub}: load error — {e}; skipping")
+            continue
+
+        try:
+            binned = preprocess_fmri(
+                data, timing_df, run_trs, args.bin_sec, args.tr,
+                delay_sec=args.delay_sec, skip_sec=args.skip_sec, normalize=True,
+            )  # (K, n_total)
+        except Exception as e:
+            log.warning(f"  {sub}: bin error — {e}; skipping")
+            del data; gc.collect()
+            continue
+
+        K = binned.shape[0]
+
+        if K_bins is None:
+            K_bins = K
+            ref_run_trs = run_trs.copy()
+            all_data = np.zeros((N_req, K, n_total), dtype=np.float32)
+            log.info(f"  Allocated all_data: {all_data.shape}  "
+                     f"~{all_data.nbytes/1e9:.1f} GB")
+
+        if K != K_bins:
+            log.warning(f"  {sub}: expected {K_bins} bins, got {K} — skipping")
+            del data, binned; gc.collect()
+            continue
+
+        if binned.shape[1] != n_total:
+            log.warning(f"  {sub}: expected {n_total} verts, got {binned.shape[1]} — skipping")
+            del data, binned; gc.collect()
+            continue
+
+        all_data[n_valid] = binned
+        n_valid += 1
+        del data, binned; gc.collect()
+
+    if K_bins is None or n_valid < 2:
+        raise RuntimeError(f"Loaded only {n_valid} subjects — need ≥2.")
+
+    all_data = all_data[:n_valid]   # trim unused rows
+    log.info(
+        f"Loaded {n_valid}/{N_req} subjects: K={K_bins} bins, "
+        f"n_pairs={K_bins*(K_bins-1)//2:,}  "
+        f"all_data~{all_data.nbytes/1e9:.1f} GB"
+    )
+
+    # ── Model RDM (full movie, K×K) ───────────────────────────────────────────
+    emb_file = (Path(args.embeddings_dir) / args.model /
+                f"bin{bin_int}s_skip{skip_int}s" /
+                f"{args.model}_{args.modality}.npy")
+    log.info(f"Building full-movie model RDM: {emb_file.name}")
+    model_rdm = build_model_rdm(
+        str(emb_file), timing_df, args.bin_sec, args.tr, ref_run_trs,
+        args.delay_sec, args.skip_sec, args.hrf,
+    )
+    if model_rdm.shape[0] != K_bins:
+        raise RuntimeError(
+            f"Model RDM K={model_rdm.shape[0]} ≠ fMRI K={K_bins}. "
+            "Mismatch in bin-sec/skip-sec/delay-sec."
+        )
+    tril_idx       = np.tril_indices(K_bins, k=-1)
+    model_rdm_tril = model_rdm[tril_idx].astype(np.float64)
+    log.info(
+        f"  Model RDM: {model_rdm.shape}  "
+        f"range=[{model_rdm_tril.min():.3f}, {model_rdm_tril.max():.3f}]"
+    )
+
+    # ── Per-hemisphere searchlight ────────────────────────────────────────────
+    cache_dir = (Path(args.geodesic_cache_dir) if args.geodesic_cache_dir
+                 else Path(args.output_dir) / "_geodesic_cache")
+
+    corr_full = np.zeros(n_total, dtype=np.float32)
+    offset    = 0
+
+    for hem, surf_path, surf_indices, col_slice in [
+        ("left",  args.left_surface,  left_indices,  slice(0,       n_left)),
+        ("right", args.right_surface, right_indices, slice(n_left,  n_total)),
+    ]:
+        n_hem = len(surf_indices)
+        log.info(f"  Hemisphere: {hem}  ({n_hem:,} vertices)")
+
+        neighbors = get_neighbors(
+            surf_path, args.workbench, "group_average", hem, args.k, cache_dir,
+        )
+        surf_indices_i32 = surf_indices.astype(np.int32)
+        n_surf_verts     = neighbors.shape[0]
+        vertex_to_col    = np.full(n_surf_verts, -1, dtype=np.int32)
+        vertex_to_col[surf_indices_i32] = np.arange(n_hem, dtype=np.int32)
+
+        # Slice the hemisphere columns (view, no copy)
+        all_data_hem = all_data[:, :, col_slice]  # (N, K, n_hem) — view
+
+        corr_hem = run_isub_hemisphere(
+            all_data_hem, model_rdm_tril, neighbors,
+            surf_indices_i32, vertex_to_col, args.n_jobs,
+        )
+        corr_full[offset : offset + n_hem] = corr_hem
+
+        del neighbors, vertex_to_col, corr_hem
+        gc.collect()
+        offset += n_hem
+
+    del all_data; gc.collect()
+
+    # ── Save outputs ──────────────────────────────────────────────────────────
+    out_root.mkdir(parents=True, exist_ok=True)
+    np.save(str(npy_out), corr_full)
+    log.info(
+        f"Saved .npy: {npy_out.name}  "
+        f"mean={corr_full.mean():.4f}  max={corr_full.max():.4f}"
+    )
+
+    save_cifti_map(corr_full, args.template_cifti, str(cifti_out), "crossnobis_isub_rho_a")
+    log.info(f"Saved CIFTI: {cifti_out.name}")
+
+    # Analytical significance map (n_pairs ≈ 195k → highly sensitive)
+    n_pairs = len(model_rdm_tril)
+    _, sigmap = _rho_sigmap(corr_full, n_pairs)
+    sigmap_path = out_root / f"{stem}_sigmap.dscalar.nii"
+    save_cifti_map(sigmap, args.template_cifti, str(sigmap_path), "crossnobis_isub_sigmap")
+    log.info(f"Saved sigmap: {sigmap_path.name}")
+
     log.info("Done.")
 
 

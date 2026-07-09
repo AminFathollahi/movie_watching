@@ -163,6 +163,38 @@ MODELS: dict[str, dict] = {
         "joint":        True,
         "description":  "CAV-MAE (sync variant), temporal-scramble binding control",
     },
+    # omni3b/topoomni scramble: "_a"/"_v" here are REINDEXED copies of the real
+    # unimodal embeddings (a_scrambled[i] = a_true[perm[i]], v unchanged) built by
+    # build_scramble_unimodal_copies.py -- pure numpy, no re-inference needed,
+    # since the true unimodal passes have no cross-modal tokens and cannot depend
+    # on pairing. Only "_av" required a real (scrambled-pairing) forward pass.
+    "omni3b_layer9_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 9, temporal-scramble binding control"},
+    "omni3b_layer18_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 18, temporal-scramble binding control"},
+    "omni3b_layer27_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 27, temporal-scramble binding control"},
+    "topoomni_layer9_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 9, temporal-scramble binding control"},
+    "topoomni_layer18_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 18, temporal-scramble binding control"},
+    "topoomni_layer27_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 27, temporal-scramble binding control"},
+    # "_lasttoken_avscramble": av-only (last-token joint readout under scrambled
+    # pairing); nuisance for its integration run reuses the corresponding
+    # "_avscramble" model's reindexed a/v (see _lasttoken_integration_run below).
+    "omni3b_layer9_lasttoken_avscramble":  {"modalities": ["av"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 9, last-token readout, temporal-scramble control"},
+    "omni3b_layer18_lasttoken_avscramble": {"modalities": ["av"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 18, last-token readout, temporal-scramble control"},
+    "omni3b_layer27_lasttoken_avscramble": {"modalities": ["av"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 27, last-token readout, temporal-scramble control"},
+    "topoomni_layer9_lasttoken_avscramble":  {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 9, last-token readout, temporal-scramble control"},
+    "topoomni_layer18_lasttoken_avscramble": {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 18, last-token readout, temporal-scramble control"},
+    "topoomni_layer27_lasttoken_avscramble": {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 27, last-token readout, temporal-scramble control"},
     "audiomae": {
         "modalities":   ["a"],
         "joint":        False,
@@ -270,6 +302,33 @@ def _lasttoken_integration_run(base_model: str, modality: str = "av") -> Partial
     )
 
 
+def _lasttoken_scramble_integration_run(base_model: str, modality: str = "av") -> PartialRSARun:
+    """Scrambled-pairing counterpart of _lasttoken_integration_run(): TARGET is the
+    "_lasttoken_avscramble" joint-AV readout (last-token of a forward pass fed
+    video[i] + audio[perm[i]]); NUISANCE is the corresponding "_avscramble" model's
+    reindexed a/v (a[perm[i]], v[i] -- i.e. what was actually fed to the model),
+    NOT the intact base model's true-paired a/v. Mirrors the reasoning already used
+    for the plain avscramble integration runs (_own_unimodal_integration_run on
+    "{model}_avscramble") -- nuisance always represents "what content was actually
+    given to the model", so the residual isolates emergent fusion, not a mismatch
+    artifact from comparing against the wrong nuisance pairing.
+    """
+    scramble_model = f"{base_model}_avscramble"
+    lt_model = f"{base_model}_lasttoken_avscramble"
+    return PartialRSARun(
+        target   = (lt_model, modality),
+        nuisance = [(scramble_model, "a"), (scramble_model, "v")],
+        label    = f"{lt_model}_{modality}_INTEGRATION",
+        description = (
+            f"{base_model} last-token joint-AV readout under scrambled (mismatched) "
+            f"audio-video pairing, controlling for the audio/video actually fed to "
+            f"the model at each row (reindexed a[perm[i]], true v[i]) -- Move 3 "
+            f"binding control counterpart of the intact lasttoken integration run."
+        ),
+        kind = "integration",
+    )
+
+
 PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     # Run A: regress out independently-trained unimodal baselines (AudioMAE + VideoMAE)
     # from PE-AV joint.  Tests whether PE-AV encodes something beyond what two
@@ -339,6 +398,20 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     # integration(intact) - integration(scrambled), computed downstream.
     "integration_pe-av-small-16-frame_avscramble": _own_unimodal_integration_run("pe-av-small-16-frame_avscramble"),
     "integration_cav-mae-sync_avscramble":         _own_unimodal_integration_run("cav-mae-sync_avscramble"),
+    # ── Move 3 extended to omni3b/topoomni (the models where the av=(a+v)/2
+    # circularity fix originated) per user request -- not just cav-mae-sync.
+    "integration_omni3b_layer9_avscramble":    _own_unimodal_integration_run("omni3b_layer9_avscramble"),
+    "integration_omni3b_layer18_avscramble":   _own_unimodal_integration_run("omni3b_layer18_avscramble"),
+    "integration_omni3b_layer27_avscramble":   _own_unimodal_integration_run("omni3b_layer27_avscramble"),
+    "integration_topoomni_layer9_avscramble":  _own_unimodal_integration_run("topoomni_layer9_avscramble"),
+    "integration_topoomni_layer18_avscramble": _own_unimodal_integration_run("topoomni_layer18_avscramble"),
+    "integration_topoomni_layer27_avscramble": _own_unimodal_integration_run("topoomni_layer27_avscramble"),
+    "integration_omni3b_layer9_lasttoken_avscramble":    _lasttoken_scramble_integration_run("omni3b_layer9"),
+    "integration_omni3b_layer18_lasttoken_avscramble":   _lasttoken_scramble_integration_run("omni3b_layer18"),
+    "integration_omni3b_layer27_lasttoken_avscramble":   _lasttoken_scramble_integration_run("omni3b_layer27"),
+    "integration_topoomni_layer9_lasttoken_avscramble":  _lasttoken_scramble_integration_run("topoomni_layer9"),
+    "integration_topoomni_layer18_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer18"),
+    "integration_topoomni_layer27_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer27"),
 }
 
 

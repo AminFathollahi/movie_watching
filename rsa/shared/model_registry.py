@@ -123,6 +123,46 @@ MODELS: dict[str, dict] = {
         "joint":        True,
         "description":  "Topo-Omni cortical-sheet (topographic) code, layer 27",
     },
+    # ── "_lasttoken" av variants: the last-sequence-position hidden state of the
+    # SAME joint (audio+video) forward pass used for the plain "_av" above, rather
+    # than a masked-token-position average. Unlike (a+v)/2 pooling, this is not a
+    # deterministic function of "_a"/"_v" -- a genuinely emergent joint summary
+    # (closer to how the Topo-Omni paper itself reads out per-clip stimulus
+    # embeddings: "last-layer activation of the final token", Sec 4.7.2). av-only;
+    # nuisance for the Move-1 integration contrast is the corresponding non-lasttoken
+    # model's real (audio-only-pass / video-only-pass) _a/_v.
+    "omni3b_layer9_lasttoken":  {"modalities": ["av"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 9, last-token joint-AV readout"},
+    "omni3b_layer18_lasttoken": {"modalities": ["av"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 18, last-token joint-AV readout"},
+    "omni3b_layer27_lasttoken": {"modalities": ["av"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 27, last-token joint-AV readout"},
+    "topoomni_layer9_lasttoken":  {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 9, last-token joint-AV readout"},
+    "topoomni_layer18_lasttoken": {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 18, last-token joint-AV readout"},
+    "topoomni_layer27_lasttoken": {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 27, last-token joint-AV readout"},
+    "topoomni_layer9_sheet_lasttoken":  {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni cortical sheet, layer 9, last-token joint-AV readout"},
+    "topoomni_layer18_sheet_lasttoken": {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni cortical sheet, layer 18, last-token joint-AV readout"},
+    "topoomni_layer27_sheet_lasttoken": {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni cortical sheet, layer 27, last-token joint-AV readout"},
+    # ── Move 3: temporal-scramble binding control. Each bin's video paired with
+    # a randomly permuted bin's audio (fixed seed) before extraction -- breaks
+    # correct A-V temporal binding while preserving each modality's marginal
+    # content. Same modalities as the intact model.
+    "pe-av-small-16-frame_avscramble": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "PE-AV (small 16-frame), temporal-scramble binding control",
+    },
+    "cav-mae-sync_avscramble": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "CAV-MAE (sync variant), temporal-scramble binding control",
+    },
     "audiomae": {
         "modalities":   ["a"],
         "joint":        False,
@@ -206,6 +246,30 @@ def _own_unimodal_integration_run(model: str, modality: str = "av") -> PartialRS
     )
 
 
+def _lasttoken_integration_run(base_model: str, modality: str = "av") -> PartialRSARun:
+    """Like _own_unimodal_integration_run(), but the TARGET is the "_lasttoken"
+    joint-AV readout (last sequence position of the joint forward pass -- a
+    genuinely emergent summary, not a fixed function of the pooled a/v streams)
+    while the NUISANCE bands are the corresponding base model's real (separate
+    audio-only-pass / video-only-pass) unimodal streams. Only defined for
+    models whose "_a"/"_v" come from genuinely separate unimodal forward passes
+    (omni3b/topoomni layers, post the Move-1/4 unimodal re-extraction fix).
+    """
+    lt_model = f"{base_model}_lasttoken"
+    return PartialRSARun(
+        target   = (lt_model, modality),
+        nuisance = [(base_model, "a"), (base_model, "v")],
+        label    = f"{lt_model}_{modality}_INTEGRATION",
+        description = (
+            f"{base_model} last-token joint-AV readout, controlling for the base "
+            f"model's own (genuinely separate-pass) audio-only and video-only "
+            f"outputs — integration contrast using a non-tautological joint "
+            f"representation (see omni3b_extract_unimodal.py's docstring)."
+        ),
+        kind = "integration",
+    )
+
+
 PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     # Run A: regress out independently-trained unimodal baselines (AudioMAE + VideoMAE)
     # from PE-AV joint.  Tests whether PE-AV encodes something beyond what two
@@ -260,6 +324,21 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer9":    _own_unimodal_integration_run("topoomni_layer9"),
     "integration_topoomni_layer18":   _own_unimodal_integration_run("topoomni_layer18"),
     "integration_topoomni_layer27":   _own_unimodal_integration_run("topoomni_layer27"),
+    # ── "_lasttoken" alternative: genuinely emergent joint-AV readout (not a
+    # fixed function of a/v), regressed against the corresponding base model's
+    # real (separate-pass) unimodal streams. Requires the Move-1/4 unimodal
+    # re-extraction fix (omni3b_extract_unimodal.py / topo_omni_extract_unimodal.py).
+    "integration_omni3b_layer9_lasttoken":    _lasttoken_integration_run("omni3b_layer9"),
+    "integration_omni3b_layer18_lasttoken":   _lasttoken_integration_run("omni3b_layer18"),
+    "integration_omni3b_layer27_lasttoken":   _lasttoken_integration_run("omni3b_layer27"),
+    "integration_topoomni_layer9_lasttoken":  _lasttoken_integration_run("topoomni_layer9"),
+    "integration_topoomni_layer18_lasttoken": _lasttoken_integration_run("topoomni_layer18"),
+    "integration_topoomni_layer27_lasttoken": _lasttoken_integration_run("topoomni_layer27"),
+    # ── Move 3: temporal-scramble binding control. Same own-unimodal integration
+    # contrast, computed on the scrambled embeddings. BINDING MAP =
+    # integration(intact) - integration(scrambled), computed downstream.
+    "integration_pe-av-small-16-frame_avscramble": _own_unimodal_integration_run("pe-av-small-16-frame_avscramble"),
+    "integration_cav-mae-sync_avscramble":         _own_unimodal_integration_run("cav-mae-sync_avscramble"),
 }
 
 

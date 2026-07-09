@@ -7,6 +7,14 @@ Run with:
     conda run --no-capture-output -n cav-mae-sync \
         python extract_cav_mae_sync.py
 
+    # Move 3 (temporal-scramble binding control): each video segment is paired
+    # with a RANDOMLY PERMUTED audio segment (fixed seed) instead of its own
+    # temporally-corresponding audio, breaking correct A-V temporal binding
+    # while preserving each modality's own marginal content distribution.
+    # Output goes to a separate "cav-mae-sync_avscramble" model directory.
+    CAV_MAE_SCRAMBLE_AV=1 conda run --no-capture-output -n cav-mae-sync \
+        python extract_cav_mae_sync.py
+
 Source data
 -----------
 Uses segmented_stimulus/filtered/ — pre-chunked mp4/wav files for all 18 videos.
@@ -18,6 +26,7 @@ Audio files: stereo, 44100 Hz — converted to mono 16 kHz before fbank.
 """
 
 import gc
+import os
 import sys
 from pathlib import Path
 
@@ -29,10 +38,13 @@ import torchaudio
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
-REPO_ROOT   = Path("/home/amin/Research/Representation/Movie/Model Repos/cav-mae-sync")
-DATA_ROOT   = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-MODEL_PATH  = REPO_ROOT / "pretrained_models" / "cav_mae_sync.pth"
-OUTPUT_ROOT = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings/cav-mae-sync")
+REPO_ROOT      = Path("/home/amin/Research/Representation/Movie/Model Repos/cav-mae-sync")
+DATA_ROOT      = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
+MODEL_PATH     = REPO_ROOT / "pretrained_models" / "cav_mae_sync.pth"
+SCRAMBLE_AV    = bool(int(os.environ.get("CAV_MAE_SCRAMBLE_AV", "0")))
+SCRAMBLE_SEED  = 42
+_MODEL_NAME    = "cav-mae-sync_avscramble" if SCRAMBLE_AV else "cav-mae-sync"
+OUTPUT_ROOT    = Path(f"/home/amin/Research/Representation/Movie/outputs/model_embeddings/{_MODEL_NAME}")
 
 AUDIO_MEAN     = -5.081
 AUDIO_STD      = 4.4849
@@ -40,7 +52,7 @@ TOTAL_FRAMES   = 16
 BATCH_SIZE     = 4
 CLIP_SR        = 16000    # target sample rate for fbank
 
-SEGMENT_DURATIONS = [5.0, 10.0]
+SEGMENT_DURATIONS = [5.0] if SCRAMBLE_AV else [5.0, 10.0]  # scramble control only needs 5s (the primary config)
 
 # Mel time-frames — must be a multiple of 16 for the patch embedding.
 TARGET_LENGTHS = {5.0: 496, 10.0: 992}
@@ -61,7 +73,7 @@ def gather_pairs(seg_sec: float) -> list:
     Parts are matched by sort order within each video (both lists must be same length).
     """
     d = int(seg_sec)
-    pairs = []
+    mp4_all, wav_all = [], []
     for vid_id in range(1, 19):
         mp4_dir = DATA_ROOT / f"Video{vid_id}" / f"Video{vid_id}_chunks_{d}s"
         wav_dir = DATA_ROOT / f"Audio{vid_id}" / f"Audio{vid_id}_chunks_{d}s"
@@ -73,8 +85,24 @@ def gather_pairs(seg_sec: float) -> list:
         if len(mp4s) != len(wavs):
             print(f"  WARNING: video {vid_id} has {len(mp4s)} mp4s but {len(wavs)} wavs — skipping")
             continue
-        pairs.extend(zip(mp4s, wavs))
-    return pairs
+        mp4_all.extend(mp4s)
+        wav_all.extend(wavs)
+
+    if SCRAMBLE_AV:
+        # Move 3: break correct A-V temporal binding. Permute the GLOBAL audio
+        # segment order (across all 18 videos, not within-video only) so each
+        # video segment is paired with a random OTHER segment's audio, fixed
+        # seed for reproducibility. A permutation with no fixed points (a
+        # derangement) is not required -- occasional self-pairing is fine and
+        # expected under a uniform random permutation at this N.
+        rng = np.random.default_rng(SCRAMBLE_SEED)
+        perm = rng.permutation(len(wav_all))
+        n_fixed = int((perm == np.arange(len(wav_all))).sum())
+        print(f"  [SCRAMBLE_AV] Permuted {len(wav_all)} audio segments "
+              f"(seed={SCRAMBLE_SEED}, {n_fixed} incidental self-pairs)")
+        wav_all = [wav_all[i] for i in perm]
+
+    return list(zip(mp4_all, wav_all))
 
 
 # ---------------------------------------------------------------------------
@@ -201,9 +229,9 @@ def load_model(target_length: int):
 # ---------------------------------------------------------------------------
 def extract(seg_sec: float) -> None:
     out_dir = OUTPUT_ROOT / f"bin{int(seg_sec)}s_skip{int(seg_sec)}s"
-    out_a   = out_dir / "cav-mae-sync_a.npy"
-    out_v   = out_dir / "cav-mae-sync_v.npy"
-    out_av  = out_dir / "cav-mae-sync_av.npy"
+    out_a   = out_dir / f"{_MODEL_NAME}_a.npy"
+    out_v   = out_dir / f"{_MODEL_NAME}_v.npy"
+    out_av  = out_dir / f"{_MODEL_NAME}_av.npy"
 
     if out_a.exists() and out_v.exists() and out_av.exists():
         shape = np.load(out_a).shape

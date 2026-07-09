@@ -410,7 +410,7 @@ def main():
         args.skip_sec = args.bin_sec
     config = _config_label(args)
 
-    out_dir = (Path(args.output_dir) / "group_stats" /
+    out_dir = (Path(args.output_dir) / "groupstats" /
                f"{args.model}_{args.modality}" / config)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -421,7 +421,7 @@ def main():
         f for f in Path(args.output_dir).glob(
             f"*/{args.model}/{config}/{fname}"
         )
-        if f.parts[-4] not in ("group_average", "group_stats")
+        if f.parts[-4] not in ("group_average", "groupstats")
     )
 
     if not subject_r_files:

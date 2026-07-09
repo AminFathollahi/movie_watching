@@ -8,7 +8,10 @@
 # -----
 #   bash rsa/analysis.sh [MODE] [METHOD] [BATCH_SIZE] [START_FROM] [N_BLOCKS]
 #
-#   MODE        avg            Group-average RSA only (default)
+#   MODE        avg            Group-average RSA only (default).
+#                              Runs searchlight + permutation + Glasser on the
+#                              group-average fMRI map.  Nothing that touches
+#                              per-subject data belongs here.
 #               preprocess     Preprocess every subject listed in SUBJECTS_LIST:
 #                              per-subject CIFTIs → PREPROCESSED_INDIV_DIR
 #                              group-average CIFTI → PREPROCESSED_DIR
@@ -19,8 +22,12 @@
 #                              average and every subject in SUBJECTS_LIST into
 #                              GEODESIC_CACHE_DIR.  Caches are reused by any
 #                              future run with k ≤ K_cached.
-#               persubject     Per-subject RSA → group statistics
-#               groupstats     Re-run group statistics on existing per-subject maps
+#               persubject     Per-subject searchlight/Glasser → group statistics
+#                              → noise ceiling.
+#               groupstats     Re-run post-hoc analyses on existing per-subject
+#                              maps: inter-subject crossnobis (all subjects at
+#                              once), per-subject crossnobis, group stats t-test,
+#                              noise ceiling.
 #               all            avg + persubject + groupstats
 #
 #   METHOD      all          Searchlight + Glasser parcel RSA (default)
@@ -176,8 +183,11 @@ GEODESIC_CACHE_DIR="${OUTPUTS_BASE}/rsa/_geodesic_cache"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-BIN_SEC=5.0
-SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
+# BIN_SECS: list of window durations (seconds) to sweep in one invocation.
+# SKIP_SEC = BIN_SEC for each (no overlap), matching the project convention.
+# Override: BIN_SECS="2.0 5.0 10.0" bash rsa/analysis.sh avg  (space-separated)
+# or the single-value form still works: BIN_SEC=5.0 bash rsa/analysis.sh avg
+read -ra BIN_SECS <<< "${BIN_SECS:-${BIN_SEC:-2.0}}"
 HRF=false
 NORMALIZE=true  # true → per-run z-score; false → demean only (adds _demean suffix to outputs)
 METHOD="spearman"       # searchlight comparator
@@ -188,13 +198,11 @@ K=100
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
     "pe-av-small-16-frame:av"
+    # "wavlm-pecore:av"
+    # "audiomae-videomaev2:av"
+    # "imagebind:av"
     # "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
-    # "cav-mae-sync:av,a,v"
-    # "omni3b_layer35:av,a,v"
-    # "omni3b_layer27:av,a,v"
-    # "omni3b_layer18:av,a,v"
-    # "omni3b_layer9:av,a,v"
-    # "omni3b_layer1:av,a,v"
+    # "cav-mae-sync:av"
     # "imagebind:a,v,av"
     # "audiomae:a"
     # "videomaev2-large:v"
@@ -202,6 +210,18 @@ MODELS=(
     # "whisper-large-v3:a"
     # "pe-core-l14:v"
 )
+
+# omni3b / topoomni layer sweep — add a layer index here to wire it into every
+# analysis.sh run; no need to hand-write new MODELS entries per layer.
+LAYERS=(35 27 18 9 1)
+OMNI3B_MODALITIES="av,a,v"    # currently disabled below; uncomment the line in the loop to enable
+TOPOOMNI_MODALITIES="av"     # av only for now — switch to "av,a,v" once ready
+
+for L in "${LAYERS[@]}"; do
+    # MODELS+=("omni3b_layer${L}:${OMNI3B_MODALITIES}")
+    MODELS+=("topoomni_layer${L}:${TOPOOMNI_MODALITIES}")
+    MODELS+=("topoomni_layer${L}_sheet:${TOPOOMNI_MODALITIES}")
+done
 
 # ── Statistical inference (Schütt et al. 2023) ──────────────────────────
 # N_BLOCKS: number of temporal blocks searchlight.py creates per subject.
@@ -255,8 +275,9 @@ PARALLEL_BIN=$(conda run --no-capture-output -n "$CONDA_ENV" which parallel 2>/d
                || command -v parallel 2>/dev/null \
                || true)
 
-BIN_SEC_INT="${BIN_SEC%.*}"
-SKIP_INT="${SKIP_SEC%.*}"
+# BIN_SEC/SKIP_SEC/BIN_SEC_INT/SKIP_INT are set per-iteration in the BIN_SECS
+# sweep loop around DISPATCH below (modes that don't depend on bin duration --
+# preprocess/neighbors/neighbors_avg -- run once regardless of BIN_SECS).
 
 N_CPUS=$(nproc 2>/dev/null || echo 8)
 
@@ -415,33 +436,6 @@ _run_avg_one_model() {
                     --gpu-batch-size     "$GPU_BATCH_SIZE" \
                     $(_hrf_flag) $(_normalize_flag)
             fi
-
-            # Inter-subject crossnobis RSA (Option A; N=175, full movie, K≈626 bins)
-            local CN_BIN_INT="${CROSSNOBIS_BIN_SEC%.*}"
-            local CN_SKIP_INT="${CROSSNOBIS_SKIP_SEC%.*}"
-            local CN_SG_FLAG="" CN_PSC_FLAG="" CN_GSR_FLAG=""
-            [ "$SG_FILTER" = "true" ] && CN_SG_FLAG="--sg-filter"
-            [ "$PSC"       = "true" ] && CN_PSC_FLAG="--psc"
-            [ "$GSR"       = "true" ] && CN_GSR_FLAG="--gsr"
-            run_python "${SCRIPT_DIR}/crossnobis_searchlight.py" \
-                --subjects-list      "$SUBJECTS_LIST" \
-                --raw-dir            "$CIFTI_DIR" \
-                $CN_SG_FLAG $CN_PSC_FLAG $CN_GSR_FLAG \
-                --timing-csv         "$TIMING_CSV" \
-                --embeddings-dir     "$EMBEDDINGS_DIR" \
-                --template-cifti     "$TEMPLATE_CIFTI" \
-                --left-surface       "$LEFT_SURFACE" \
-                --right-surface      "$RIGHT_SURFACE" \
-                --workbench          "$WORKBENCH" \
-                --output-dir         "$OUTPUT_DIR" \
-                --model              "$MODEL_NAME" \
-                --modality           "$MOD" \
-                --k                  "$K" \
-                --bin-sec            "$CROSSNOBIS_BIN_SEC" \
-                --skip-sec           "$CROSSNOBIS_SKIP_SEC" \
-                --delay-sec          "$DELAY_SEC" \
-                --tr                 "$TR" \
-                --geodesic-cache-dir "$GEODESIC_CACHE_DIR"
         fi
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "glasser" ]; then
@@ -1141,6 +1135,55 @@ run_group_stats() {
 }
 
 # =============================================================================
+# INTER-SUBJECT CROSSNOBIS (all subjects at once, group-level output)
+# =============================================================================
+# Loads all raw subject CIFTIs in one call to produce a single group-level
+# crossnobis map per model.  Wired to 'groupstats' (not 'avg') because it
+# operates on per-subject data, not the group-average fMRI map.
+# =============================================================================
+run_crossnobis_isub() {
+    log "=== Inter-subject crossnobis (N=$(wc -l < "$SUBJECTS_LIST"), all subjects at once) ==="
+
+    local CN_SG_FLAG="" CN_PSC_FLAG="" CN_GSR_FLAG=""
+    [ "$SG_FILTER" = "true" ] && CN_SG_FLAG="--sg-filter"
+    [ "$PSC"       = "true" ] && CN_PSC_FLAG="--psc"
+    [ "$GSR"       = "true" ] && CN_GSR_FLAG="--gsr"
+
+    for MODEL_ENTRY in "${MODELS[@]}"; do
+        IFS=':' read -r MODEL_NAME MODALITIES_STR <<< "$MODEL_ENTRY"
+        IFS=',' read -ra MODS <<< "$MODALITIES_STR"
+        for MOD in "${MODS[@]}"; do
+            if ! _emb_exists "$MODEL_NAME" "$MOD"; then
+                log "  skip ${MODEL_NAME}/${MOD}: embedding not found"
+                continue
+            fi
+            log "  ${MODEL_NAME} / ${MOD}"
+            run_python "${SCRIPT_DIR}/crossnobis_searchlight.py" \
+                --subjects-list      "$SUBJECTS_LIST" \
+                --raw-dir            "$CIFTI_DIR" \
+                $CN_SG_FLAG $CN_PSC_FLAG $CN_GSR_FLAG \
+                --timing-csv         "$TIMING_CSV" \
+                --embeddings-dir     "$EMBEDDINGS_DIR" \
+                --template-cifti     "$TEMPLATE_CIFTI" \
+                --left-surface       "$LEFT_SURFACE" \
+                --right-surface      "$RIGHT_SURFACE" \
+                --workbench          "$WORKBENCH" \
+                --output-dir         "$OUTPUT_DIR" \
+                --model              "$MODEL_NAME" \
+                --modality           "$MOD" \
+                --k                  "$K" \
+                --bin-sec            "$CROSSNOBIS_BIN_SEC" \
+                --skip-sec           "$CROSSNOBIS_SKIP_SEC" \
+                --delay-sec          "$DELAY_SEC" \
+                --tr                 "$TR" \
+                --geodesic-cache-dir "$GEODESIC_CACHE_DIR"
+        done
+    done
+
+    log "=== Inter-subject crossnobis complete ==="
+}
+
+# =============================================================================
 # NOISE CEILING
 # =============================================================================
 run_noise_ceiling() {
@@ -1201,12 +1244,25 @@ run_noise_ceiling() {
 # =============================================================================
 case "$MODE" in
     preprocess)     run_preprocess ;;
-    avg)            run_avg ;;
     neighbors_avg)  run_precompute_neighbors_avg ;;
     neighbors)      run_precompute_neighbors ;;
-    persubject)     run_persubject; run_group_stats; run_noise_ceiling ;;
-    groupstats)     run_crossnobis_persubject; run_group_stats; run_noise_ceiling ;;
-    all)            run_avg; run_persubject; run_crossnobis_persubject; run_group_stats; run_noise_ceiling ;;
+    avg|persubject|groupstats|all)
+        # These modes read binned embeddings/fMRI, so they sweep BIN_SECS.
+        # preprocess/neighbors/neighbors_avg above don't depend on bin duration
+        # and run exactly once regardless of how many entries are in BIN_SECS.
+        for BIN_SEC in "${BIN_SECS[@]}"; do
+            SKIP_SEC="$BIN_SEC"
+            BIN_SEC_INT="${BIN_SEC%.*}"
+            SKIP_INT="${SKIP_SEC%.*}"
+            log "=== BIN_SEC=${BIN_SEC}s SKIP_SEC=${SKIP_SEC}s ==="
+            case "$MODE" in
+                avg)        run_avg ;;
+                persubject) run_persubject; run_group_stats; run_noise_ceiling ;;
+                groupstats) run_crossnobis_isub; run_crossnobis_persubject; run_group_stats; run_noise_ceiling ;;
+                all)        run_avg; run_persubject; run_crossnobis_isub; run_crossnobis_persubject; run_group_stats; run_noise_ceiling ;;
+            esac
+        done
+        ;;
     *)
         echo "Unknown mode: $MODE" >&2
         echo "Use: preprocess | avg | neighbors_avg | neighbors | persubject | groupstats | all" >&2

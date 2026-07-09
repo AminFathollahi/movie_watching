@@ -91,7 +91,7 @@ Any model whose embedding file is absent is silently skipped. Add a new model by
     rsa_59k_{prep}_delay{D}s_bin{B}_{method}_glasser.dscalar.nii            # Glasser
     ranked_report.csv                                                          # Glasser only
 
-{OUTPUT_DIR}/group_stats/{model}_{modality}/{config_label}/
+{OUTPUT_DIR}/groupstats/{model}_{modality}/{config_label}/
     group_stats_{N}subs.dscalar.nii    # 8-map CIFTI: mean_rho, cohens_d, sigmaps, clusters
     summary.json
 ```

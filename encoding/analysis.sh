@@ -15,7 +15,7 @@
 #               avg          Group-average encoding model (default)
 #               persubject   Per-subject encoding
 #               groupstats   Group-level statistics: t-test + TFCE + FDR on
-#                            per-subject r maps → group_stats/ subdir
+#                            per-subject r maps → groupstats/ subdir
 #               all          avg + persubject + groupstats
 #
 #   BATCH_SIZE  N            Parallel subjects (default 8)
@@ -117,8 +117,11 @@ OUTPUT_DIR="${OUTPUTS_BASE}/encoding"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-BIN_SEC=5.0
-SKIP_SEC=$BIN_SEC   # window stride; default = BIN_SEC (no overlap)
+# BIN_SECS: list of window durations (seconds) to sweep in one invocation.
+# SKIP_SEC = BIN_SEC for each (no overlap), matching the project convention.
+# Override: BIN_SECS="2.0 5.0 10.0" bash encoding/analysis.sh avg  (space-separated)
+# or the single-value form still works: BIN_SEC=5.0 bash encoding/analysis.sh avg
+read -ra BIN_SECS <<< "${BIN_SECS:-${BIN_SEC:-2.0}}"
 HRF=false       # true → SPM HRF convolution; false → boxcar delay
 NORMALIZE=true  # per-run z-score normalization of embeddings
 
@@ -139,18 +142,25 @@ TEST_VIDEO_IDS="video5,video9,video14,video18"
 MODELS=(
     "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
     "cav-mae-sync:av,a,v"
-    "omni3b_layer35:av,a,v"
-    "omni3b_layer27:av,a,v"
-    "omni3b_layer18:av,a,v"
-    "omni3b_layer9:av,a,v"
-    "omni3b_layer1:av,a,v"
-    # "imagebind:a,v,av"
+    "imagebind:av"
     "audiomae:a"
     "videomaev2-large:v"
     "wavlm-large:a"
     "whisper-large-v3:a"
     "pe-core-l14:v"
 )
+
+# omni3b / topoomni layer sweep — add a layer index here to wire it into every
+# analysis.sh run; no need to hand-write new MODELS entries per layer.
+LAYERS=(35 27 18 9 1)
+OMNI3B_MODALITIES="av,a,v"
+TOPOOMNI_MODALITIES="av"     # av only for now — switch to "av,a,v" once ready
+
+for L in "${LAYERS[@]}"; do
+    MODELS+=("omni3b_layer${L}:${OMNI3B_MODALITIES}")
+    MODELS+=("topoomni_layer${L}:${TOPOOMNI_MODALITIES}")
+    MODELS+=("topoomni_layer${L}_sheet:${TOPOOMNI_MODALITIES}")
+done
 
 # ── Parallelisation ─────────────────────────────────────────────────────────
 CONDA_ENV="movie"
@@ -161,8 +171,8 @@ MODE=${1:-avg}
 BATCH_SIZE=${2:-$DEFAULT_BATCH_SIZE}
 START_FROM=${3:-""}
 
-BIN_SEC_INT="${BIN_SEC%.*}"
-SKIP_INT="${SKIP_SEC%.*}"
+# BIN_SEC/SKIP_SEC/BIN_SEC_INT/SKIP_INT are set per-iteration in the BIN_SECS
+# sweep loop around DISPATCH below.
 
 N_CPUS=$(nproc 2>/dev/null || echo 8)
 N_JOBS_PER_SUBJECT=$(( N_CPUS / BATCH_SIZE ))
@@ -472,10 +482,23 @@ run_groupstats() {
 # =============================================================================
 case "$MODE" in
     preprocess) run_preprocess ;;
-    avg)        run_avg ;;
-    persubject) run_persubject ;;
-    groupstats) run_groupstats ;;
-    all)        run_avg; run_persubject; run_groupstats ;;
+    avg|persubject|groupstats|all)
+        # These modes read binned embeddings/fMRI, so they sweep BIN_SECS.
+        # preprocess above doesn't depend on bin duration and runs once
+        # regardless of how many entries are in BIN_SECS.
+        for BIN_SEC in "${BIN_SECS[@]}"; do
+            SKIP_SEC="$BIN_SEC"
+            BIN_SEC_INT="${BIN_SEC%.*}"
+            SKIP_INT="${SKIP_SEC%.*}"
+            log "=== BIN_SEC=${BIN_SEC}s SKIP_SEC=${SKIP_SEC}s ==="
+            case "$MODE" in
+                avg)        run_avg ;;
+                persubject) run_persubject ;;
+                groupstats) run_groupstats ;;
+                all)        run_avg; run_persubject; run_groupstats ;;
+            esac
+        done
+        ;;
     *)
         echo "Unknown mode: $MODE" >&2
         echo "Use: preprocess | avg | persubject | groupstats | all" >&2

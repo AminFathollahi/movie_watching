@@ -3,17 +3,26 @@ rsa/draw_rsa_borders.py
 =======================
 Draw surface borders around high-RSA islands on the PE-AV searchlight map.
 
-Threshold: vertices with ρ > (map_mean + N_SD * map_SD), with connected
-components smaller than MIN_VERTS vertices removed.  Borders are written
-per hemisphere using wb_command -metric-rois-to-border.
+Two threshold modes (--threshold-mode):
+  sd         vertices with rho > (map_mean + N_SD * map_SD)   [legacy default]
+  percentile vertices with rho in the top --top-pct % of all cortex vertices
+             (percentile computed jointly across both hemispheres, i.e. the
+             ROI is "top P% of cortex by rho", not top P% per hemisphere)
+
+Connected components smaller than MIN_VERTS vertices are removed in both
+modes.  Borders are written per hemisphere using wb_command
+-metric-rois-to-border.
 
 Usage
 -----
 python rsa/draw_rsa_borders.py \
     --rsa-npy  <path>/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy \
     --out-dir  <same dir or other> \
-    --n-sd     2 \
+    --threshold-mode percentile --top-pct 5 \
     --min-verts 10
+
+    # legacy SD mode:
+python rsa/draw_rsa_borders.py --threshold-mode sd --n-sd 2 ...
 
 Default paths hard-coded to the main PE-AV k100 5s-bin group-average map.
 """
@@ -132,8 +141,14 @@ def parse_args():
     p.add_argument("--left-surface",   default=str(_L_SURF))
     p.add_argument("--right-surface",  default=str(_R_SURF))
     p.add_argument("--workbench",      default=str(_WB))
+    p.add_argument("--threshold-mode", choices=["sd", "percentile"], default="sd",
+                   dest="threshold_mode",
+                   help="sd: mean+n_sd*SD.  percentile: top-pct%% of cortex by rho "
+                        "(percentile computed jointly across both hemispheres).")
     p.add_argument("--n-sd",      type=float, default=2.0, dest="n_sd",
-                   help="Threshold = mean + n_sd * SD")
+                   help="[sd mode] Threshold = mean + n_sd * SD")
+    p.add_argument("--top-pct",   type=float, default=5.0, dest="top_pct",
+                   help="[percentile mode] Keep the top top_pct%% of cortex vertices by rho.")
     p.add_argument("--min-verts", type=int,   default=10,  dest="min_verts",
                    help="Drop islands smaller than this")
     return p.parse_args()
@@ -151,9 +166,16 @@ def main():
     log.info(f"RSA map: {rsa_npy.name}  shape={rsa.shape}  "
              f"mean={rsa.mean():.4f}  SD={rsa.std():.4f}")
 
-    thresh = float(rsa.mean() + args.n_sd * rsa.std())
-    log.info(f"Threshold ({args.n_sd} SD above mean): {thresh:.4f}  "
-             f"→ {int((rsa > thresh).sum())} raw vertices ({(rsa>thresh).mean()*100:.1f}%)")
+    if args.threshold_mode == "percentile":
+        thresh = float(np.percentile(rsa, 100.0 - args.top_pct))
+        tag_thresh = f"top{args.top_pct:g}pct"
+        log.info(f"Threshold (top {args.top_pct:g}% of cortex): {thresh:.4f}  "
+                 f"→ {int((rsa > thresh).sum())} raw vertices ({(rsa>thresh).mean()*100:.1f}%)")
+    else:
+        thresh = float(rsa.mean() + args.n_sd * rsa.std())
+        tag_thresh = f"2sd_n{args.n_sd:g}" if args.n_sd != 2 else "2sd"
+        log.info(f"Threshold ({args.n_sd} SD above mean): {thresh:.4f}  "
+                 f"→ {int((rsa > thresh).sum())} raw vertices ({(rsa>thresh).mean()*100:.1f}%)")
 
     # ── CIFTI vertex index split ──────────────────────────────────────────────
     bm_axis = get_bm_axis(args.template_cifti)
@@ -190,9 +212,9 @@ def main():
 
         # Build output stem from input filename
         stem = rsa_npy.stem.replace("_searchlight", "")
-        border_path = out_dir / f"{stem}_2sd_{tag}.border"
+        border_path = out_dir / f"{stem}_{tag_thresh}_{tag}.border"
         _write_border(full_mask, surf_path, str(border_path), args.workbench,
-                      class_name=f"2sd_n{args.n_sd}")
+                      class_name=tag_thresh)
 
     log.info("Done.")
 

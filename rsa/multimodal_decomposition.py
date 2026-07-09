@@ -139,7 +139,7 @@ from rsa.shared.model_registry import (
     TR_DEFAULT,
     check_embeddings_exist,
 )
-from rsa.run_searchlight import get_neighbors
+from rsa.searchlight import get_neighbors
 
 logging.basicConfig(
     level=logging.INFO,

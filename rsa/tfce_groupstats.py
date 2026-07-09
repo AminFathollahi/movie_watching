@@ -464,7 +464,7 @@ def main():
     delay_tag    = f"delay{int(args.delay_sec)}s"
     config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}"
 
-    out_dir = (Path(args.output_dir) / "group_stats" /
+    out_dir = (Path(args.output_dir) / "groupstats" /
                f"{args.model}_{args.modality}" / config)
     out_dir.mkdir(parents=True, exist_ok=True)
 

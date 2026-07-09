@@ -50,7 +50,7 @@ from tqdm import tqdm
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from rsa.run_searchlight import get_neighbors, run_searchlight
+from rsa.searchlight import get_neighbors, run_searchlight
 from rsa.shared.rsa_utils import (
     align_and_assert_bins, preprocess_fmri,
     process_model_embeddings,
@@ -408,9 +408,10 @@ def main():
     # ── Timing + embeddings setup ────────────────────────────────────────────
     timing_df = pd.read_csv(args.timing_csv)
     bin_sec_int = int(args.bin_sec)
+    skip_int = int(args.bin_sec)  # skip_sec defaults to bin_sec in this script
     emb_file = (
         Path(args.embeddings_dir) / args.model
-        / f"{bin_sec_int}s" / f"{args.model}_{args.modality}.npy"
+        / f"bin{bin_sec_int}s_skip{skip_int}s" / f"{args.model}_{args.modality}.npy"
     )
     log.info(f"Embeddings: {emb_file}")
 

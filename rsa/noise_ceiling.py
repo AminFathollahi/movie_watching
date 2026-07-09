@@ -26,11 +26,10 @@ For a batch of B vertices:
   1. For each subject i: gather the (n_bins, k) searchlight neighbourhood,
      compute correlation-distance lower-triangle → raw_rdm_i  (B, n_pairs)
   2. group_mean  = mean_i[ raw_rdm_i ]                               (B, n_pairs)
-  3. Rank each raw_rdm_i along n_pairs                   (Spearman step)
-  4. NC_upper: Pearson(rank(raw_rdm_i), rank(group_mean)), avg over i
-  5. loo_mean_i = (N·group_mean − raw_rdm_i) / (N−1)
-     NC_lower:  Pearson(rank(raw_rdm_i), rank(loo_mean_i)), avg over i
-  6. Save nc_lower, nc_upper as CIFTI dscalar maps.
+  3. NC_upper: Spearman(raw_rdm_i, group_mean), averaged over i
+  4. loo_mean_i = (N·group_mean − raw_rdm_i) / (N−1)
+     NC_lower:  Spearman(raw_rdm_i, loo_mean_i), averaged over i
+  5. Save nc_lower, nc_upper as CIFTI dscalar maps.
 
 Usage
 -----
@@ -207,6 +206,11 @@ def _pearson_rows(A, B):
     return (Ac * Bc).sum(dim=-1) / denom
 
 
+def _spearman_rows(A, B):
+    """Spearman r between matching rows (rank then Pearson).  A, B: (..., N) → (...,)."""
+    return _pearson_rows(_rank_rows(A), _rank_rows(B))
+
+
 # =============================================================================
 # Core GPU-batched noise ceiling
 # =============================================================================
@@ -259,6 +263,8 @@ def _compute_nc_gpu(
         rdm  = torch.bmm(hn, hn.permute(0, 2, 1))                           # (B, n_bins, n_bins)
         return (1.0 - rdm)[:, tril_r, tril_c]                                # (B, n_pairs)
 
+    corr = _spearman_rows if method == "spearman" else _pearson_rows
+
     for start in range(0, len(full_k_verts), batch_size):
         batch_v  = full_k_verts[start : start + batch_size]
         B        = len(batch_v)
@@ -271,32 +277,40 @@ def _compute_nc_gpu(
             group_sum.add_(_rdm_for_sub(sub_f, batch_nc))
         group_mean = group_sum / N                                 # (B, n_pairs)
         del group_sum
-        ranked_gm = _rank_rows(group_mean) if method == "spearman" else group_mean
 
         # ── Pass 2: NC_upper and NC_lower, one subject at a time ─────────────
         nc_up_sum = torch.zeros(B, dtype=torch.float32, device=device)
         nc_lo_sum = torch.zeros(B, dtype=torch.float32, device=device)
         for sub_f in fmri_cpu:
             rdm_i = _rdm_for_sub(sub_f, batch_nc)                 # (B, n_pairs)
-            r_i   = _rank_rows(rdm_i) if method == "spearman" else rdm_i
-
-            nc_up_sum.add_(_pearson_rows(r_i, ranked_gm))
-
+            nc_up_sum.add_(corr(rdm_i, group_mean))
             loo   = (N * group_mean - rdm_i) / (N - 1)
-            r_loo = _rank_rows(loo) if method == "spearman" else loo
-            nc_lo_sum.add_(_pearson_rows(r_i, r_loo))
-            del rdm_i, r_i, loo, r_loo
+            nc_lo_sum.add_(corr(rdm_i, loo))
+            del rdm_i, loo
 
         nc_upper[batch_v] = (nc_up_sum / N).cpu().numpy()
         nc_lower[batch_v] = (nc_lo_sum / N).cpu().numpy()
-        del group_mean, ranked_gm, nc_up_sum, nc_lo_sum
+        del group_mean, nc_up_sum, nc_lo_sum
         torch.cuda.empty_cache()
 
     # ── CPU fallback for partial-k border vertices ────────────────────────────
     if len(partial_k_verts) > 0:
         log.info(f"  CPU fallback: {len(partial_k_verts):,} partial-k vertices ...")
         fmri_cpu_cols = fmri_subs  # (n_bins, n_hem_verts) already — no copy needed
-        tril_np  = np.tril_indices(n_bins, k=-1)
+        tril_np = np.tril_indices(n_bins, k=-1)
+
+        def _rank_1d(x):
+            return np.argsort(np.argsort(x)).astype(np.float32)
+
+        def _pearson_1d(a, b):
+            ac, bc = a - a.mean(), b - b.mean()
+            d = np.linalg.norm(ac) * np.linalg.norm(bc)
+            return float(np.dot(ac, bc) / d) if d > 1e-10 else 0.0
+
+        def _spearman_1d(a, b):
+            return _pearson_1d(_rank_1d(a), _rank_1d(b))
+
+        corr_fn = _spearman_1d if method == "spearman" else _pearson_1d
 
         for v in partial_k_verts:
             sv = int(surface_indices[v])
@@ -305,7 +319,6 @@ def _compute_nc_gpu(
             if len(nc) < 2:
                 continue
 
-            # Raw RDMs from each subject
             raw_list = []
             for f in fmri_cpu_cols:
                 hood = f[:, nc].astype(np.float64)              # (n_bins, k)
@@ -317,27 +330,14 @@ def _compute_nc_gpu(
                 flat = (1.0 - (hn @ hn.T))[tril_np].astype(np.float32)
                 raw_list.append(flat)
 
-            raw_arr  = np.stack(raw_list, axis=0)               # (N, n_pairs)
-            gm       = raw_arr.mean(axis=0)                     # (n_pairs,)
-
-            def _rank_1d(x):
-                return np.argsort(np.argsort(x)).astype(np.float32)
-
-            def _pearson_1d(a, b):
-                ac, bc = a - a.mean(), b - b.mean()
-                d = np.linalg.norm(ac) * np.linalg.norm(bc)
-                return float(np.dot(ac, bc) / d) if d > 1e-10 else 0.0
-
-            r_gm = _rank_1d(gm) if method == "spearman" else gm
+            raw_arr = np.stack(raw_list, axis=0)                # (N, n_pairs)
+            gm      = raw_arr.mean(axis=0)                      # (n_pairs,)
 
             nc_up_sum = nc_lo_sum_cpu = 0.0
             for i in range(N):
-                ri = _rank_1d(raw_arr[i]) if method == "spearman" else raw_arr[i]
-                nc_up_sum += _pearson_1d(ri, r_gm)
-
-                loo = (N * gm - raw_arr[i]) / (N - 1)
-                r_loo = _rank_1d(loo) if method == "spearman" else loo
-                nc_lo_sum_cpu += _pearson_1d(ri, r_loo)
+                nc_up_sum     += corr_fn(raw_arr[i], gm)
+                loo            = (N * gm - raw_arr[i]) / (N - 1)
+                nc_lo_sum_cpu += corr_fn(raw_arr[i], loo)
 
             nc_upper[v] = nc_up_sum / N
             nc_lower[v] = nc_lo_sum_cpu / N
@@ -369,6 +369,11 @@ def _compute_nc_cpu(
         d = np.linalg.norm(ac) * np.linalg.norm(bc)
         return float(np.dot(ac, bc) / d) if d > 1e-10 else 0.0
 
+    def _spearman_1d(a, b):
+        return _pearson_1d(_rank_1d(a), _rank_1d(b))
+
+    corr_fn = _spearman_1d if method == "spearman" else _pearson_1d
+
     def _one_vertex(v: int) -> tuple[float, float]:
         sv = int(surface_indices[v])
         nc = vertex_to_col[neighbors[sv]]
@@ -386,17 +391,14 @@ def _compute_nc_cpu(
             hn   = hc / nm
             raw_list.append((1.0 - (hn @ hn.T))[tril].astype(np.float32))
 
-        raw  = np.stack(raw_list, axis=0)   # (N, n_pairs)
-        gm   = raw.mean(axis=0)
-        r_gm = _rank_1d(gm) if method == "spearman" else gm
+        raw = np.stack(raw_list, axis=0)    # (N, n_pairs)
+        gm  = raw.mean(axis=0)
 
         nc_up_s = nc_lo_s = 0.0
         for i in range(N):
-            ri    = _rank_1d(raw[i]) if method == "spearman" else raw[i]
-            nc_up_s += _pearson_1d(ri, r_gm)
-            loo    = (N * gm - raw[i]) / (N - 1)
-            r_loo  = _rank_1d(loo) if method == "spearman" else loo
-            nc_lo_s += _pearson_1d(ri, r_loo)
+            nc_up_s += corr_fn(raw[i], gm)
+            loo      = (N * gm - raw[i]) / (N - 1)
+            nc_lo_s += corr_fn(raw[i], loo)
 
         return nc_up_s / N, nc_lo_s / N
 

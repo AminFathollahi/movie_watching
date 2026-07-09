@@ -268,6 +268,56 @@ def compute_interaction_residual(
     return R, ms
 
 
+def compute_interaction_residual_cv(
+    J: np.ndarray,
+    unimodal_list: list[np.ndarray],
+    alpha_grid: np.ndarray | None = None,
+    cv_folds: int = 5,
+) -> tuple[np.ndarray, float, float]:
+    """Cross-validated-ridge variant of compute_interaction_residual().
+
+    compute_interaction_residual() uses a near-zero fixed eps (eps ~ 1e-6 *
+    ||X_uv||^2 / n_features) in (X_uv^T X_uv + eps I)^-1, which is an
+    essentially-unregularized least-squares projection. That is fine in RDM
+    space (n_pairs >> n_nuisance_models, e.g. 195,625 pairs vs. 2 nuisance
+    RDM columns in partial_rsa.py), but degenerates when applied directly in
+    RAW EMBEDDING space with n_samples << n_nuisance_features (e.g. 626 time
+    bins vs. 2048 concatenated unimodal feature columns): with more
+    predictors than samples, the near-unregularized fit trivially drives the
+    residual to ~0 (this IS the mechanism behind the near-null CKA
+    interaction-residual numbers that motivated Move 1's switch to properly
+    cross-validated banded ridge in rsa/partial_rsa.py). Used by
+    encoding/variance_partition.py (Move 6) to build the AV-joint-residual
+    feature band with a real, cross-validated regularization strength
+    instead of that near-zero eps.
+
+    Returns
+    -------
+    R          : (n, d_J) float64 — cross-validated-ridge interaction residual
+    ms_score   : float — ||R||_F^2 / ||J||_F^2
+    best_alpha : float — selected ridge alpha (shared across J's output dims)
+    """
+    from sklearn.linear_model import RidgeCV
+    from scipy.stats import zscore as scipy_zscore
+
+    if alpha_grid is None:
+        alpha_grid = np.logspace(0, 8, 30)
+
+    J_z = np.nan_to_num(scipy_zscore(J, axis=0, nan_policy='omit').astype(np.float64))
+    U_parts = [np.nan_to_num(scipy_zscore(U, axis=0, nan_policy='omit').astype(np.float64))
+               for U in unimodal_list]
+    X_uv = np.concatenate(U_parts, axis=1)
+
+    ridge = RidgeCV(alphas=alpha_grid, cv=cv_folds, fit_intercept=False)
+    ridge.fit(X_uv, J_z)
+    R = J_z - ridge.predict(X_uv)
+
+    norm_J = np.linalg.norm(J_z, "fro")
+    norm_R = np.linalg.norm(R,   "fro")
+    ms = float((norm_R / norm_J) ** 2) if norm_J > 1e-10 else 0.0
+    return R, ms, float(ridge.alpha_)
+
+
 # =============================================================================
 # Glasser parcel helpers
 # =============================================================================

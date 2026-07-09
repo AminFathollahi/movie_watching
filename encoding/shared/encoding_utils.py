@@ -242,9 +242,28 @@ def build_embedding_arrays(emb_path: str, timing_df: pd.DataFrame,
         X_train: (n_train_bins, n_features) float32
         X_test: (n_test_bins, n_features) float32
     """
+    embeddings = np.load(emb_path).astype(np.float64)
+    return split_embedding_array(embeddings, timing_df, test_video_ids,
+                                  bin_sec, hrf, normalize, skip_sec)
+
+
+def split_embedding_array(embeddings: np.ndarray, timing_df: pd.DataFrame,
+                           test_video_ids: list, bin_sec: float,
+                           hrf: bool, normalize: bool,
+                           skip_sec: float = None) -> tuple:
+    """Same segment/run splitting as build_embedding_arrays(), but takes an
+    already-in-memory (n_total_bins, n_features) array instead of a .npy path.
+
+    Used by encoding/variance_partition.py to split a derived band (e.g. the
+    AV-joint residual computed in memory) the same way raw embeddings are split.
+
+    Returns:
+        X_train: (n_train_bins, n_features) float32
+        X_test: (n_test_bins, n_features) float32
+    """
     if skip_sec is None:
         skip_sec = bin_sec
-    embeddings = np.load(emb_path).astype(np.float64)
+    embeddings = np.asarray(embeddings, dtype=np.float64)
     hrf_kernel = spm_hrf(bin_sec) if hrf else None
 
     train_segs   = []

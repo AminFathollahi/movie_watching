@@ -255,6 +255,32 @@ def summarize_and_save(r_map: np.ndarray, roi_mask: np.ndarray, template_cifti: 
         report = pd.DataFrame(rows).sort_values("mean_r", ascending=False).reset_index(drop=True)
         report["rank"] = range(1, len(report) + 1)
         report.to_csv(out_dir / f"connectivity_{tag}_ranked_parcels.csv", index=False)
+
+        # ROI's OWN Glasser parcel membership (which parcels the seed ROI itself
+        # sits in — distinct from `report` above, which ranks parcels BY their
+        # connectivity to the seed).
+        roi_rows = []
+        n_roi = int(roi_mask.sum())
+        for name, indices in all_parcels.items():
+            idx = np.array(indices)
+            in_roi = idx[roi_mask[idx]] if len(idx) else idx
+            if len(in_roi) == 0:
+                continue
+            roi_rows.append({
+                "parcel": name,
+                "n_roi_vertices": int(len(in_roi)),
+                "pct_of_parcel": float(100.0 * len(in_roi) / len(idx)),
+                "pct_of_roi": float(100.0 * len(in_roi) / n_roi) if n_roi else 0.0,
+            })
+        roi_membership = (pd.DataFrame(roi_rows)
+                          .sort_values("n_roi_vertices", ascending=False)
+                          .reset_index(drop=True))
+        roi_membership["rank"] = range(1, len(roi_membership) + 1)
+        roi_membership.to_csv(out_dir / f"connectivity_{tag}_roi_membership_parcels.csv",
+                              index=False)
+        if len(roi_membership):
+            log.info(f"Top-10 Glasser parcels OF the ROI itself:\n"
+                     f"{roi_membership.head(10).to_string(index=False)}")
     except Exception as exc:
         log.warning(f"Glasser parcel summary failed: {exc}")
         report = pd.DataFrame()

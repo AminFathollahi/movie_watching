@@ -7,8 +7,8 @@ All RSA scripts (partial_rsa.py, rdm_diagonal.py,
 multimodal_decomposition.py) import from here so that model names,
 modality codes, and partial-RSA run definitions are defined exactly once.
 
-Embedding path convention (mirrors analysis.sh):
-  {embeddings_dir}/{model}/{bin_sec_int}s/{model}_{modality}.npy
+Embedding path convention (mirrors analysis.sh's repo-wide bin/skip naming):
+  {embeddings_dir}/{model}/bin{bin_sec_int}s_skip{skip_sec_int}s/{model}_{modality}.npy
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ TR_DEFAULT: float = 1.0
 # ── Path resolver ─────────────────────────────────────────────────────────────
 
 def emb_path(embeddings_dir: str, model: str, modality: str,
-             bin_sec: float) -> Path:
+             bin_sec: float, skip_sec: float | None = None) -> Path:
     """Resolve the .npy embedding file path for a given model/modality/bin.
 
     Parameters
@@ -35,13 +35,15 @@ def emb_path(embeddings_dir: str, model: str, modality: str,
     model          : model name string (e.g. "pe-av-small-16-frame")
     modality       : modality code "a", "v", or "av"
     bin_sec        : temporal bin width in seconds
+    skip_sec       : sliding-window stride in seconds (defaults to bin_sec)
 
     Returns
     -------
     Path — absolute or relative .npy path
     """
-    bin_sec_int = int(bin_sec)
-    return (Path(embeddings_dir) / model / f"{bin_sec_int}s"
+    bin_sec_int  = int(bin_sec)
+    skip_sec_int = int(skip_sec) if skip_sec is not None else bin_sec_int
+    return (Path(embeddings_dir) / model / f"bin{bin_sec_int}s_skip{skip_sec_int}s"
             / f"{model}_{modality}.npy")
 
 
@@ -70,6 +72,56 @@ MODELS: dict[str, dict] = {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "CAV-MAE (sync variant) — contrastive AV masked autoencoder",
+    },
+    "imagebind": {
+        "modalities":   ["av"],
+        "joint":        True,
+        "description":  "ImageBind — aligned AV/text embedding space (2s bins only, no separable a/v)",
+    },
+    "omni3b_layer9": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Qwen2.5-Omni-3B thinker hidden state, layer 9 — early AV fusion",
+    },
+    "omni3b_layer18": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Qwen2.5-Omni-3B thinker hidden state, layer 18 — mid AV fusion",
+    },
+    "omni3b_layer27": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Qwen2.5-Omni-3B thinker hidden state, layer 27 — late AV fusion",
+    },
+    "topoomni_layer9": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Topo-Omni (cortical-sheet-regularized Qwen2.5-Omni-3B), layer 9",
+    },
+    "topoomni_layer18": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Topo-Omni (cortical-sheet-regularized Qwen2.5-Omni-3B), layer 18",
+    },
+    "topoomni_layer27": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Topo-Omni (cortical-sheet-regularized Qwen2.5-Omni-3B), layer 27",
+    },
+    "topoomni_layer9_sheet": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Topo-Omni cortical-sheet (topographic) code, layer 9",
+    },
+    "topoomni_layer18_sheet": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Topo-Omni cortical-sheet (topographic) code, layer 18",
+    },
+    "topoomni_layer27_sheet": {
+        "modalities":   ["av", "a", "v"],
+        "joint":        True,
+        "description":  "Topo-Omni cortical-sheet (topographic) code, layer 27",
     },
     "audiomae": {
         "modalities":   ["a"],
@@ -127,6 +179,31 @@ class PartialRSARun(NamedTuple):
     nuisance: list[tuple[str, str]]    # [(model, modality), ...] nuisance embeddings
     label:    str                      # short string for file naming (no spaces)
     description: str                   # human-readable description
+    kind:     str = "cross_baseline"   # "cross_baseline" | "integration"
+    # "integration" runs regress a native-AV model's OWN unimodal streams out of
+    # its OWN joint embedding (the best-additive-combination contrast — Move 1).
+    # partial_rsa.py routes these to the group_average/<model>_<modality>_INTEGRATION/
+    # output convention consumed by the report's auto-discovery. "cross_baseline"
+    # runs (regressing OTHER models' unimodal streams out) keep the legacy
+    # rsa/partial/ output convention untouched.
+
+
+def _own_unimodal_integration_run(model: str, modality: str = "av") -> PartialRSARun:
+    """Best-additive integration contrast: model's own joint embedding, controlling
+    for its own unimodal (a, v) streams. See Move 1 of the AV-integration extension.
+    """
+    return PartialRSARun(
+        target   = (model, modality),
+        nuisance = [(model, "a"), (model, "v")],
+        label    = f"{model}_{modality}_INTEGRATION",
+        description = (
+            f"{model} {modality} joint embedding, controlling for its own "
+            f"audio-only and video-only outputs — best-additive-combination "
+            f"integration contrast (unique variance from fusion, holding "
+            f"information content fixed)."
+        ),
+        kind = "integration",
+    )
 
 
 PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
@@ -145,16 +222,19 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     ),
     # Run B: regress out PE-AV's own unimodal decoders.  Tests whether the joint
     # embedding encodes cross-modal interactions beyond the simple union of its own
-    # audio-only and video-only outputs.
+    # audio-only and video-only outputs.  THIS IS the Move-1 integration contrast
+    # for the PRIMARY model (pe-av-small-16-frame) — kind="integration" routes its
+    # output to the group_average/<model>_av_INTEGRATION/ convention.
     "run_B": PartialRSARun(
         target   = ("pe-av-small-16-frame", "av"),
         nuisance = [("pe-av-small-16-frame", "a"), ("pe-av-small-16-frame", "v")],
-        label    = "peav_av_partialout_peav_a+peav_v",
+        label    = "pe-av-small-16-frame_av_INTEGRATION",
         description = (
             "PE-AV (small 16-frame) AV joint embedding, controlling for its own "
             "audio-only and video-only outputs — tests within-architecture cross-modal "
-            "interaction residual."
+            "interaction residual (best-additive integration contrast, PRIMARY model)."
         ),
+        kind = "integration",
     ),
     # Run C: regress out specialist unimodal models from different architectures
     # (WavLM-Large for audio, PE-Core ViT-L/14 for vision).  Tests whether PE-AV
@@ -170,6 +250,16 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
             "specialist baseline."
         ),
     ),
+    # ── Move 1: best-additive integration contrast, generalized across every
+    # native-AV model that has separable _a/_v/_av embeddings at bin5s_skip5s.
+    # (imagebind is 2s-only — no _a/_v at 5s — so it is intentionally excluded here.)
+    "integration_cav-mae-sync": _own_unimodal_integration_run("cav-mae-sync"),
+    "integration_omni3b_layer9":      _own_unimodal_integration_run("omni3b_layer9"),
+    "integration_omni3b_layer18":     _own_unimodal_integration_run("omni3b_layer18"),
+    "integration_omni3b_layer27":     _own_unimodal_integration_run("omni3b_layer27"),
+    "integration_topoomni_layer9":    _own_unimodal_integration_run("topoomni_layer9"),
+    "integration_topoomni_layer18":   _own_unimodal_integration_run("topoomni_layer18"),
+    "integration_topoomni_layer27":   _own_unimodal_integration_run("topoomni_layer27"),
 }
 
 
@@ -210,12 +300,14 @@ def validate_run(run_name: str) -> PartialRSARun:
 
 
 def check_embeddings_exist(embeddings_dir: str, model: str, modality: str,
-                            bin_sec: float) -> Path:
+                            bin_sec: float, skip_sec: float | None = None) -> Path:
     """Resolve embedding path and raise FileNotFoundError if missing."""
-    path = emb_path(embeddings_dir, model, modality, bin_sec)
+    path = emb_path(embeddings_dir, model, modality, bin_sec, skip_sec)
     if not path.exists():
+        skip_sec_int = int(skip_sec) if skip_sec is not None else int(bin_sec)
         raise FileNotFoundError(
             f"Embedding not found: {path}\n"
-            f"Expected: {embeddings_dir}/{model}/{int(bin_sec)}s/{model}_{modality}.npy"
+            f"Expected: {embeddings_dir}/{model}/bin{int(bin_sec)}s_skip{skip_sec_int}s/"
+            f"{model}_{modality}.npy"
         )
     return path

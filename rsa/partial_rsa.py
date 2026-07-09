@@ -41,7 +41,7 @@ python rsa/partial_rsa.py \
     --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
     --output-dir /home/amin/Research/Representation/Movie/outputs/rsa/partial \
     --subject group_average \
-    --bin-sec 5.0 --delay-sec 5.0 --tr 1.0 \
+    --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0 \
     --k 100 --method spearman \
     --left-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
     --right-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
@@ -111,6 +111,8 @@ def parse_args():
     p.add_argument("--output-dir",        required=True)
     p.add_argument("--subject",           default="group_average")
     p.add_argument("--bin-sec",           type=float, default=BIN_SEC_DEFAULT)
+    p.add_argument("--skip-sec",          type=float, default=None, dest="skip_sec",
+                   help="Sliding-window stride in seconds (defaults to --bin-sec).")
     p.add_argument("--delay-sec",         type=float, default=DELAY_SEC_DEFAULT)
     p.add_argument("--tr",                type=float, default=TR_DEFAULT)
     p.add_argument("--k",                 type=int,   required=True)
@@ -472,12 +474,16 @@ def import_or_default(dotted: str, fallback):
 
 def run_analysis(args):
     cfg = validate_run(args.run)
+    if args.skip_sec is None:
+        args.skip_sec = args.bin_sec
     log.info("=" * 70)
     log.info(f"Partial RSA — {args.run}: {cfg.description}")
     log.info(f"  Target   : {cfg.target}")
     log.info(f"  Nuisance : {cfg.nuisance}")
+    log.info(f"  kind     : {cfg.kind}")
     log.info(f"  Subject  : {args.subject}  method={args.method}  k={args.k}")
-    log.info(f"  bin_sec={args.bin_sec}  delay_sec={args.delay_sec}  tr={args.tr}")
+    log.info(f"  bin_sec={args.bin_sec}  skip_sec={args.skip_sec}  "
+             f"delay_sec={args.delay_sec}  tr={args.tr}")
     log.info("=" * 70)
 
     # ── fMRI ────────────────────────────────────────────────────────────────
@@ -503,7 +509,8 @@ def run_analysis(args):
 
     # ── Load and bin all model embeddings ────────────────────────────────────
     def load_emb(model, modality):
-        path = check_embeddings_exist(args.embeddings_dir, model, modality, args.bin_sec)
+        path = check_embeddings_exist(args.embeddings_dir, model, modality,
+                                       args.bin_sec, args.skip_sec)
         log.info(f"  Loading: {path.name}")
         emb = process_model_embeddings(
             str(path), timing_df, bin_sec=args.bin_sec, tr=args.tr,
@@ -587,13 +594,26 @@ def run_analysis(args):
     gc.collect()
 
     # ── Save CIFTI ───────────────────────────────────────────────────────────
-    bin_sec_int = int(args.bin_sec)
-    delay_int   = int(args.delay_sec)
-    map_name    = f"partial_rsa_{cfg.label}"
-    out_dir     = (Path(args.output_dir) / args.subject / "partial_rsa" /
+    bin_sec_int  = int(args.bin_sec)
+    skip_sec_int = int(args.skip_sec)
+    delay_int    = int(args.delay_sec)
+    map_name     = f"partial_rsa_{cfg.label}"
+
+    if cfg.kind == "integration":
+        # Move 1: outputs/rsa/{fmri_tag}/group_average/<model>_<modality>_INTEGRATION/
+        #         k{K}_delay{D}s_bin{B}s_skip{S}s_{method}/integration_partial_r_searchlight.dscalar.nii
+        target_model, target_mod = cfg.target
+        out_dir  = (Path(args.output_dir) / args.subject /
+                    f"{target_model}_{target_mod}_INTEGRATION" /
+                    f"k{args.k}_delay{delay_int}s_bin{bin_sec_int}s_skip{skip_sec_int}s_{args.method}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "integration_partial_r_searchlight.dscalar.nii"
+    else:
+        # Legacy cross-baseline runs (run_A, run_C): unchanged output convention.
+        out_dir = (Path(args.output_dir) / args.subject / "partial_rsa" /
                    f"k{args.k}_delay{delay_int}s_bin{bin_sec_int}s_{args.method}")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{cfg.label}_k{args.k}_delay{delay_int}s_bin{bin_sec_int}s.dscalar.nii"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{cfg.label}_k{args.k}_delay{delay_int}s_bin{bin_sec_int}s.dscalar.nii"
 
     save_cifti_multimap(
         corr_full.reshape(1, -1),

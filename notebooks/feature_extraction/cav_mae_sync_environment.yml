@@ -1,0 +1,27 @@
+name: cav-mae-sync
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.7
+  - numpy=1.21.6
+  - scipy=1.7.3
+  - pip
+  - pip:
+    - torch==1.13.1
+    - torchaudio==0.13.1
+    - torchvision==0.14.1
+    - timm==0.4.5
+    - tqdm
+    - matplotlib
+    - ipykernel
+
+# CAV-MAE-sync (https://github.com/YuanGongND/cav-mae, "-sync" checkpoint) pins an old
+# torch/timm combination that conflicts with every other environment in this repo --
+# it MUST stay isolated in its own env. extract_cav_mae_sync.py imports the model
+# definition directly from the official repo source (not pip-installable):
+#   git clone https://github.com/YuanGongND/cav-mae.git "/path/to/Model Repos/cav-mae-sync"
+# and expects the pretrained checkpoint at
+#   <repo>/pretrained_models/cav_mae_sync.pth
+# (see REPO_ROOT / MODEL_PATH at the top of extract_cav_mae_sync.py -- update those two
+# constants to your local clone/checkpoint path).

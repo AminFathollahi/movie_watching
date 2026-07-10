@@ -1,6 +1,6 @@
 # Movie-Watching fMRI — Representation Analysis
 
-HCP 7T movie-watching fMRI analyses examining how cortical regions represent audiovisual content. Three analysis pillars, each self-contained with its own `analysis.sh`.
+HCP 7T movie-watching fMRI analyses examining how cortical regions represent audiovisual content. `rsa/`, `encoding/`, and `cf_modeling/` are each self-contained with their own `analysis.sh`; `connectivity/` runs directly via `seed_connectivity.py`.
 
 ## Repository Structure
 
@@ -8,23 +8,27 @@ HCP 7T movie-watching fMRI analyses examining how cortical regions represent aud
 movie_watching/
 ├── preprocess_individual.py    # Per-run signal cleaning → full-run CIFTI
 ├── make_average.sh             # Build group-average CIFTI from per-subject CIFTIs
-├── rsa/                        # Representational Similarity Analysis
-├── encoding/                   # Ridge encoding models (himalaya)
+├── official_timing.py          # Reconciles HCP official rest-block timing with movie_timing.csv
+├── rsa/                        # Representational Similarity Analysis (primary engine)
+├── encoding/                   # Ridge encoding models (himalaya) + banded-ridge variance partition
 ├── cf_modeling/                # Audiovisual cortical field modeling (Hedger et al. 2025)
+├── connectivity/               # Seed-based whole-cortex functional connectivity from an RSA-derived ROI
+├── viz/                        # Standalone cortex-map plotting (nilearn, no wb_view dependency)
 └── notebooks/
     ├── visualization/          # RSA significance maps, surface plots, pycortex flatmaps
-    └── feature_extraction/     # Model embedding extraction (avtransformer env)
+    └── feature_extraction/     # Model embedding extraction (avtransformer / topo_omni / cav-mae-sync envs)
 ```
 
 ## Analysis Pillars
 
-All three pillars use the **same `movie` conda environment**.
+`rsa/`, `encoding/`, `cf_modeling/`, and `connectivity/` all use the **same `movie` conda environment**.
 
 | Folder | Method | Script | Environment |
 |---|---|---|---|
-| `rsa/` | Searchlight + Glasser parcel RSA | `analysis.sh` | `movie` |
-| `encoding/` | Ridge encoding (himalaya RidgeCV) | `analysis.sh` | `movie` |
+| `rsa/` | Searchlight + Glasser parcel RSA, plus validation (noise ceiling, crossnobis, 2-factor bootstrap, permutation/spin tests) and the multimodal-integration analyses (partial RSA, temporal-scramble binding, cross-architecture convergence, Topo-Omni stimulus-clustering localizer) | `analysis.sh` | `movie` |
+| `encoding/` | Ridge encoding (himalaya RidgeCV) + banded-ridge unique-AV-variance partition (`variance_partition.py`) | `analysis.sh` | `movie` |
 | `cf_modeling/` | Banded ridge connective field modeling (Hedger 2025) | `analysis.sh` | `movie` |
+| `connectivity/` | Seed-based whole-cortex functional connectivity from an RSA top-5% ROI, 3 time windows (full/rest/stim) | `seed_connectivity.py` | `movie` |
 
 ## Quick Start
 
@@ -65,9 +69,16 @@ Output per subject: `{sub}_sg_psc_cortex_59k.dtseries.nii` + `{sub}_sg_psc_run_t
 ### 3. Extract model embeddings
 
 ```bash
-# PE-AV embeddings
+# PE-AV embeddings (primary native-AV model)
 conda activate avtransformer
 jupyter notebook notebooks/feature_extraction/pe_av_embeddings.ipynb
+
+# PE-AV auxiliary extractions (headless scripts, same env):
+python notebooks/feature_extraction/pe_av_extract_scramble.py         # temporal-scramble binding control
+python notebooks/feature_extraction/pe_av_extract_dummy_modality.py --dummy-modality {a,v}
+    # extracts PE-AV's native joint audio_video_embeds ("cls-av") from a single real
+    # modality by feeding a fixed synthetic blank/silent placeholder for the other one
+    # (the model's forward() only computes true joint embeds when both tensors are real)
 
 # Whisper transcripts + Gemma 4 audio captions + InternVL2.5 video captions
 # (three models, sequential — each clears GPU before load and after unload)
@@ -78,6 +89,22 @@ jupyter notebook notebooks/feature_extraction/text.ipynb
 conda activate audiocaption
 export ANTHROPIC_API_KEY="sk-ant-..."
 jupyter notebook notebooks/feature_extraction/audiocaption.ipynb
+
+# Other native-AV models used for cross-architecture comparison (rsa/analysis.sh Move 1/3/4):
+conda activate cav-mae-sync
+python notebooks/feature_extraction/extract_cav_mae_sync.py                # + CAV_MAE_SCRAMBLE_AV=1 for the scramble control
+
+conda activate topo_omni
+python notebooks/feature_extraction/topo_omni_extract.py                   # Omni3B/TopoOmni thinker hidden states + cortical sheet
+python notebooks/feature_extraction/topo_omni_extract_unimodal.py          # genuine joint av (fixes the (a+v)/2 placeholder)
+python notebooks/feature_extraction/topo_omni_extract_scramble.py          # temporal-scramble binding control
+python notebooks/feature_extraction/omni3b_extract_unimodal.py             # same fix, Omni3B side
+python notebooks/feature_extraction/omni3b_extract_scramble.py
+
+conda activate avtransformer
+python notebooks/feature_extraction/nemotron_extract_unimodal.py           # Omni-Embed-Nemotron-3B (layers 9/18/27/36)
+python notebooks/feature_extraction/nemotron_extract_scramble.py
+python notebooks/feature_extraction/build_scramble_unimodal_copies.py      # reindexes real a/v as scramble-run nuisance regressors
 ```
 
 > **Note:** `audiocaption.ipynb` is **deprecated** for audio captioning (previously used CLAP-Cap).
@@ -117,7 +144,7 @@ bash cf_modeling/analysis.sh persubject    # per-subject only
 
 - **fMRI space**: HCP 7T, 4 runs, TR = 1 s, 59k grayordinate surface (cortex only, 59412 vertices)
 - **Preprocessing**: SG high-pass → PSC (using pre-SG mean for normalisation) → GSR, applied per run on the continuous run. No timing filtering at preprocessing time.
-- **Timing**: `data/movie_timing.csv` — authoritative timing file (18 videos, 4 runs, global `onset_sec`). All analysis scripts apply hemodynamic delay at analysis time.
+- **Timing**: `data/movie_timing.csv` — authoritative timing file for RSA/encoding/CF (18 filtered "meaningful AV content" clips, 4 runs, global `onset_sec`). All analysis scripts apply hemodynamic delay at analysis time. `data/HCP_7T_Movie_Clip_Timing.csv` is the separate official HCP clip-timing source (run-local), used only by `official_timing.py` to derive inter-clip REST-block windows for `connectivity/`'s `rest` time window — reconciling the two is still an open item (see `results_report.tex` §3.2, "Timing reconciliation, still open").
 - **Hemodynamic delay**: Applied at analysis time via `--delay-sec 5.0` (boxcar shift) or `--hrf` (SPM HRF convolution).
 - **Embeddings**: `{EMBEDDINGS_DIR}/{model_name}/bin{B}s_skip{S}s/{model_name}_{v,a,av}.npy`
 - **Outputs**: `{OUTPUT_DIR}/{subject_or_group_average}/{model}/{config_label}/`
@@ -125,20 +152,30 @@ bash cf_modeling/analysis.sh persubject    # per-subject only
 ## Environments
 
 ```bash
-# All analyses (RSA, encoding, CF modeling):
+# All analyses (RSA, encoding, CF modeling, connectivity):
 conda env create -f cf_modeling/environment.yml  # movie env
 pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
 pip install himalaya==0.4.11 pycortex "mne>=1.9"
 
-# PE-AV embeddings + video captions + transcripts:
+# PE-AV / nemotron / Qwen-Omni-utils-based embeddings + video captions + transcripts:
 conda env create -f notebooks/feature_extraction/environment.yml  # avtransformer env
 
 # Audio captions (CLAP-Cap) + LLM rewrite:
 conda env create -f notebooks/feature_extraction/audiocaption_environment.yml  # audiocaption env
+
+# Omni3B / TopoOmni thinker + cortical-sheet extraction (own transformers/torch pins,
+# newer than avtransformer's — kept isolated to avoid version conflicts):
+conda env create -f notebooks/feature_extraction/topo_omni_environment.yml  # topo_omni env
+
+# CAV-MAE-sync extraction (pins torch 1.13.1 / Python 3.7 — the official repo's
+# requirement — MUST stay isolated from every other env in this repo):
+conda env create -f notebooks/feature_extraction/cav_mae_sync_environment.yml  # cav-mae-sync env
 ```
 
 | Environment | Used for |
 |---|---|
-| `movie` | RSA, encoding, CF modeling, preprocessing |
-| `avtransformer` | PE-AV embeddings, InternVL2.5 video captions, Whisper transcripts |
+| `movie` | RSA, encoding, CF modeling, connectivity, preprocessing |
+| `avtransformer` | PE-AV embeddings (incl. scramble + dummy-modality cls-av extraction), Nemotron embeddings, InternVL2.5 video captions, Whisper transcripts |
 | `audiocaption` | CLAP-Cap audio captions, Claude Haiku LLM rewrite |
+| `topo_omni` | Omni3B / TopoOmni thinker hidden states + cortical sheet, unimodal-fix + scramble extraction |
+| `cav-mae-sync` | CAV-MAE-sync embeddings + scramble control (requires a separate clone of the official repo — see `notebooks/feature_extraction/cav_mae_sync_environment.yml`) |

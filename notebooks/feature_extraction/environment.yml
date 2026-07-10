@@ -9,11 +9,20 @@ dependencies:
   - tqdm>=4.66
   - pip
   - pip:
-    - torch>=2.1
-    - torchaudio>=2.1
-    - transformers>=4.40
+    - torch>=2.10
+    - torchaudio>=2.10
+    - torchvision>=0.25
+    - torchcodec>=0.10
+    - transformers>=5.0
     - natsort>=8.4
     - huggingface-hub>=0.20
     - moviepy>=1.0
     - soundfile>=0.12
     - safetensors>=0.4
+    # Qwen2.5-Omni-3B-lineage models (omni3b/topoomni unimodal+scramble
+    # extraction reused from this env, Move 1/3/5) and video-chunk decoding
+    # for PE-AV/nemotron/dummy-modality extraction:
+    - qwen-omni-utils
+    - qwen-vl-utils
+    - decord
+    - av

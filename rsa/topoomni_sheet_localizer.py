@@ -106,6 +106,13 @@ def parse_args():
     p.add_argument("--n-max", type=int, default=375, dest="n_max")
     p.add_argument("--top-pct-units", type=float, default=1.0, dest="top_pct_units",
                    help="Fraction of highest-|t| sheet units to read out as the RSA embedding.")
+    p.add_argument("--output-tag", default="", dest="output_tag",
+                   help="Suffix appended to output model names/summary json so multiple "
+                        "driving-embedding runs (e.g. text vs av vs clsav_from_a/v) don't "
+                        "overwrite each other. Empty (default) preserves the original "
+                        "unsuffixed topoomni_auditory_localizer/topoomni_integration_localizer "
+                        "naming for backward compatibility with the text-driven run already "
+                        "in the report.")
     return p.parse_args()
 
 
@@ -257,6 +264,8 @@ def main():
         "cluster_sizes": sizes,
     }
 
+    tag_suffix = f"_{args.output_tag}" if args.output_tag else ""
+
     # ── (a) Positive control: auditory-selective cluster ─────────────────────
     log.info("=" * 70)
     log.info("(a) Positive control: identify auditory-selective terminal cluster")
@@ -266,7 +275,7 @@ def main():
              f"(overall mean={audio_drive.mean():.4f})")
     units_aud = top_units_for_cluster(bins_aud, sheet_av, args.top_pct_units)
     pattern_aud = sheet_av[:, units_aud]
-    aud_path = save_localizer_embedding(pattern_aud, "topoomni_auditory_localizer",
+    aud_path = save_localizer_embedding(pattern_aud, f"topoomni_auditory_localizer{tag_suffix}",
                                         args.embeddings_dir, args.bin_sec, args.skip_sec)
     summary["auditory_localizer"] = {
         "cluster_size": int(len(bins_aud)), "n_units_readout": int(len(units_aud)),
@@ -284,7 +293,7 @@ def main():
              f"(overall mean={integration_drive.mean():.4f})")
     units_int = top_units_for_cluster(bins_int, sheet_av, args.top_pct_units)
     pattern_int = sheet_av[:, units_int]
-    int_path = save_localizer_embedding(pattern_int, "topoomni_integration_localizer",
+    int_path = save_localizer_embedding(pattern_int, f"topoomni_integration_localizer{tag_suffix}",
                                         args.embeddings_dir, args.bin_sec, args.skip_sec)
     summary["integration_localizer"] = {
         "cluster_size": int(len(bins_int)), "n_units_readout": int(len(units_int)),
@@ -295,7 +304,7 @@ def main():
         "unit_overlap_with_auditory_readout": int(len(np.intersect1d(units_aud, units_int))),
     }
 
-    out_json = Path(args.embeddings_dir) / "_topoomni_localizer_cluster_summary.json"
+    out_json = Path(args.embeddings_dir) / f"_topoomni_localizer_cluster_summary{tag_suffix}.json"
     json.dump(summary, open(out_json, "w"), indent=2)
     log.info(f"Saved cluster summary: {out_json}")
     log.info("Done. Next: run rsa/searchlight.py with --model topoomni_auditory_localizer "

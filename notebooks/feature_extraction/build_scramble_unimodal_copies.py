@@ -30,8 +30,12 @@ from natsort import natsorted
 DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
 EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
 BIN_SEC, SKIP_SEC = 5.0, 5.0
-TARGET_LAYERS = [9, 18, 27]
-MODEL_TAGS = ["omni3b", "topoomni"]
+# {tag: [layers]} -- nemotron has an extra layer 36 (its true final/native layer).
+MODEL_TAG_LAYERS = {
+    "omni3b": [9, 18, 27],
+    "topoomni": [9, 18, 27],
+    "nemotron": [9, 18, 27, 36],
+}
 SCRAMBLE_SEED = 42
 
 
@@ -51,8 +55,8 @@ def main():
 
     out_tag = f"bin{dur_int}s_skip{skip_int}s"
 
-    for tag in MODEL_TAGS:
-        for layer in TARGET_LAYERS:
+    for tag, layers in MODEL_TAG_LAYERS.items():
+        for layer in layers:
             base = f"{tag}_layer{layer}"
             a_path = EMBEDDINGS_BASE / base / out_tag / f"{base}_a.npy"
             v_path = EMBEDDINGS_BASE / base / out_tag / f"{base}_v.npy"

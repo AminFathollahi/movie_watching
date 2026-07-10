@@ -149,6 +149,26 @@ MODELS: dict[str, dict] = {
         "description": "Topo-Omni cortical sheet, layer 18, last-token joint-AV readout"},
     "topoomni_layer27_sheet_lasttoken": {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni cortical sheet, layer 27, last-token joint-AV readout"},
+    # ── nvidia/omni-embed-nemotron-3b ("NV-QwenOmni-Embed-3B-v1") -- a third
+    # member of the Qwen2.5-Omni-3B-Thinker lineage (same base as omni3b/
+    # topoomni above), but purpose-built as a contrastively-trained retrieval
+    # EMBEDDING model: Talker removed, self-attention switched from causal to
+    # BIDIRECTIONAL, and audio/video encoded as separate (non-interleaved)
+    # streams even when jointly present. Unlike omni3b/topoomni, its official
+    # "_av" readout (mean-pool over the full joint-forward-pass sequence,
+    # L2-normalized) is a genuine joint summary from the start -- no (a+v)/2
+    # circularity bug to fix (see nemotron_extract_unimodal.py). Layer 36 is
+    # this model's TRUE FINAL layer / native trained embedding output;
+    # layers 9/18/27 are supplementary depth-sweep probes for comparability
+    # with omni3b/topoomni, not part of this checkpoint's training objective.
+    "nemotron_layer9": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 9 — early AV fusion (depth-sweep probe)"},
+    "nemotron_layer18": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 18 — mid AV fusion (depth-sweep probe)"},
+    "nemotron_layer27": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 27 — late AV fusion (depth-sweep probe)"},
+    "nemotron_layer36": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 36 (true final layer) — native contrastively-trained AV retrieval embedding"},
     # ── Move 3: temporal-scramble binding control. Each bin's video paired with
     # a randomly permuted bin's audio (fixed seed) before extraction -- breaks
     # correct A-V temporal binding while preserving each modality's marginal
@@ -180,6 +200,14 @@ MODELS: dict[str, dict] = {
         "description": "Topo-Omni thinker hidden state, layer 18, temporal-scramble binding control"},
     "topoomni_layer27_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 27, temporal-scramble binding control"},
+    "nemotron_layer9_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 9, temporal-scramble binding control"},
+    "nemotron_layer18_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 18, temporal-scramble binding control"},
+    "nemotron_layer27_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 27, temporal-scramble binding control"},
+    "nemotron_layer36_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 36 (native embedding), temporal-scramble binding control"},
     # "_lasttoken_avscramble": av-only (last-token joint readout under scrambled
     # pairing); nuisance for its integration run reuses the corresponding
     # "_avscramble" model's reindexed a/v (see _lasttoken_integration_run below).
@@ -383,6 +411,12 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer9":    _own_unimodal_integration_run("topoomni_layer9"),
     "integration_topoomni_layer18":   _own_unimodal_integration_run("topoomni_layer18"),
     "integration_topoomni_layer27":   _own_unimodal_integration_run("topoomni_layer27"),
+    # nemotron (omni-embed-nemotron-3b) -- genuinely joint "_av" from the start
+    # (no (a+v)/2 placeholder ever existed), so no "_lasttoken" variant is needed.
+    "integration_nemotron_layer9":    _own_unimodal_integration_run("nemotron_layer9"),
+    "integration_nemotron_layer18":   _own_unimodal_integration_run("nemotron_layer18"),
+    "integration_nemotron_layer27":   _own_unimodal_integration_run("nemotron_layer27"),
+    "integration_nemotron_layer36":   _own_unimodal_integration_run("nemotron_layer36"),
     # ── "_lasttoken" alternative: genuinely emergent joint-AV readout (not a
     # fixed function of a/v), regressed against the corresponding base model's
     # real (separate-pass) unimodal streams. Requires the Move-1/4 unimodal
@@ -406,6 +440,10 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer9_avscramble":  _own_unimodal_integration_run("topoomni_layer9_avscramble"),
     "integration_topoomni_layer18_avscramble": _own_unimodal_integration_run("topoomni_layer18_avscramble"),
     "integration_topoomni_layer27_avscramble": _own_unimodal_integration_run("topoomni_layer27_avscramble"),
+    "integration_nemotron_layer9_avscramble":  _own_unimodal_integration_run("nemotron_layer9_avscramble"),
+    "integration_nemotron_layer18_avscramble": _own_unimodal_integration_run("nemotron_layer18_avscramble"),
+    "integration_nemotron_layer27_avscramble": _own_unimodal_integration_run("nemotron_layer27_avscramble"),
+    "integration_nemotron_layer36_avscramble": _own_unimodal_integration_run("nemotron_layer36_avscramble"),
     "integration_omni3b_layer9_lasttoken_avscramble":    _lasttoken_scramble_integration_run("omni3b_layer9"),
     "integration_omni3b_layer18_lasttoken_avscramble":   _lasttoken_scramble_integration_run("omni3b_layer18"),
     "integration_omni3b_layer27_lasttoken_avscramble":   _lasttoken_scramble_integration_run("omni3b_layer27"),

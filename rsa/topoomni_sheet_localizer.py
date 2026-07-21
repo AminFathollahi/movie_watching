@@ -30,21 +30,18 @@ Cross-model independence (avoids using a model to validate itself):
     joint-condition cortical sheet -- this is what Alg. 1 actually scores
     against, matching the paper).
 
-Two localizers (both use the SAME clustering + scoring machinery; they
-differ only in how the winning terminal cluster is IDENTIFIED post-hoc,
-also via independent signals, matching how the paper post-hoc identifies
-its "faces" cluster by inspecting cluster content):
-  (a) POSITIVE CONTROL -- auditory/voice-selective cluster. Among the
-      terminal clusters from Alg. 1, pick the one whose member bins have the
-      highest mean AudioMAE per-bin L2-norm (an independent, non-topoomni
-      audio-content proxy). Validates the pipeline: should land on
-      auditory/STG cortex.
-  (b) AV-INTEGRATION LOCALIZER. Among the SAME terminal clusters, pick the
-      one whose member bins have the highest mean per-bin norm of the Move-1
-      interaction residual (rsa.multimodal_decomposition.compute_interaction_residual_cv
-      on PE-AV-small-16-frame's av/a/v -- the already-validated, non-degenerate
-      fusion signal from Move 1) -- an independent "how much genuine AV
-      fusion content is in this bin" proxy that does not depend on topoomni.
+POSITIVE-CONTROL (speech) LOCALIZER. Among the terminal clusters from Alg. 1,
+pick the one whose member bins have the highest mean whisper_speech_proxy
+per-bin drive (an independent, non-topoomni audio-content proxy derived from
+Whisper-large-v3; an earlier AudioMAE-based proxy showed no usable in-cluster/
+overall separation and was replaced). Validates the pipeline: should land on
+auditory/STG cortex.
+
+RETIRED: this script used to also have an "AV-integration localizer" branch
+(pick the terminal cluster with the highest mean Move-1 interaction-residual
+drive). That branch has been dropped in favor of
+rsa/topoomni_av_separability_localizer.py's direct, no-external-proxy
+condition-enrichment test, which was built specifically to replace it.
 
 For each winning cluster, the RSA "model embedding" fed to
 rsa/searchlight.py is built from the TOP-|t| cortical-sheet units that drove
@@ -58,9 +55,9 @@ degenerates the RDM).
 Usage
 -----
 python rsa/topoomni_sheet_localizer.py \\
-    --sheet-model topoomni_layer18_sheet \\
+    --sheet-model topoomni_layer18_sheet_mp \\
     --cluster-embedding-model pe-av-small-16-frame --cluster-embedding-modality event_t \\
-    --auditory-regressor-model audiomae \\
+    --auditory-regressor-model whisper_speech_proxy \\
     --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \\
     --bin-sec 5.0 --skip-sec 5.0 --n-min 10 --n-max 375
 """
@@ -77,7 +74,7 @@ from scipy.stats import ttest_ind
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from rsa.multimodal_decomposition import compute_interaction_residual_cv
+from rsa.localizer_naming import base_name as loc_base_name, driver_tag, model_tag, summary_json_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -86,33 +83,35 @@ log = logging.getLogger(__name__)
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--sheet-model", required=True, help="e.g. topoomni_layer18_sheet")
+    p.add_argument("--sheet-model", required=True, help="e.g. topoomni_layer18_sheet_mp")
     p.add_argument("--cluster-embedding-model", default="pe-av-small-16-frame",
                    dest="cluster_embedding_model",
                    help="INDEPENDENT model whose embedding drives Ward's-linkage "
                         "stimulus clustering (must not be --sheet-model's own family).")
     p.add_argument("--cluster-embedding-modality", default="event_t",
                    dest="cluster_embedding_modality")
-    p.add_argument("--auditory-regressor-model", default="audiomae",
+    p.add_argument("--auditory-regressor-model", default="whisper_speech_proxy",
                    dest="auditory_regressor_model")
-    p.add_argument("--integration-model", default="pe-av-small-16-frame",
-                   dest="integration_model",
-                   help="Native-AV model whose Move-1 interaction residual (av/a/v) "
-                        "identifies the AV-integration terminal cluster.")
     p.add_argument("--embeddings-dir", required=True, dest="embeddings_dir")
     p.add_argument("--bin-sec", type=float, default=5.0)
     p.add_argument("--skip-sec", type=float, default=5.0)
     p.add_argument("--n-min", type=int, default=10, dest="n_min")
     p.add_argument("--n-max", type=int, default=375, dest="n_max")
     p.add_argument("--top-pct-units", type=float, default=1.0, dest="top_pct_units",
-                   help="Fraction of highest-|t| sheet units to read out as the RSA embedding.")
-    p.add_argument("--output-tag", default="", dest="output_tag",
-                   help="Suffix appended to output model names/summary json so multiple "
-                        "driving-embedding runs (e.g. text vs av vs clsav_from_a/v) don't "
-                        "overwrite each other. Empty (default) preserves the original "
-                        "unsuffixed topoomni_auditory_localizer/topoomni_integration_localizer "
-                        "naming for backward compatibility with the text-driven run already "
-                        "in the report.")
+                   help="Fraction of highest-|t| sheet units to read out as the RSA embedding "
+                        "(only used when --unit-selection-mode=topk).")
+    p.add_argument("--unit-selection-mode", default="topk", choices=["topk", "fdr"],
+                   dest="unit_selection_mode",
+                   help="How to select readout cortical-sheet units per cluster: 'topk' "
+                        "(top --top-pct-units%% by |t| magnitude, default) or 'fdr' "
+                        "(TopoOmni-paper-exact Benjamini-Hochberg FDR gate at --fdr-q).")
+    p.add_argument("--fdr-q", type=float, default=0.001, dest="fdr_q",
+                   help="BH-FDR q-value for --unit-selection-mode=fdr.")
+    p.add_argument("--p-threshold", type=float, default=1e-4, dest="p_threshold",
+                    help="Save an individual readout for every cluster with p_value below this "
+                         "(in addition to the single 'winning' cluster), plus one combined "
+                         "readout unioning all of their top units -- same convention as "
+                         "topoomni_av_separability_localizer.py.")
     return p.parse_args()
 
 
@@ -182,6 +181,29 @@ def ward_cluster_and_score(stimulus_emb: np.ndarray, sheet: np.ndarray,
 # Cluster identification via independent proxies
 # =============================================================================
 
+def cluster_reports_for_proxy(clusters: list[np.ndarray], proxy: np.ndarray) -> list[dict]:
+    """Score every terminal cluster against `proxy` (one-sided Welch's t,
+    alternative='greater' -- cluster ELEVATED relative to the rest, matching
+    what identify_cluster_by_proxy's argmax-t winner already implicitly
+    selects for). Sorted by ascending p-value. Used to find not just the
+    single top-1 winner but every cluster that survives a significance
+    threshold, so each can get its own brain-map readout. Depleted clusters
+    (lower proxy than baseline) are NOT candidates here -- they are not
+    "the auditory cluster" in any sense, just confidently not it."""
+    n_total = len(proxy)
+    reports = []
+    for ci, c in enumerate(clusters):
+        mask = np.zeros(n_total, dtype=bool)
+        mask[c] = True
+        t, p = ttest_ind(proxy[mask], proxy[~mask], equal_var=False, alternative="greater")
+        t = float(t) if np.isfinite(t) else -np.inf
+        p = float(p) if np.isfinite(p) else 1.0
+        reports.append(dict(cluster_idx=ci, size=int(len(c)), t_value=t, p_value=p,
+                             mean_in=float(proxy[mask].mean()), mean_out=float(proxy[~mask].mean())))
+    reports.sort(key=lambda r: r["p_value"])
+    return reports
+
+
 def identify_cluster_by_proxy(clusters: list[np.ndarray], proxy: np.ndarray) -> tuple[int, np.ndarray]:
     """Pick the cluster most significantly ELEVATED in `proxy` relative to the
     rest of the bins (one-sided Welch's t, cluster vs. everything else) --
@@ -200,15 +222,54 @@ def identify_cluster_by_proxy(clusters: list[np.ndarray], proxy: np.ndarray) -> 
     return winner, clusters[winner]
 
 
-def top_units_for_cluster(member_bins: np.ndarray, sheet: np.ndarray, top_pct: float) -> np.ndarray:
-    """Re-run the Welch's t-test that scored this cluster and return the indices
-    of the top `top_pct`%% |t|-value cortical-sheet units."""
+def _bh_fdr_mask(p_vals: np.ndarray, q: float) -> np.ndarray:
+    """Benjamini-Hochberg FDR gate at level `q`. Returns a boolean mask over
+    p_vals of the units that survive."""
+    m = len(p_vals)
+    order = np.argsort(p_vals)
+    sorted_p = p_vals[order]
+    thresh_line = q * (np.arange(1, m + 1) / m)
+    passing = sorted_p <= thresh_line
+    mask = np.zeros(m, dtype=bool)
+    if passing.any():
+        k = np.max(np.where(passing)[0])  # largest index satisfying BH condition
+        mask[order[:k + 1]] = True
+    return mask
+
+
+def top_units_for_cluster(member_bins: np.ndarray, sheet: np.ndarray, top_pct: float,
+                           mode: str = "topk", fdr_q: float = 0.001) -> np.ndarray:
+    """Re-run the Welch's t-test that scored this cluster and return the
+    readout cortical-sheet units, in one of two selectable modes:
+      - "topk" (default): the top `top_pct`%% highest-|t| units (magnitude-based).
+      - "fdr": every unit whose one-sided Welch's-t (cluster-elevated,
+        alternative='greater') p-value survives a Benjamini-Hochberg FDR gate
+        at `fdr_q` (TopoOmni-paper-exact selection criterion, Sec 4.7.2) --
+        falls back to the top-2 |t| units (with a warning) if fewer than 2
+        units survive, since a single-feature-per-bin embedding degenerates
+        the RDM used downstream."""
     mask = np.zeros(sheet.shape[0], dtype=bool)
     mask[member_bins] = True
-    t_vals, _ = ttest_ind(sheet[mask], sheet[~mask], axis=0, equal_var=False)
+    # One-sided (greater): p_vals gates on units where the cluster is ELEVATED
+    # vs. the rest, matching the paper's Alg. 1 criterion. The t statistic is
+    # unchanged by `alternative`, so the |t|-based topk branch is unaffected.
+    t_vals, p_vals = ttest_ind(sheet[mask], sheet[~mask], axis=0, equal_var=False,
+                               alternative="greater")
     t_vals = np.nan_to_num(t_vals)
-    n_units = max(1, int(np.ceil(sheet.shape[1] * top_pct / 100.0)))
-    return np.argsort(-np.abs(t_vals))[:n_units]
+    p_vals = np.nan_to_num(p_vals, nan=1.0)
+    if mode == "topk":
+        n_units = max(1, int(np.ceil(sheet.shape[1] * top_pct / 100.0)))
+        return np.argsort(-np.abs(t_vals))[:n_units]
+    elif mode == "fdr":
+        sig_mask = _bh_fdr_mask(p_vals, fdr_q)
+        n_sig = int(sig_mask.sum())
+        if n_sig < 2:
+            log.warning(f"  FDR-gated selection (q={fdr_q:.1e}) found only {n_sig} unit(s) "
+                        f"-- falling back to top-2 |t| units to keep the RDM non-degenerate.")
+            return np.argsort(-np.abs(t_vals))[:2]
+        return np.where(sig_mask)[0]
+    else:
+        raise ValueError(f"Unknown unit-selection mode: {mode!r}")
 
 
 def save_localizer_embedding(pattern: np.ndarray, out_model_name: str,
@@ -219,6 +280,53 @@ def save_localizer_embedding(pattern: np.ndarray, out_model_name: str,
     np.save(out_path, pattern.astype(np.float32))
     log.info(f"  Saved localizer embedding: {out_path}  shape={pattern.shape}")
     return out_path
+
+
+def save_significant_cluster_readouts(reports: list[dict], clusters: list[np.ndarray],
+                                       sheet_av: np.ndarray, base_name: str, p_threshold: float,
+                                       embeddings_dir: str, bin_sec: float, skip_sec: float,
+                                       top_pct_units: float, unit_selection_mode: str = "topk",
+                                       fdr_q: float = 0.001) -> dict:
+    """Save one readout per cluster with p_value < p_threshold (name:
+    {base_name}_c{ci}), plus one combined readout unioning all of their
+    top units (name: {base_name}_all). Mirrors
+    topoomni_av_separability_localizer.py's per-cluster/combined convention,
+    so every localizer produces a full multi-cluster brain-mappable set
+    instead of only the single top-1 winner."""
+    sig = [r for r in reports if r["p_value"] < p_threshold]
+    log.info(f"  {len(sig)}/{len(reports)} clusters have p < {p_threshold:.1e} "
+             f"-- saving individual + combined readouts")
+    per_cluster_paths = []
+    union_units = set()
+    for r in sig:
+        ci = r["cluster_idx"]
+        c_units = top_units_for_cluster(clusters[ci], sheet_av, top_pct_units,
+                                         mode=unit_selection_mode, fdr_q=fdr_q)
+        union_units.update(int(u) for u in c_units)
+        c_pattern = sheet_av[:, c_units]
+        c_model_name = f"{base_name}_c{ci}"
+        c_path = save_localizer_embedding(c_pattern, c_model_name, embeddings_dir, bin_sec, skip_sec)
+        per_cluster_paths.append(str(c_path))
+        log.info(f"    cluster {ci:>3} (size={r['size']:>4} t={r['t_value']:.3f} "
+                 f"p={r['p_value']:.2e}): {c_path.name}  shape={c_pattern.shape}")
+
+    union_sorted = np.array(sorted(union_units)) if union_units else np.array([], dtype=int)
+    if len(union_sorted) == 0:
+        log.warning("  No significant clusters -> union of readout units is empty. "
+                    "Skipping combined '_all' embedding (would be a 0-feature .npy).")
+        combined_path = None
+    else:
+        combined_pattern = sheet_av[:, union_sorted]
+        combined_name = f"{base_name}_all"
+        combined_path = save_localizer_embedding(combined_pattern, combined_name, embeddings_dir, bin_sec, skip_sec)
+
+    return {
+        "p_threshold": p_threshold,
+        "significant_clusters": sig,
+        "per_cluster_embedding_paths": per_cluster_paths,
+        "combined_embedding_path": str(combined_path) if combined_path is not None else None,
+        "combined_n_units": int(len(union_sorted)),
+    }
 
 
 def main():
@@ -246,15 +354,6 @@ def main():
     audio_drive = np.linalg.norm(
         np.load(reg_dir / f"{args.auditory_regressor_model}_a.npy").astype(np.float64), axis=1)
 
-    int_dir = _emb_dir(args.embeddings_dir, args.integration_model, args.bin_sec, args.skip_sec)
-    a_emb  = np.load(int_dir / f"{args.integration_model}_a.npy").astype(np.float64)
-    v_emb  = np.load(int_dir / f"{args.integration_model}_v.npy").astype(np.float64)
-    av_emb = np.load(int_dir / f"{args.integration_model}_av.npy").astype(np.float64)
-    R, ms_score, best_alpha = compute_interaction_residual_cv(av_emb, [a_emb, v_emb])
-    integration_drive = np.linalg.norm(R, axis=1)
-    log.info(f"Integration-drive proxy from {args.integration_model}: "
-             f"alpha={best_alpha:.2e} ms_score={ms_score:.4f}")
-
     summary = {
         "sheet_model": args.sheet_model,
         "cluster_embedding": f"{args.cluster_embedding_model}_{args.cluster_embedding_modality}",
@@ -262,9 +361,15 @@ def main():
         "n_min": args.n_min, "n_max": args.n_max,
         "n_terminal_clusters": len(clusters),
         "cluster_sizes": sizes,
+        "unit_selection_mode": args.unit_selection_mode,
+        "fdr_q": args.fdr_q if args.unit_selection_mode == "fdr" else None,
     }
 
-    tag_suffix = f"_{args.output_tag}" if args.output_tag else ""
+    driver = driver_tag(args.cluster_embedding_model, args.cluster_embedding_modality)
+    sheet = model_tag(args.sheet_model)
+    suffix = "_fdr" if args.unit_selection_mode == "fdr" else ""
+    base_name_aud = loc_base_name("speech", driver, sheet, suffix)
+    log.info(f"Naming: driver={driver}  sheet={sheet}  -> {base_name_aud}")
 
     # ── (a) Positive control: auditory-selective cluster ─────────────────────
     log.info("=" * 70)
@@ -273,43 +378,54 @@ def main():
     log.info(f"  Winning cluster #{idx_aud}: {len(bins_aud)} bins  "
              f"mean_audio_drive={audio_drive[bins_aud].mean():.4f} "
              f"(overall mean={audio_drive.mean():.4f})")
-    units_aud = top_units_for_cluster(bins_aud, sheet_av, args.top_pct_units)
+    units_aud = top_units_for_cluster(bins_aud, sheet_av, args.top_pct_units,
+                                       mode=args.unit_selection_mode, fdr_q=args.fdr_q)
     pattern_aud = sheet_av[:, units_aud]
-    aud_path = save_localizer_embedding(pattern_aud, f"topoomni_auditory_localizer{tag_suffix}",
+    aud_path = save_localizer_embedding(pattern_aud, base_name_aud,
                                         args.embeddings_dir, args.bin_sec, args.skip_sec)
-    summary["auditory_localizer"] = {
+    summary["speech_localizer"] = {
         "cluster_size": int(len(bins_aud)), "n_units_readout": int(len(units_aud)),
         "mean_audio_drive_in_cluster": float(audio_drive[bins_aud].mean()),
         "mean_audio_drive_overall": float(audio_drive.mean()),
         "embedding_path": str(aud_path),
     }
+    reports_aud = cluster_reports_for_proxy(clusters, audio_drive)
+    summary["speech_localizer"].update(save_significant_cluster_readouts(
+        reports_aud, clusters, sheet_av, base_name_aud,
+        args.p_threshold, args.embeddings_dir, args.bin_sec, args.skip_sec, args.top_pct_units,
+        unit_selection_mode=args.unit_selection_mode, fdr_q=args.fdr_q))
 
-    # ── (b) AV-integration localizer ─────────────────────────────────────────
-    log.info("=" * 70)
-    log.info("(b) AV-integration localizer: identify integration-selective terminal cluster")
-    idx_int, bins_int = identify_cluster_by_proxy(clusters, integration_drive)
-    log.info(f"  Winning cluster #{idx_int}: {len(bins_int)} bins  "
-             f"mean_integration_drive={integration_drive[bins_int].mean():.4f} "
-             f"(overall mean={integration_drive.mean():.4f})")
-    units_int = top_units_for_cluster(bins_int, sheet_av, args.top_pct_units)
-    pattern_int = sheet_av[:, units_int]
-    int_path = save_localizer_embedding(pattern_int, f"topoomni_integration_localizer{tag_suffix}",
-                                        args.embeddings_dir, args.bin_sec, args.skip_sec)
-    summary["integration_localizer"] = {
-        "cluster_size": int(len(bins_int)), "n_units_readout": int(len(units_int)),
-        "mean_integration_drive_in_cluster": float(integration_drive[bins_int].mean()),
-        "mean_integration_drive_overall": float(integration_drive.mean()),
-        "embedding_path": str(int_path),
-        "same_cluster_as_auditory": bool(idx_int == idx_aud),
-        "unit_overlap_with_auditory_readout": int(len(np.intersect1d(units_aud, units_int))),
-    }
-
-    out_json = Path(args.embeddings_dir) / f"_topoomni_localizer_cluster_summary{tag_suffix}.json"
+    out_json = Path(args.embeddings_dir) / summary_json_name("speech", driver, sheet, suffix)
     json.dump(summary, open(out_json, "w"), indent=2)
     log.info(f"Saved cluster summary: {out_json}")
-    log.info("Done. Next: run rsa/searchlight.py with --model topoomni_auditory_localizer "
-             "and --model topoomni_integration_localizer, --modality av.")
+    log.info(f"Done. Next: run rsa/searchlight.py with --model {base_name_aud}, --modality av.")
+
+
+def _selftest_unit_selection():
+    """Sanity check for the two --unit-selection-mode branches: 'topk' returns
+    exactly the requested count; 'fdr' returns only units whose p-value
+    survives BH-FDR and falls back to 2 units when none/one do."""
+    rng = np.random.default_rng(0)
+    n_bins, n_units = 200, 50
+    sheet = rng.normal(size=(n_bins, n_units))
+    member_bins = np.arange(20)
+    sheet[member_bins, :5] += 5.0  # 5 units strongly separate this cluster
+
+    topk = top_units_for_cluster(member_bins, sheet, top_pct=10.0, mode="topk")
+    assert len(topk) == 5, f"expected ceil(50*0.10)=5 units, got {len(topk)}"
+
+    fdr_units = top_units_for_cluster(member_bins, sheet, top_pct=10.0, mode="fdr", fdr_q=0.001)
+    assert set(range(5)).issubset(set(fdr_units.tolist())), "the 5 true signal units must survive FDR"
+    assert len(fdr_units) < n_units, "FDR gate should not pass every unit on this synthetic case"
+
+    flat_sheet = rng.normal(size=(n_bins, n_units))  # no signal at all
+    fallback_units = top_units_for_cluster(member_bins, flat_sheet, top_pct=10.0, mode="fdr", fdr_q=0.001)
+    assert len(fallback_units) == 2, "with no signal, FDR mode must fall back to top-2 |t| units"
+    print("topoomni_sheet_localizer self-test OK")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
+        _selftest_unit_selection()
+    else:
+        main()

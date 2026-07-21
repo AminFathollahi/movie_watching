@@ -1,5 +1,5 @@
 """
-notebooks/feature_extraction/omni3b_extract_unimodal.py
+notebooks/feature_extraction/omni3b_extract_intact.py
 ==========================================================
 Fixes a methodological bug found while implementing Move 1 (best-additive AV
 integration contrast) of the AV-integration extension: omni3b.ipynb's
@@ -22,7 +22,7 @@ so the integration residual (av regressed on [a_new, v_new]) is no longer
 tautological.
 
 ADDITIONALLY: saves a genuinely emergent joint-AV alternative,
-"{tag}_layer{N}_lasttoken_av.npy" -- the hidden state at the LAST sequence
+"{tag}_layer{N}_lt_av.npy" -- the hidden state at the LAST sequence
 position of the SAME joint (audio+video) forward pass used for the original
 "_av", rather than a masked-position average. The last position has
 attended, via self-attention, over the entire preceding multimodal context,
@@ -35,7 +35,7 @@ for comparison.
 
 Run with:
     conda run --no-capture-output -n avtransformer \
-        python "notebooks/feature_extraction/omni3b_extract_unimodal.py"
+        python "notebooks/feature_extraction/omni3b_extract_intact.py"
 """
 
 import gc
@@ -279,7 +279,7 @@ def main():
             print(f"  {name}: {err}")
 
     for idx in TARGET_LAYERS:
-        model_name = f"{MODEL_TAG}_layer{idx}"
+        model_name = f"{MODEL_TAG}_layer{idx}_mp"
         out_dir = EMBEDDINGS_BASE / model_name / f"bin{dur_int}s_skip{skip_int}s"
         out_dir.mkdir(parents=True, exist_ok=True)
         arr_a = np.array(results_a[idx], dtype=np.float32)
@@ -288,7 +288,7 @@ def main():
         np.save(out_dir / f"{model_name}_v.npy", arr_v)
         print(f"[{model_name}] saved unimodal _a={arr_a.shape} _v={arr_v.shape} -> {out_dir}")
 
-        lt_model_name = f"{MODEL_TAG}_layer{idx}_lasttoken"
+        lt_model_name = f"{MODEL_TAG}_layer{idx}_lt"
         lt_out_dir = EMBEDDINGS_BASE / lt_model_name / f"bin{dur_int}s_skip{skip_int}s"
         lt_out_dir.mkdir(parents=True, exist_ok=True)
         arr_lt = np.array(results_lt[idx], dtype=np.float32)

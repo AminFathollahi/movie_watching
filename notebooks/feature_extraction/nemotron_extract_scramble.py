@@ -6,7 +6,7 @@ Move 3 (temporal-scramble binding control) for nvidia/omni-embed-nemotron-3b
 
 Unimodal "_a"/"_v" embeddings do NOT need re-extraction here: since they come
 from genuinely separate forward passes with no cross-modal tokens present
-(nemotron_extract_unimodal.py), they cannot depend on which audio was paired
+(nemotron_extract_intact.py), they cannot depend on which audio was paired
 with which video, and are reindexed (not re-inferred) by
 build_scramble_unimodal_copies.py. Only the JOINT (audio+video) forward pass
 depends on pairing, so this script re-runs only that pass, with video[i]
@@ -15,6 +15,11 @@ convention to every other scramble script in this repo).
 
 Layers: 9, 18, 27, 36 (36 = the true final layer / native trained embedding).
 
+Also saves a last-token variant (nemotron_layer{N}_lt_avscramble),
+matching TopoOmni's own ad-hoc probe pooling (topo-discover/
+extract_video_embeddings.py: hidden_states[-1][:, -1, :]) as an alternative
+driver to the mean-pool default -- see nemotron_extract_intact.py.
+
 Run with:
     conda run --no-capture-output -n avtransformer \
         python "notebooks/feature_extraction/nemotron_extract_scramble.py"
@@ -22,6 +27,17 @@ Run with:
 
 import gc
 import os
+
+# Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
+# proxy config gets locked in at import time, so stripping these afterward
+# has no effect and local_files_only lookups fail with a bogus "couldn't
+# connect" error even though the model is fully cached locally.
+os.environ["HF_HOME"] = "/home/amin/hf_models"
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
+for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy",
+           "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+    os.environ.pop(_v, None)
+
 from pathlib import Path
 
 import av
@@ -33,11 +49,6 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoProcessor
 from qwen_omni_utils import process_mm_info
 from natsort import natsorted
-
-os.environ["HF_HOME"] = "/home/amin/hf_models"
-os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
-for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy"):
-    os.environ.pop(_v, None)
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_PATH      = "nvidia/omni-embed-nemotron-3b"
@@ -102,17 +113,21 @@ def main():
         hidden_states = out.hidden_states
         attention_mask = batch["attention_mask"]
 
-        pooled = {}
+        pooled, lasttoken = {}, {}
         for idx in target_layers:
             hs = hidden_states[idx].float()
             masked = hs.masked_fill(~attention_mask[..., None].bool(), 0.0)
             p = masked.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
             p = F.normalize(p, dim=-1)
             pooled[idx] = p[0].cpu().numpy()
+            # Matches TopoOmni's own ad-hoc probe pooling (last real token,
+            # L2-normalized) -- see nemotron_extract_intact.py.
+            lt = F.normalize(hs[:, -1, :], dim=-1)
+            lasttoken[idx] = lt[0].cpu().numpy()
 
         del batch, out, hidden_states
         torch.cuda.empty_cache()
-        return pooled
+        return pooled, lasttoken
 
     # ── Segment list + scrambled pairing (identical convention to omni3b_extract_scramble.py) ──
     dur_int, skip_int = int(BIN_SEC), int(SKIP_SEC)
@@ -137,17 +152,20 @@ def main():
         print(f"NEMOTRON_SCRAMBLE_LIMIT set -- truncated to {n} segments (smoke test).")
 
     results_av = {idx: [] for idx in TARGET_LAYERS}
+    results_av_lt = {idx: [] for idx in TARGET_LAYERS}
     failed = []
 
     for vp, ap in tqdm(list(zip(all_segs, audio_paths_scrambled)), desc="nemotron scrambled joint extraction"):
         try:
-            pooled_av = extract_joint(vp, ap)
+            pooled_av, lt_av = extract_joint(vp, ap)
             for idx in TARGET_LAYERS:
                 results_av[idx].append(pooled_av[idx])
+                results_av_lt[idx].append(lt_av[idx])
         except Exception as e:
             failed.append((vp.name, repr(e)))
             for idx in TARGET_LAYERS:
                 results_av[idx].append(np.zeros(2048, dtype=np.float32))
+                results_av_lt[idx].append(np.zeros(2048, dtype=np.float32))
 
     if failed:
         print(f"\n{len(failed)} segments FAILED (filled with zeros):")
@@ -155,12 +173,19 @@ def main():
             print(f"  {name}: {err}")
 
     for idx in TARGET_LAYERS:
-        av_model_name = f"{MODEL_TAG}_layer{idx}_avscramble"
+        av_model_name = f"{MODEL_TAG}_layer{idx}_mp_avscramble"
         av_out_dir = EMBEDDINGS_BASE / av_model_name / f"bin{dur_int}s_skip{skip_int}s"
         av_out_dir.mkdir(parents=True, exist_ok=True)
         arr_av = np.array(results_av[idx], dtype=np.float32)
         np.save(av_out_dir / f"{av_model_name}_av.npy", arr_av)
         print(f"[{av_model_name}] saved scrambled av={arr_av.shape} -> {av_out_dir}")
+
+        lt_model_name = f"{MODEL_TAG}_layer{idx}_lt_avscramble"
+        lt_out_dir = EMBEDDINGS_BASE / lt_model_name / f"bin{dur_int}s_skip{skip_int}s"
+        lt_out_dir.mkdir(parents=True, exist_ok=True)
+        arr_av_lt = np.array(results_av_lt[idx], dtype=np.float32)
+        np.save(lt_out_dir / f"{lt_model_name}_av.npy", arr_av_lt)
+        print(f"[{lt_model_name}] saved scrambled lasttoken av={arr_av_lt.shape} -> {lt_out_dir}")
 
     print(f"Done. {len(failed)} / {len(all_segs)} segments failed.")
 

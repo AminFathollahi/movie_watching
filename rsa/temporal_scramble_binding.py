@@ -25,10 +25,10 @@ Usage
 -----
 python rsa/temporal_scramble_binding.py \\
     --models pe-av-small-16-frame cav-mae-sync \\
-             omni3b_layer9 omni3b_layer18 omni3b_layer27 \\
-             omni3b_layer9_lasttoken omni3b_layer18_lasttoken omni3b_layer27_lasttoken \\
-             topoomni_layer9 topoomni_layer18 topoomni_layer27 \\
-             topoomni_layer9_lasttoken topoomni_layer18_lasttoken topoomni_layer27_lasttoken \\
+             omni3b_layer9_mp omni3b_layer18_mp omni3b_layer27_mp \\
+             omni3b_layer9_lt omni3b_layer18_lt omni3b_layer27_lt \\
+             topoomni_layer9_mp topoomni_layer18_mp topoomni_layer27_mp \\
+             topoomni_layer9_lt topoomni_layer18_lt topoomni_layer27_lt \\
     --rsa-root /home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average \\
     --config k100_delay5s_bin5s_skip5s_spearman \\
     --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \\

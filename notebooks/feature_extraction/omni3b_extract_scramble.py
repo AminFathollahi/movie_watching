@@ -4,21 +4,21 @@ notebooks/feature_extraction/omni3b_extract_scramble.py
 Move 3 (temporal-scramble binding control) for omni3b -- companion to
 pe_av_extract_scramble.py and extract_cav_mae_sync.py's --scramble-av mode.
 omni3b/topo-omni are the two models where the av=(a+v)/2 circularity bug was
-found and fixed (see omni3b_extract_unimodal.py); the same models are central
+found and fixed (see omni3b_extract_intact.py); the same models are central
 enough to Move 1/4/5 that the binding control needs to run on them too, not
 just the smaller cav-mae-sync check.
 
 Unimodal "_a"/"_v" embeddings do NOT need re-extraction here: since
-omni3b_extract_unimodal.py, they come from genuinely separate forward passes
+omni3b_extract_intact.py, they come from genuinely separate forward passes
 with no cross-modal tokens present, so they cannot depend on which audio was
 paired with which video. Only the JOINT (audio+video) forward pass depends on
 pairing -- so this script re-runs only the joint pass, with video[i] paired
 against a RANDOMLY PERMUTED audio[perm(i)] (fixed seed 42, same convention as
 the other scramble scripts), and re-extracts both joint-pass readouts:
-  {tag}_layer{N}_avscramble_av.npy            -- masked-pool (a+v)/2, scrambled pairing
-  {tag}_layer{N}_lasttoken_avscramble_av.npy   -- last-token joint readout, scrambled pairing
+  {tag}_layer{N}_mp_avscramble_av.npy          -- masked-pool (a+v)/2, scrambled pairing
+  {tag}_layer{N}_lt_avscramble_av.npy          -- last-token joint readout, scrambled pairing
 Both compared against their INTACT counterparts (already on disk from
-omni3b_extract_unimodal.py's _av and _lasttoken_av) to test whether the
+omni3b_extract_intact.py's _av and _lasttoken_av) to test whether the
 integration signal survives temporal/identity mismatch between modalities.
 
 Run with:
@@ -28,6 +28,16 @@ Run with:
 
 import gc
 import os
+
+# Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
+# proxy config gets locked in at import time, so stripping these afterward
+# has no effect and local_files_only lookups fail with a bogus "couldn't
+# connect" error even though the model is fully cached locally.
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
+for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy",
+           "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+    os.environ.pop(_v, None)
+
 from pathlib import Path
 
 import av
@@ -38,10 +48,6 @@ from tqdm import tqdm
 from transformers import Qwen2_5OmniProcessor, Qwen2_5OmniThinkerForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 from natsort import natsorted
-
-os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
-for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy"):
-    os.environ.pop(_v, None)
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_PATH      = "Qwen/Qwen2.5-Omni-3B"
@@ -214,14 +220,14 @@ def main():
             print(f"  {name}: {err}")
 
     for idx in TARGET_LAYERS:
-        av_model_name = f"{MODEL_TAG}_layer{idx}_avscramble"
+        av_model_name = f"{MODEL_TAG}_layer{idx}_mp_avscramble"
         av_out_dir = EMBEDDINGS_BASE / av_model_name / f"bin{dur_int}s_skip{skip_int}s"
         av_out_dir.mkdir(parents=True, exist_ok=True)
         arr_av = np.array(results_av[idx], dtype=np.float32)
         np.save(av_out_dir / f"{av_model_name}_av.npy", arr_av)
         print(f"[{av_model_name}] saved scrambled av={arr_av.shape} -> {av_out_dir}")
 
-        lt_model_name = f"{MODEL_TAG}_layer{idx}_lasttoken_avscramble"
+        lt_model_name = f"{MODEL_TAG}_layer{idx}_lt_avscramble"
         lt_out_dir = EMBEDDINGS_BASE / lt_model_name / f"bin{dur_int}s_skip{skip_int}s"
         lt_out_dir.mkdir(parents=True, exist_ok=True)
         arr_lt = np.array(results_lt[idx], dtype=np.float32)

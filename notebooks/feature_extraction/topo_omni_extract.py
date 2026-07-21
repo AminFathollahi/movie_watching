@@ -232,6 +232,22 @@ QUARTER_LAYERS = sorted(set([
 print(f"N_LAYERS       : {N_LAYERS}")
 print(f"QUARTER_LAYERS : {QUARTER_LAYERS}")
 
+# Only {N_LAYERS//4, N_LAYERS//2, 3*N_LAYERS//4} (9/18/27 for N_LAYERS=36) have a
+# "_lasttoken"-now-"_lt" counterpart (extracted separately by topo_omni_extract_
+# intact.py) -- those get the explicit "_mp" mean-pool tag so the two variants
+# stay distinguishable. The other quarter-layer sweep probes (1, 2, 4, N_LAYERS-1)
+# have no lasttoken counterpart, so there is nothing to disambiguate; they keep
+# their bare "{MODEL_TAG}_layer{idx}" name unchanged.
+MP_TAGGED_LAYERS = {N_LAYERS // 4, N_LAYERS // 2, 3 * N_LAYERS // 4}
+
+
+def _layer_tag(idx):
+    return f"{MODEL_TAG}_layer{idx}_mp" if idx in MP_TAGGED_LAYERS else f"{MODEL_TAG}_layer{idx}"
+
+
+def _sheet_tag(idx):
+    return f"{MODEL_TAG}_layer{idx}_sheet_mp" if idx in MP_TAGGED_LAYERS else f"{MODEL_TAG}_layer{idx}_sheet"
+
 # ── Verify token IDs from config (read dynamically, never hardcode) ───────────
 AUDIO_TOKEN_ID = model.config.audio_token_id
 VIDEO_TOKEN_ID = model.config.video_token_id
@@ -623,16 +639,16 @@ if n_show > 0:
 for idx in QUARTER_LAYERS:
     if hidden_embeddings[idx]:
         arr = np.array(hidden_embeddings[idx])
-        layer_dir = EMBEDDINGS_BASE / f"{MODEL_TAG}_layer{idx}"
+        layer_dir = EMBEDDINGS_BASE / _layer_tag(idx)
         layer_dir.mkdir(parents=True, exist_ok=True)
-        out_path = layer_dir / f"{MODEL_TAG}_layer{idx}_sample_av_{_dur_int}s.npy"
+        out_path = layer_dir / f"{_layer_tag(idx)}_sample_av_{_dur_int}s.npy"
         np.save(out_path, arr)
         print(f"Saved {out_path.name}  shape={arr.shape}")
     if sheet_embeddings[idx]:
         arr = np.array(sheet_embeddings[idx])
-        layer_dir = EMBEDDINGS_BASE / f"{MODEL_TAG}_layer{idx}_sheet"
+        layer_dir = EMBEDDINGS_BASE / _sheet_tag(idx)
         layer_dir.mkdir(parents=True, exist_ok=True)
-        out_path = layer_dir / f"{MODEL_TAG}_layer{idx}_sheet_sample_av_{_dur_int}s.npy"
+        out_path = layer_dir / f"{_sheet_tag(idx)}_sample_av_{_dur_int}s.npy"
         np.save(out_path, arr)
         print(f"Saved {out_path.name}  shape={arr.shape}")
 
@@ -664,10 +680,10 @@ for bin_sec, skip_sec, segments_dir in SEGMENT_DURATIONS:
         continue
 
     expected = [
-        EMBEDDINGS_BASE / f"{MODEL_TAG}_layer{idx}" / out_tag / f"{MODEL_TAG}_layer{idx}_{sfx}.npy"
+        EMBEDDINGS_BASE / _layer_tag(idx) / out_tag / f"{_layer_tag(idx)}_{sfx}.npy"
         for idx in QUARTER_LAYERS for sfx in ("av", "a", "v")
     ] + [
-        EMBEDDINGS_BASE / f"{MODEL_TAG}_layer{idx}_sheet" / out_tag / f"{MODEL_TAG}_layer{idx}_sheet_{sfx}.npy"
+        EMBEDDINGS_BASE / _sheet_tag(idx) / out_tag / f"{_sheet_tag(idx)}_{sfx}.npy"
         for idx in QUARTER_LAYERS for sfx in ("av", "a", "v")
     ]
     if all(p.exists() for p in expected):
@@ -710,19 +726,19 @@ for bin_sec, skip_sec, segments_dir in SEGMENT_DURATIONS:
             print(f"\n  FAILED {vp.name}: {err_str}")
 
     for idx in QUARTER_LAYERS:
-        layer_dir = EMBEDDINGS_BASE / f"{MODEL_TAG}_layer{idx}" / out_tag
+        layer_dir = EMBEDDINGS_BASE / _layer_tag(idx) / out_tag
         layer_dir.mkdir(parents=True, exist_ok=True)
         for sfx, emb_list in [("av", hidden_av[idx]), ("a", hidden_a[idx]), ("v", hidden_v[idx])]:
             arr = np.array(emb_list)
-            out_path = layer_dir / f"{MODEL_TAG}_layer{idx}_{sfx}.npy"
+            out_path = layer_dir / f"{_layer_tag(idx)}_{sfx}.npy"
             np.save(out_path, arr)
             print(f"  saved {out_path.relative_to(EMBEDDINGS_BASE)}  shape={arr.shape}")
 
-        sheet_dir = EMBEDDINGS_BASE / f"{MODEL_TAG}_layer{idx}_sheet" / out_tag
+        sheet_dir = EMBEDDINGS_BASE / _sheet_tag(idx) / out_tag
         sheet_dir.mkdir(parents=True, exist_ok=True)
         for sfx, emb_list in [("av", sheet_av[idx]), ("a", sheet_a[idx]), ("v", sheet_v[idx])]:
             arr = np.array(emb_list)
-            out_path = sheet_dir / f"{MODEL_TAG}_layer{idx}_sheet_{sfx}.npy"
+            out_path = sheet_dir / f"{_sheet_tag(idx)}_{sfx}.npy"
             np.save(out_path, arr)
             print(f"  saved {out_path.relative_to(EMBEDDINGS_BASE)}  shape={arr.shape}")
 

@@ -78,47 +78,47 @@ MODELS: dict[str, dict] = {
         "joint":        True,
         "description":  "ImageBind — aligned AV/text embedding space (2s bins only, no separable a/v)",
     },
-    "omni3b_layer9": {
+    "omni3b_layer9_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Qwen2.5-Omni-3B thinker hidden state, layer 9 — early AV fusion",
     },
-    "omni3b_layer18": {
+    "omni3b_layer18_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Qwen2.5-Omni-3B thinker hidden state, layer 18 — mid AV fusion",
     },
-    "omni3b_layer27": {
+    "omni3b_layer27_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Qwen2.5-Omni-3B thinker hidden state, layer 27 — late AV fusion",
     },
-    "topoomni_layer9": {
+    "topoomni_layer9_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Topo-Omni (cortical-sheet-regularized Qwen2.5-Omni-3B), layer 9",
     },
-    "topoomni_layer18": {
+    "topoomni_layer18_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Topo-Omni (cortical-sheet-regularized Qwen2.5-Omni-3B), layer 18",
     },
-    "topoomni_layer27": {
+    "topoomni_layer27_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Topo-Omni (cortical-sheet-regularized Qwen2.5-Omni-3B), layer 27",
     },
-    "topoomni_layer9_sheet": {
+    "topoomni_layer9_sheet_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Topo-Omni cortical-sheet (topographic) code, layer 9",
     },
-    "topoomni_layer18_sheet": {
+    "topoomni_layer18_sheet_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Topo-Omni cortical-sheet (topographic) code, layer 18",
     },
-    "topoomni_layer27_sheet": {
+    "topoomni_layer27_sheet_mp": {
         "modalities":   ["av", "a", "v"],
         "joint":        True,
         "description":  "Topo-Omni cortical-sheet (topographic) code, layer 27",
@@ -131,23 +131,23 @@ MODELS: dict[str, dict] = {
     # embeddings: "last-layer activation of the final token", Sec 4.7.2). av-only;
     # nuisance for the Move-1 integration contrast is the corresponding non-lasttoken
     # model's real (audio-only-pass / video-only-pass) _a/_v.
-    "omni3b_layer9_lasttoken":  {"modalities": ["av"], "joint": True,
+    "omni3b_layer9_lt":  {"modalities": ["av"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 9, last-token joint-AV readout"},
-    "omni3b_layer18_lasttoken": {"modalities": ["av"], "joint": True,
+    "omni3b_layer18_lt": {"modalities": ["av"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 18, last-token joint-AV readout"},
-    "omni3b_layer27_lasttoken": {"modalities": ["av"], "joint": True,
+    "omni3b_layer27_lt": {"modalities": ["av"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 27, last-token joint-AV readout"},
-    "topoomni_layer9_lasttoken":  {"modalities": ["av"], "joint": True,
+    "topoomni_layer9_lt":  {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 9, last-token joint-AV readout"},
-    "topoomni_layer18_lasttoken": {"modalities": ["av"], "joint": True,
+    "topoomni_layer18_lt": {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 18, last-token joint-AV readout"},
-    "topoomni_layer27_lasttoken": {"modalities": ["av"], "joint": True,
+    "topoomni_layer27_lt": {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 27, last-token joint-AV readout"},
-    "topoomni_layer9_sheet_lasttoken":  {"modalities": ["av"], "joint": True,
+    "topoomni_layer9_sheet_lt":  {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni cortical sheet, layer 9, last-token joint-AV readout"},
-    "topoomni_layer18_sheet_lasttoken": {"modalities": ["av"], "joint": True,
+    "topoomni_layer18_sheet_lt": {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni cortical sheet, layer 18, last-token joint-AV readout"},
-    "topoomni_layer27_sheet_lasttoken": {"modalities": ["av"], "joint": True,
+    "topoomni_layer27_sheet_lt": {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni cortical sheet, layer 27, last-token joint-AV readout"},
     # ── nvidia/omni-embed-nemotron-3b ("NV-QwenOmni-Embed-3B-v1") -- a third
     # member of the Qwen2.5-Omni-3B-Thinker lineage (same base as omni3b/
@@ -157,17 +157,17 @@ MODELS: dict[str, dict] = {
     # streams even when jointly present. Unlike omni3b/topoomni, its official
     # "_av" readout (mean-pool over the full joint-forward-pass sequence,
     # L2-normalized) is a genuine joint summary from the start -- no (a+v)/2
-    # circularity bug to fix (see nemotron_extract_unimodal.py). Layer 36 is
+    # circularity bug to fix (see nemotron_extract_intact.py). Layer 36 is
     # this model's TRUE FINAL layer / native trained embedding output;
     # layers 9/18/27 are supplementary depth-sweep probes for comparability
     # with omni3b/topoomni, not part of this checkpoint's training objective.
-    "nemotron_layer9": {"modalities": ["av", "a", "v"], "joint": True,
+    "nemotron_layer9_mp": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 9 — early AV fusion (depth-sweep probe)"},
-    "nemotron_layer18": {"modalities": ["av", "a", "v"], "joint": True,
+    "nemotron_layer18_mp": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 18 — mid AV fusion (depth-sweep probe)"},
-    "nemotron_layer27": {"modalities": ["av", "a", "v"], "joint": True,
+    "nemotron_layer27_mp": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 27 — late AV fusion (depth-sweep probe)"},
-    "nemotron_layer36": {"modalities": ["av", "a", "v"], "joint": True,
+    "nemotron_layer36_mp": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 36 (true final layer) — native contrastively-trained AV retrieval embedding"},
     # ── Move 3: temporal-scramble binding control. Each bin's video paired with
     # a randomly permuted bin's audio (fixed seed) before extraction -- breaks
@@ -188,40 +188,40 @@ MODELS: dict[str, dict] = {
     # build_scramble_unimodal_copies.py -- pure numpy, no re-inference needed,
     # since the true unimodal passes have no cross-modal tokens and cannot depend
     # on pairing. Only "_av" required a real (scrambled-pairing) forward pass.
-    "omni3b_layer9_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
+    "omni3b_layer9_mp_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 9, temporal-scramble binding control"},
-    "omni3b_layer18_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+    "omni3b_layer18_mp_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 18, temporal-scramble binding control"},
-    "omni3b_layer27_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+    "omni3b_layer27_mp_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 27, temporal-scramble binding control"},
-    "topoomni_layer9_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
+    "topoomni_layer9_mp_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 9, temporal-scramble binding control"},
-    "topoomni_layer18_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+    "topoomni_layer18_mp_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 18, temporal-scramble binding control"},
-    "topoomni_layer27_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+    "topoomni_layer27_mp_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 27, temporal-scramble binding control"},
-    "nemotron_layer9_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
+    "nemotron_layer9_mp_avscramble":  {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 9, temporal-scramble binding control"},
-    "nemotron_layer18_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+    "nemotron_layer18_mp_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 18, temporal-scramble binding control"},
-    "nemotron_layer27_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+    "nemotron_layer27_mp_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 27, temporal-scramble binding control"},
-    "nemotron_layer36_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
+    "nemotron_layer36_mp_avscramble": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 36 (native embedding), temporal-scramble binding control"},
     # "_lasttoken_avscramble": av-only (last-token joint readout under scrambled
     # pairing); nuisance for its integration run reuses the corresponding
     # "_avscramble" model's reindexed a/v (see _lasttoken_integration_run below).
-    "omni3b_layer9_lasttoken_avscramble":  {"modalities": ["av"], "joint": True,
+    "omni3b_layer9_lt_avscramble":  {"modalities": ["av"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 9, last-token readout, temporal-scramble control"},
-    "omni3b_layer18_lasttoken_avscramble": {"modalities": ["av"], "joint": True,
+    "omni3b_layer18_lt_avscramble": {"modalities": ["av"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 18, last-token readout, temporal-scramble control"},
-    "omni3b_layer27_lasttoken_avscramble": {"modalities": ["av"], "joint": True,
+    "omni3b_layer27_lt_avscramble": {"modalities": ["av"], "joint": True,
         "description": "Qwen2.5-Omni-3B thinker, layer 27, last-token readout, temporal-scramble control"},
-    "topoomni_layer9_lasttoken_avscramble":  {"modalities": ["av"], "joint": True,
+    "topoomni_layer9_lt_avscramble":  {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 9, last-token readout, temporal-scramble control"},
-    "topoomni_layer18_lasttoken_avscramble": {"modalities": ["av"], "joint": True,
+    "topoomni_layer18_lt_avscramble": {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 18, last-token readout, temporal-scramble control"},
-    "topoomni_layer27_lasttoken_avscramble": {"modalities": ["av"], "joint": True,
+    "topoomni_layer27_lt_avscramble": {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni thinker hidden state, layer 27, last-token readout, temporal-scramble control"},
     "audiomae": {
         "modalities":   ["a"],
@@ -307,24 +307,26 @@ def _own_unimodal_integration_run(model: str, modality: str = "av") -> PartialRS
 
 
 def _lasttoken_integration_run(base_model: str, modality: str = "av") -> PartialRSARun:
-    """Like _own_unimodal_integration_run(), but the TARGET is the "_lasttoken"
+    """Like _own_unimodal_integration_run(), but the TARGET is the "_lt" (last-token)
     joint-AV readout (last sequence position of the joint forward pass -- a
     genuinely emergent summary, not a fixed function of the pooled a/v streams)
-    while the NUISANCE bands are the corresponding base model's real (separate
-    audio-only-pass / video-only-pass) unimodal streams. Only defined for
-    models whose "_a"/"_v" come from genuinely separate unimodal forward passes
-    (omni3b/topoomni layers, post the Move-1/4 unimodal re-extraction fix).
+    while the NUISANCE bands are the corresponding "_mp" (mean-pool) model's real
+    (separate audio-only-pass / video-only-pass) unimodal streams. `base_model` is
+    the BARE identifier with neither suffix (e.g. "omni3b_layer9"). Only defined
+    for models whose "_a"/"_v" come from genuinely separate unimodal forward
+    passes (omni3b/topoomni layers, post the Move-1/4 unimodal re-extraction fix).
     """
-    lt_model = f"{base_model}_lasttoken"
+    mp_model = f"{base_model}_mp"
+    lt_model = f"{base_model}_lt"
     return PartialRSARun(
         target   = (lt_model, modality),
-        nuisance = [(base_model, "a"), (base_model, "v")],
+        nuisance = [(mp_model, "a"), (mp_model, "v")],
         label    = f"{lt_model}_{modality}_INTEGRATION",
         description = (
             f"{base_model} last-token joint-AV readout, controlling for the base "
             f"model's own (genuinely separate-pass) audio-only and video-only "
             f"outputs — integration contrast using a non-tautological joint "
-            f"representation (see omni3b_extract_unimodal.py's docstring)."
+            f"representation (see omni3b_extract_intact.py's docstring)."
         ),
         kind = "integration",
     )
@@ -332,17 +334,18 @@ def _lasttoken_integration_run(base_model: str, modality: str = "av") -> Partial
 
 def _lasttoken_scramble_integration_run(base_model: str, modality: str = "av") -> PartialRSARun:
     """Scrambled-pairing counterpart of _lasttoken_integration_run(): TARGET is the
-    "_lasttoken_avscramble" joint-AV readout (last-token of a forward pass fed
-    video[i] + audio[perm[i]]); NUISANCE is the corresponding "_avscramble" model's
+    "_lt_avscramble" joint-AV readout (last-token of a forward pass fed
+    video[i] + audio[perm[i]]); NUISANCE is the corresponding "_mp_avscramble" model's
     reindexed a/v (a[perm[i]], v[i] -- i.e. what was actually fed to the model),
-    NOT the intact base model's true-paired a/v. Mirrors the reasoning already used
+    NOT the intact base model's true-paired a/v. `base_model` is the BARE identifier
+    with neither suffix (e.g. "omni3b_layer9"). Mirrors the reasoning already used
     for the plain avscramble integration runs (_own_unimodal_integration_run on
-    "{model}_avscramble") -- nuisance always represents "what content was actually
+    "{model}_mp_avscramble") -- nuisance always represents "what content was actually
     given to the model", so the residual isolates emergent fusion, not a mismatch
     artifact from comparing against the wrong nuisance pairing.
     """
-    scramble_model = f"{base_model}_avscramble"
-    lt_model = f"{base_model}_lasttoken_avscramble"
+    scramble_model = f"{base_model}_mp_avscramble"
+    lt_model = f"{base_model}_lt_avscramble"
     return PartialRSARun(
         target   = (lt_model, modality),
         nuisance = [(scramble_model, "a"), (scramble_model, "v")],
@@ -405,22 +408,22 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     # native-AV model that has separable _a/_v/_av embeddings at bin5s_skip5s.
     # (imagebind is 2s-only — no _a/_v at 5s — so it is intentionally excluded here.)
     "integration_cav-mae-sync": _own_unimodal_integration_run("cav-mae-sync"),
-    "integration_omni3b_layer9":      _own_unimodal_integration_run("omni3b_layer9"),
-    "integration_omni3b_layer18":     _own_unimodal_integration_run("omni3b_layer18"),
-    "integration_omni3b_layer27":     _own_unimodal_integration_run("omni3b_layer27"),
-    "integration_topoomni_layer9":    _own_unimodal_integration_run("topoomni_layer9"),
-    "integration_topoomni_layer18":   _own_unimodal_integration_run("topoomni_layer18"),
-    "integration_topoomni_layer27":   _own_unimodal_integration_run("topoomni_layer27"),
+    "integration_omni3b_layer9":      _own_unimodal_integration_run("omni3b_layer9_mp"),
+    "integration_omni3b_layer18":     _own_unimodal_integration_run("omni3b_layer18_mp"),
+    "integration_omni3b_layer27":     _own_unimodal_integration_run("omni3b_layer27_mp"),
+    "integration_topoomni_layer9":    _own_unimodal_integration_run("topoomni_layer9_mp"),
+    "integration_topoomni_layer18":   _own_unimodal_integration_run("topoomni_layer18_mp"),
+    "integration_topoomni_layer27":   _own_unimodal_integration_run("topoomni_layer27_mp"),
     # nemotron (omni-embed-nemotron-3b) -- genuinely joint "_av" from the start
     # (no (a+v)/2 placeholder ever existed), so no "_lasttoken" variant is needed.
-    "integration_nemotron_layer9":    _own_unimodal_integration_run("nemotron_layer9"),
-    "integration_nemotron_layer18":   _own_unimodal_integration_run("nemotron_layer18"),
-    "integration_nemotron_layer27":   _own_unimodal_integration_run("nemotron_layer27"),
-    "integration_nemotron_layer36":   _own_unimodal_integration_run("nemotron_layer36"),
+    "integration_nemotron_layer9":    _own_unimodal_integration_run("nemotron_layer9_mp"),
+    "integration_nemotron_layer18":   _own_unimodal_integration_run("nemotron_layer18_mp"),
+    "integration_nemotron_layer27":   _own_unimodal_integration_run("nemotron_layer27_mp"),
+    "integration_nemotron_layer36":   _own_unimodal_integration_run("nemotron_layer36_mp"),
     # ── "_lasttoken" alternative: genuinely emergent joint-AV readout (not a
     # fixed function of a/v), regressed against the corresponding base model's
     # real (separate-pass) unimodal streams. Requires the Move-1/4 unimodal
-    # re-extraction fix (omni3b_extract_unimodal.py / topo_omni_extract_unimodal.py).
+    # re-extraction fix (omni3b_extract_intact.py / topo_omni_extract_intact.py).
     "integration_omni3b_layer9_lasttoken":    _lasttoken_integration_run("omni3b_layer9"),
     "integration_omni3b_layer18_lasttoken":   _lasttoken_integration_run("omni3b_layer18"),
     "integration_omni3b_layer27_lasttoken":   _lasttoken_integration_run("omni3b_layer27"),
@@ -434,16 +437,16 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_cav-mae-sync_avscramble":         _own_unimodal_integration_run("cav-mae-sync_avscramble"),
     # ── Move 3 extended to omni3b/topoomni (the models where the av=(a+v)/2
     # circularity fix originated) per user request -- not just cav-mae-sync.
-    "integration_omni3b_layer9_avscramble":    _own_unimodal_integration_run("omni3b_layer9_avscramble"),
-    "integration_omni3b_layer18_avscramble":   _own_unimodal_integration_run("omni3b_layer18_avscramble"),
-    "integration_omni3b_layer27_avscramble":   _own_unimodal_integration_run("omni3b_layer27_avscramble"),
-    "integration_topoomni_layer9_avscramble":  _own_unimodal_integration_run("topoomni_layer9_avscramble"),
-    "integration_topoomni_layer18_avscramble": _own_unimodal_integration_run("topoomni_layer18_avscramble"),
-    "integration_topoomni_layer27_avscramble": _own_unimodal_integration_run("topoomni_layer27_avscramble"),
-    "integration_nemotron_layer9_avscramble":  _own_unimodal_integration_run("nemotron_layer9_avscramble"),
-    "integration_nemotron_layer18_avscramble": _own_unimodal_integration_run("nemotron_layer18_avscramble"),
-    "integration_nemotron_layer27_avscramble": _own_unimodal_integration_run("nemotron_layer27_avscramble"),
-    "integration_nemotron_layer36_avscramble": _own_unimodal_integration_run("nemotron_layer36_avscramble"),
+    "integration_omni3b_layer9_avscramble":    _own_unimodal_integration_run("omni3b_layer9_mp_avscramble"),
+    "integration_omni3b_layer18_avscramble":   _own_unimodal_integration_run("omni3b_layer18_mp_avscramble"),
+    "integration_omni3b_layer27_avscramble":   _own_unimodal_integration_run("omni3b_layer27_mp_avscramble"),
+    "integration_topoomni_layer9_avscramble":  _own_unimodal_integration_run("topoomni_layer9_mp_avscramble"),
+    "integration_topoomni_layer18_avscramble": _own_unimodal_integration_run("topoomni_layer18_mp_avscramble"),
+    "integration_topoomni_layer27_avscramble": _own_unimodal_integration_run("topoomni_layer27_mp_avscramble"),
+    "integration_nemotron_layer9_avscramble":  _own_unimodal_integration_run("nemotron_layer9_mp_avscramble"),
+    "integration_nemotron_layer18_avscramble": _own_unimodal_integration_run("nemotron_layer18_mp_avscramble"),
+    "integration_nemotron_layer27_avscramble": _own_unimodal_integration_run("nemotron_layer27_mp_avscramble"),
+    "integration_nemotron_layer36_avscramble": _own_unimodal_integration_run("nemotron_layer36_mp_avscramble"),
     "integration_omni3b_layer9_lasttoken_avscramble":    _lasttoken_scramble_integration_run("omni3b_layer9"),
     "integration_omni3b_layer18_lasttoken_avscramble":   _lasttoken_scramble_integration_run("omni3b_layer18"),
     "integration_omni3b_layer27_lasttoken_avscramble":   _lasttoken_scramble_integration_run("omni3b_layer27"),

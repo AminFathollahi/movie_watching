@@ -96,13 +96,13 @@ python notebooks/feature_extraction/extract_cav_mae_sync.py                # + C
 
 conda activate topo_omni
 python notebooks/feature_extraction/topo_omni_extract.py                   # Omni3B/TopoOmni thinker hidden states + cortical sheet
-python notebooks/feature_extraction/topo_omni_extract_unimodal.py          # genuine joint av (fixes the (a+v)/2 placeholder)
+python notebooks/feature_extraction/topo_omni_extract_intact.py          # genuine joint av (fixes the (a+v)/2 placeholder)
 python notebooks/feature_extraction/topo_omni_extract_scramble.py          # temporal-scramble binding control
-python notebooks/feature_extraction/omni3b_extract_unimodal.py             # same fix, Omni3B side
+python notebooks/feature_extraction/omni3b_extract_intact.py             # same fix, Omni3B side
 python notebooks/feature_extraction/omni3b_extract_scramble.py
 
 conda activate avtransformer
-python notebooks/feature_extraction/nemotron_extract_unimodal.py           # Omni-Embed-Nemotron-3B (layers 9/18/27/36)
+python notebooks/feature_extraction/nemotron_extract_intact.py           # Omni-Embed-Nemotron-3B (layers 9/18/27/36)
 python notebooks/feature_extraction/nemotron_extract_scramble.py
 python notebooks/feature_extraction/build_scramble_unimodal_copies.py      # reindexes real a/v as scramble-run nuisance regressors
 ```

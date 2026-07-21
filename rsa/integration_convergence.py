@@ -27,7 +27,7 @@ in the prompt this implements):
 Usage
 -----
 python rsa/integration_convergence.py \\
-    --models pe-av-small-16-frame cav-mae-sync omni3b_layer18 topoomni_layer18 \\
+    --models pe-av-small-16-frame cav-mae-sync omni3b_layer18_mp topoomni_layer18_mp \\
     --rsa-root /home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average \\
     --config k100_delay5s_bin5s_skip5s_spearman \\
     --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \\

@@ -93,6 +93,9 @@ def parse_args():
     p.add_argument("--method",           required=True, choices=["spearman", "pearson", "rho_a"])
     p.add_argument("--fmri-tag",         required=True,
                    help="Preprocessing tag in per-subject CIFTI filenames.")
+    p.add_argument("--fname-prefix",     default="rsa_59k", dest="fname_prefix",
+                   help="Per-subject searchlight filename prefix (default rsa_59k; "
+                        "use rsa_subcortical for the subcortical pipeline).")
     p.add_argument("--template-cifti",   required=True,
                    help="59k CIFTI whose BrainModelAxis defines grayordinate space.")
     p.add_argument("--left-surface",     required=True,
@@ -241,7 +244,7 @@ def main():
         fname_pattern = (f"crossnobis_rho_a_k{args.k}_{delay_tag}"
                          f"_bin{bin_sec_int}s_skip{skip_int}s.npy")
     else:
-        fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
+        fname_pattern = (f"{args.fname_prefix}_{args.fmri_tag}_k{args.k}_{delay_tag}"
                          f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy")
 
     model_mod_dir = f"{args.model}_{args.modality}"
@@ -280,7 +283,13 @@ def main():
     # N that is divisible by args.n_blocks (avoids re-running the searchlight).
     have_blocks = False
     block_stack = None
-    if args.n_blocks > 1:
+    if args.n_blocks > 1 and args.method == "rho_a":
+        # fname_pattern for rho_a (crossnobis_rho_a_..._bin{..}s_skip{..}s.npy) contains no
+        # "_searchlight.npy", so the replace() below would be a silent no-op and never match
+        # a file. No crossnobis_rho_a_*_nblocks*.npy files are produced by any script today,
+        # so there is nothing to load -- skip explicitly instead of relying on that broken match.
+        log.info("2-factor bootstrap not supported for method=rho_a; skipping")
+    elif args.n_blocks > 1:
         def _collect_blocks(n_b):
             pat = fname_pattern.replace("_searchlight.npy", f"_searchlight_nblocks{n_b}.npy")
             return sorted(Path(args.output_dir).glob(

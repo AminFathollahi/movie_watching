@@ -1,12 +1,12 @@
 """
-notebooks/feature_extraction/topo_omni_extract_unimodal.py
+notebooks/feature_extraction/topo_omni_extract_intact.py
 =============================================================
-Topo-Omni analogue of omni3b_extract_unimodal.py -- fixes the same
+Topo-Omni analogue of omni3b_extract_intact.py -- fixes the same
 methodological bug for topoomni_layer{9,18,27} (hidden/X_hat) and
 topoomni_layer{9,18,27}_sheet (cortical-sheet/Z): the existing "_a"/"_v"
 are mean-pooled from audio-/video-token positions within a SINGLE JOINT
 forward pass, and "_av" = (_a + _v) / 2 exactly (verified empirically,
-bit-identical). See omni3b_extract_unimodal.py's docstring for the full
+bit-identical). See omni3b_extract_intact.py's docstring for the full
 rationale -- identical reasoning applies here, just with Topo-Omni's custom
 CorticalAdaptor-patched Thinker class instead of the stock one.
 
@@ -18,12 +18,22 @@ joint pass) as a non-tautological alternative to the masked-pool "_av".
 
 Run with:
     conda run --no-capture-output -n topo_omni \
-        python "notebooks/feature_extraction/topo_omni_extract_unimodal.py"
+        python "notebooks/feature_extraction/topo_omni_extract_intact.py"
 """
 
 import gc
-import json
 import os
+
+# Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
+# proxy config gets locked in at import time, so stripping these afterward
+# has no effect and local_files_only lookups fail with a bogus "couldn't
+# connect" error even though the model is fully cached locally.
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
+for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy",
+           "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+    os.environ.pop(_v, None)
+
+import json
 import sys
 from pathlib import Path
 
@@ -34,10 +44,6 @@ import torchaudio
 from huggingface_hub import snapshot_download
 from natsort import natsorted
 from tqdm import tqdm
-
-os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
-for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy"):
-    os.environ.pop(_v, None)
 
 TOPO_OMNI_REPO = Path("/home/amin/Research/Representation/Movie/Model Repos/topo-omni")
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"
@@ -53,7 +59,7 @@ DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_
 EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
-BIN_SEC, SKIP_SEC = 5.0, 5.0
+BIN_SEC, SKIP_SEC = 2.0, 2.0
 TARGET_LAYERS   = [9, 18, 27]
 MODEL_TAG       = "topoomni"
 AUDIO_SR        = 16000
@@ -288,14 +294,14 @@ def main():
         print(f"[{model_name}] saved _{suffix}={np.array(arr).shape} -> {out_dir}")
 
     for idx in TARGET_LAYERS:
-        hidden_name = f"{MODEL_TAG}_layer{idx}"
-        sheet_name  = f"{MODEL_TAG}_layer{idx}_sheet"
+        hidden_name = f"{MODEL_TAG}_layer{idx}_mp"
+        sheet_name  = f"{MODEL_TAG}_layer{idx}_sheet_mp"
         _save(hidden_name, "a", res_h_a[idx])
         _save(hidden_name, "v", res_h_v[idx])
         _save(sheet_name,  "a", res_s_a[idx])
         _save(sheet_name,  "v", res_s_v[idx])
-        _save(f"{hidden_name}_lasttoken", "av", res_h_lt[idx])
-        _save(f"{sheet_name}_lasttoken",  "av", res_s_lt[idx])
+        _save(f"{MODEL_TAG}_layer{idx}_lt", "av", res_h_lt[idx])
+        _save(f"{MODEL_TAG}_layer{idx}_sheet_lt",  "av", res_s_lt[idx])
 
     print(f"Done. {len(failed)} / {len(all_segs)} segments failed.")
 

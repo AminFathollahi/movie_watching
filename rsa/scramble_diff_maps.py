@@ -32,11 +32,11 @@ CONFIG = "k100_delay5s_bin5s_skip5s_spearman"
 MODELS = [
     "pe-av-small-16-frame",
     "cav-mae-sync",
-    "omni3b_layer9", "omni3b_layer18", "omni3b_layer27",
-    "omni3b_layer9_lasttoken", "omni3b_layer18_lasttoken", "omni3b_layer27_lasttoken",
-    "topoomni_layer9", "topoomni_layer18", "topoomni_layer27",
-    "topoomni_layer9_lasttoken", "topoomni_layer18_lasttoken", "topoomni_layer27_lasttoken",
-    "nemotron_layer9", "nemotron_layer18", "nemotron_layer27", "nemotron_layer36",
+    "omni3b_layer9_mp", "omni3b_layer18_mp", "omni3b_layer27_mp",
+    "omni3b_layer9_lt", "omni3b_layer18_lt", "omni3b_layer27_lt",
+    "topoomni_layer9_mp", "topoomni_layer18_mp", "topoomni_layer27_mp",
+    "topoomni_layer9_lt", "topoomni_layer18_lt", "topoomni_layer27_lt",
+    "nemotron_layer9_mp", "nemotron_layer18_mp", "nemotron_layer27_mp", "nemotron_layer36_mp",
 ]
 
 

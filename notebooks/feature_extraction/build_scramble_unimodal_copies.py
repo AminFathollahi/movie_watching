@@ -2,7 +2,7 @@
 notebooks/feature_extraction/build_scramble_unimodal_copies.py
 =================================================================
 Move 3 support script -- omni3b/topoomni's TRUE unimodal "_a"/"_v" embeddings
-(from omni3b_extract_unimodal.py / topo_omni_extract_unimodal.py) come from
+(from omni3b_extract_intact.py / topo_omni_extract_intact.py) come from
 forward passes with NO cross-modal tokens present at all, so they cannot
 depend on which audio was paired with which video. This means the nuisance
 regressors for the Move-3 scrambled integration contrast can be built by
@@ -57,7 +57,7 @@ def main():
 
     for tag, layers in MODEL_TAG_LAYERS.items():
         for layer in layers:
-            base = f"{tag}_layer{layer}"
+            base = f"{tag}_layer{layer}_mp"
             a_path = EMBEDDINGS_BASE / base / out_tag / f"{base}_a.npy"
             v_path = EMBEDDINGS_BASE / base / out_tag / f"{base}_v.npy"
             if not a_path.exists() or not v_path.exists():

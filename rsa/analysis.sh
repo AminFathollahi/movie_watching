@@ -198,6 +198,7 @@ K=100
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
     "pe-av-small-16-frame:av"
+    "pe-av-small-16-frame_avscramble:av"
     # "wavlm-pecore:av"
     # "audiomae-videomaev2:av"
     # "imagebind:av"
@@ -217,11 +218,20 @@ LAYERS=(35 27 18 9 1)
 OMNI3B_MODALITIES="av,a,v"    # currently disabled below; uncomment the line in the loop to enable
 TOPOOMNI_MODALITIES="av"     # av only for now — switch to "av,a,v" once ready
 
-for L in "${LAYERS[@]}"; do
-    # MODELS+=("omni3b_layer${L}:${OMNI3B_MODALITIES}")
-    MODELS+=("topoomni_layer${L}:${TOPOOMNI_MODALITIES}")
-    MODELS+=("topoomni_layer${L}_sheet:${TOPOOMNI_MODALITIES}")
-done
+if [ "${SKIP_LAYER_SWEEP:-false}" != "true" ]; then
+    for L in "${LAYERS[@]}"; do
+        # Only layers 9/18/27 have a "_lt" (last-token) counterpart on disk, so
+        # only those get the disambiguating "_mp" (mean-pool) tag; layers 1/35
+        # have no lasttoken variant and keep their bare pre-existing name.
+        case "$L" in
+            9|18|27) SUFFIX="_mp" ;;
+            *)       SUFFIX="" ;;
+        esac
+        # MODELS+=("omni3b_layer${L}${SUFFIX}:${OMNI3B_MODALITIES}")
+        MODELS+=("topoomni_layer${L}${SUFFIX}:${TOPOOMNI_MODALITIES}")
+        MODELS+=("topoomni_layer${L}_sheet${SUFFIX}:${TOPOOMNI_MODALITIES}")
+    done
+fi
 
 # ── Statistical inference (Schütt et al. 2023) ──────────────────────────
 # N_BLOCKS: number of temporal blocks searchlight.py creates per subject.
@@ -1251,7 +1261,7 @@ case "$MODE" in
         # preprocess/neighbors/neighbors_avg above don't depend on bin duration
         # and run exactly once regardless of how many entries are in BIN_SECS.
         for BIN_SEC in "${BIN_SECS[@]}"; do
-            SKIP_SEC="$BIN_SEC"
+            SKIP_SEC="${SKIP_SEC:-$BIN_SEC}"
             BIN_SEC_INT="${BIN_SEC%.*}"
             SKIP_INT="${SKIP_SEC%.*}"
             log "=== BIN_SEC=${BIN_SEC}s SKIP_SEC=${SKIP_SEC}s ==="

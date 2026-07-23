@@ -114,6 +114,53 @@ python notebooks/feature_extraction/build_scramble_unimodal_copies.py      # rei
 Output: `{EMBEDDINGS_DIR}/{model_name}/bin{B}s_skip{S}s/{model_name}_{v,a,av}.npy`  
 Text outputs: `outputs/model_embeddings/text/{seg}s/{captions,audio_captions,transcripts,rewritten_text_inputs}.json`
 
+#### Penultimate thinker/encoder layers (omni-family)
+
+Beyond the depth sweep (`rsa/analysis.sh`'s `LAYERS=(35 34 27 18 9 1)`), each
+omni-family model (Omni3B, TopoOmni, Omni-Embed-Nemotron-3B) has two more
+targeted extractions:
+
+```bash
+conda activate topo_omni   # omni3b / topoomni
+python notebooks/feature_extraction/omni3b_extract_thinker_penultimate.py     # thinker layer index 34 (penultimate of 35), mean-pool + last-token
+python notebooks/feature_extraction/topo_omni_extract_thinker_penultimate.py  # same, + cortical-sheet variant
+python notebooks/feature_extraction/omni3b_extract_encoder_penultimate.py     # audio_tower/visual pre-fusion hidden state (d=1280), a/v only
+python notebooks/feature_extraction/topo_omni_extract_encoder_penultimate.py
+
+conda activate avtransformer  # nemotron
+python notebooks/feature_extraction/nemotron_extract_thinker_penultimate.py   # thinker layer index 35 (penultimate of 36)
+python notebooks/feature_extraction/nemotron_extract_encoder_penultimate.py
+```
+
+#### Generalized residualization (`rsa/shared/residuals.py`)
+
+Two independent ways to strip a nuisance signal from a joint AV embedding
+before RSA/encoding ever see it, run once per model in
+`rsa.shared.model_registry.NATIVE_AV_MODELS` (35 entries):
+
+```bash
+conda activate movie
+# "_av_linear_resid" (nuisance = AudioMAE_a + VideoMAEv2_v, same pair as
+#  rsa/partial_rsa.py's partial_corr_* runs) and "_av_linear_resid_encoder"
+#  (omni-family only, nuisance = own encoder-penultimate a/v towers):
+python notebooks/feature_extraction/compute_linear_residual_embeddings.py \
+    --embeddings-dir <embeddings_dir> --timing-csv data/movie_timing.csv \
+    --run-trs <run_trs.npy> --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0
+
+# "_av_projection_resid" (per-timepoint orthogonal projection vs. the
+#  model's own unimodal a/v streams -- no cross-sample regression):
+python notebooks/feature_extraction/compute_projection_residual_embeddings.py \
+    --embeddings-dir <embeddings_dir> --timing-csv data/movie_timing.csv \
+    --run-trs <run_trs.npy> --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0
+```
+
+Each residual is saved as a normal `{model}_av_{...}` embedding, so RSA and
+encoding consume it unchanged. `rsa/run_extended_analyses.sh` and
+`encoding/run_extended_analyses.sh` drive the full group-average sweep over
+every generated pseudo-model (`embed`/`plain`/`partial` stages for RSA; see
+`results_report.tex` §8.4 "Generalized Partial RSA and Residualization
+Across All Native-AV Models" for the write-up).
+
 ### 4. Run RSA
 
 ```bash

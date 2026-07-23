@@ -214,23 +214,50 @@ MODELS=(
 
 # omni3b / topoomni layer sweep — add a layer index here to wire it into every
 # analysis.sh run; no need to hand-write new MODELS entries per layer.
-LAYERS=(35 27 18 9 1)
-OMNI3B_MODALITIES="av,a,v"    # currently disabled below; uncomment the line in the loop to enable
+LAYERS=(35 34 27 18 9 1)
+OMNI3B_MODALITIES="av,a,v"
 TOPOOMNI_MODALITIES="av"     # av only for now — switch to "av,a,v" once ready
 
 if [ "${SKIP_LAYER_SWEEP:-false}" != "true" ]; then
     for L in "${LAYERS[@]}"; do
-        # Only layers 9/18/27 have a "_lt" (last-token) counterpart on disk, so
-        # only those get the disambiguating "_mp" (mean-pool) tag; layers 1/35
-        # have no lasttoken variant and keep their bare pre-existing name.
+        # Layers 9/18/27/34 have a genuine "_mp"/"_lt" pair on disk (34 is the
+        # penultimate thinker layer, extracted via *_extract_thinker_penultimate.py
+        # with the same non-tautological methodology). Layers 1/35 are stale
+        # pre-mp/lt-migration bare probes (35 == the FINAL layer under this
+        # family's 0-indexed convention, not the penultimate) and keep their
+        # bare pre-existing name.
         case "$L" in
-            9|18|27) SUFFIX="_mp" ;;
-            *)       SUFFIX="" ;;
+            9|18|27|34) SUFFIX="_mp" ;;
+            *)          SUFFIX="" ;;
         esac
-        # MODELS+=("omni3b_layer${L}${SUFFIX}:${OMNI3B_MODALITIES}")
+        MODELS+=("omni3b_layer${L}${SUFFIX}:${OMNI3B_MODALITIES}")
         MODELS+=("topoomni_layer${L}${SUFFIX}:${TOPOOMNI_MODALITIES}")
         MODELS+=("topoomni_layer${L}_sheet${SUFFIX}:${TOPOOMNI_MODALITIES}")
     done
+
+    # nemotron (omni-embed-nemotron-3b): no bare layer1/2/4/35-style probes
+    # exist on disk (unlike omni3b/topoomni) -- only the 9/18/27/36 depth-sweep
+    # plus 35 (penultimate of 36, its own 1-indexed hidden_states convention
+    # already matches "layer35" directly), all "_mp"-suffixed, and no "_lt"
+    # variant is needed (its native "_av" readout is already genuinely joint
+    # from the start; see model_registry.py).
+    NEMOTRON_MODALITIES="av,a,v"
+    for L in 9 18 27 35 36; do
+        MODELS+=("nemotron_layer${L}_mp:${NEMOTRON_MODALITIES}")
+    done
+
+    # Own-encoder (audio_tower/visual, pre-thinker-fusion) penultimate-layer
+    # probes -- no "av" readout (see model_registry.py).
+    MODELS+=("omni3b_encoder_penultimate:a,v")
+    MODELS+=("topoomni_encoder_penultimate:a,v")
+    MODELS+=("nemotron_encoder_penultimate:a,v")
+fi
+
+# Diff-study override: run_diff_study.sh sets this to a ';'-joined
+# "model:modality,modality" string (same serialization as MODELS_STR below)
+# to swap in the scramble/dummy model list instead of the default sweep above.
+if [ -n "${RSA_MODELS_OVERRIDE:-}" ]; then
+    IFS=';' read -ra MODELS <<< "$RSA_MODELS_OVERRIDE"
 fi
 
 # ── Statistical inference (Schütt et al. 2023) ──────────────────────────
@@ -1265,11 +1292,27 @@ case "$MODE" in
             BIN_SEC_INT="${BIN_SEC%.*}"
             SKIP_INT="${SKIP_SEC%.*}"
             log "=== BIN_SEC=${BIN_SEC}s SKIP_SEC=${SKIP_SEC}s ==="
+            # SKIP_NOISE_CEILING / SKIP_CROSSNOBIS: noise ceiling is model-independent
+            # (pure inter-subject fMRI reliability) and crossnobis is expensive
+            # (loads every subject's raw CIFTI at once) -- run_diff_study.sh sets
+            # both to true so its scramble/dummy sweep doesn't redundantly redo
+            # either when the main pipeline has already produced them.
             case "$MODE" in
                 avg)        run_avg ;;
-                persubject) run_persubject; run_group_stats; run_noise_ceiling ;;
-                groupstats) run_crossnobis_isub; run_crossnobis_persubject; run_group_stats; run_noise_ceiling ;;
-                all)        run_avg; run_persubject; run_crossnobis_isub; run_crossnobis_persubject; run_group_stats; run_noise_ceiling ;;
+                persubject) run_persubject
+                            run_group_stats
+                            [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
+                groupstats) if [ "${SKIP_CROSSNOBIS:-false}" != "true" ]; then
+                                run_crossnobis_isub; run_crossnobis_persubject
+                            fi
+                            run_group_stats
+                            [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
+                all)        run_avg; run_persubject
+                            if [ "${SKIP_CROSSNOBIS:-false}" != "true" ]; then
+                                run_crossnobis_isub; run_crossnobis_persubject
+                            fi
+                            run_group_stats
+                            [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
             esac
         done
         ;;

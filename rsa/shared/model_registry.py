@@ -169,6 +169,41 @@ MODELS: dict[str, dict] = {
         "description": "Omni-Embed-Nemotron-3B, layer 27 — late AV fusion (depth-sweep probe)"},
     "nemotron_layer36_mp": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 36 (true final layer) — native contrastively-trained AV retrieval embedding"},
+    # ── Penultimate-layer additions (thinker layer 35 of 36, second-to-last).
+    # omni3b/topoomni use their own 0-indexed decoder_layers/cortical_adaptors
+    # convention (layer{i}=index i directly), so penultimate is index 34,
+    # named "layer34" -- NOT "layer35", which already denotes the pre-existing
+    # (stale, un-migrated) FINAL layer for these two families. nemotron uses a
+    # 1-indexed hidden_states convention where "layer35" is directly correct.
+    # All three names refer to the SAME conceptual position (second-to-last of
+    # 36 thinker layers). See *_extract_thinker_penultimate.py docstrings.
+    "omni3b_layer34_mp": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker hidden state, layer 34 (penultimate of 36) — late AV fusion"},
+    "omni3b_layer34_lt": {"modalities": ["av"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker, layer 34 (penultimate of 36), last-token joint-AV readout"},
+    "topoomni_layer34_mp": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 34 (penultimate of 36)"},
+    "topoomni_layer34_lt": {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, layer 34 (penultimate of 36), last-token joint-AV readout"},
+    "topoomni_layer34_sheet_mp": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni cortical-sheet (topographic) code, layer 34 (penultimate of 36)"},
+    "topoomni_layer34_sheet_lt": {"modalities": ["av"], "joint": True,
+        "description": "Topo-Omni cortical sheet, layer 34 (penultimate of 36), last-token joint-AV readout"},
+    "nemotron_layer35_mp": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 35 (penultimate of 36) — late AV fusion (depth-sweep probe)"},
+    "nemotron_layer35_lt": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 35 (penultimate of 36), last-token readout"},
+    # ── Own-encoder (audio_tower/visual, pre-thinker-fusion) penultimate-layer
+    # probes: genuinely separate-pass audio/video ENCODER representations, not
+    # thinker hidden states -- see *_extract_encoder_penultimate.py. No "av"
+    # readout (the two towers never see each other's tokens), so joint=False
+    # like audiomae/videomaev2-large.
+    "omni3b_encoder_penultimate": {"modalities": ["a", "v"], "joint": False,
+        "description": "Qwen2.5-Omni-3B audio_tower/visual encoder, penultimate layer (pre-thinker-fusion, own-encoder space)"},
+    "topoomni_encoder_penultimate": {"modalities": ["a", "v"], "joint": False,
+        "description": "Topo-Omni audio_tower/visual encoder, penultimate layer (pre-thinker-fusion, own-encoder space)"},
+    "nemotron_encoder_penultimate": {"modalities": ["a", "v"], "joint": False,
+        "description": "Omni-Embed-Nemotron-3B audio_tower/visual encoder, penultimate layer (pre-thinker-fusion, own-encoder space)"},
     # ── Move 3: temporal-scramble binding control. Each bin's video paired with
     # a randomly permuted bin's audio (fixed seed) before extraction -- breaks
     # correct A-V temporal binding while preserving each modality's marginal
@@ -249,6 +284,45 @@ MODELS: dict[str, dict] = {
         "description":  "Perception Encoder Core ViT-L/14 — vision-only encoder",
     },
 }
+
+# ── Native AV joint models ────────────────────────────────────────────────────
+# Every genuine joint-fusion AV embedding we have, excluding the Move-3
+# controls (_avscramble, _clsav_from_a/_v) which are binding/presence
+# manipulations of a base model, not additional "real" AV models. Used to
+# generalize the residual/partial-correlation analyses (linear_resid,
+# partial_corr, projection_resid) across all native AV models instead of
+# just pe-av-small-16-frame.
+
+def _is_native_av(model: str) -> bool:
+    info = MODELS[model]
+    return (
+        info["joint"]
+        and "av" in info["modalities"]
+        and "_avscramble" not in model
+        and "_clsav_from_" not in model
+    )
+
+
+NATIVE_AV_MODELS: list[str] = [m for m in MODELS if _is_native_av(m)]
+
+# ── Auto-derived residual pseudo-models ───────────────────────────────────────
+# _linear_resid pseudo-models are generated on disk by
+# notebooks/feature_extraction/compute_linear_residual_embeddings.py for every
+# NATIVE_AV_MODELS entry (ridge residual after regressing out AudioMAE(a) +
+# VideoMAEv2-Large(v)). Registered here purely for documentation/discoverability
+# -- rsa/searchlight.py, rsa/partial_rsa.py, and encoding/encoding.py only need
+# the .npy file to exist at the standard emb_path() location, not a MODELS entry.
+for _m in list(NATIVE_AV_MODELS):
+    MODELS[f"{_m}_av_linear_resid"] = {
+        "modalities": ["av"], "joint": True,
+        "description": (
+            f"{_m} AV joint embedding, ridge residual after regressing out "
+            f"AudioMAE(a) + VideoMAEv2-Large(v) -- unique variance beyond two "
+            f"independent unimodal specialists (linear_resid)."
+        ),
+    }
+del _m
+
 
 # ── Recommended future models ─────────────────────────────────────────────────
 RECOMMENDED_FUTURE_MODELS = """
@@ -360,6 +434,83 @@ def _lasttoken_scramble_integration_run(base_model: str, modality: str = "av") -
     )
 
 
+def _dummy_integration_run(model: str, dummy_modality: str) -> PartialRSARun:
+    """Dummy-modality counterpart of _own_unimodal_integration_run(): TARGET is the
+    "_clsav_from_{a,v}" joint-AV readout (real ONE modality + a fixed content-free
+    placeholder for the other); NUISANCE is only the corresponding REAL modality's
+    own unimodal stream from `model` -- unlike the scramble case, the OTHER band
+    can't be included as a nuisance regressor here (the placeholder is a constant
+    stimulus repeated every row, so its RDM has zero variance and is degenerate for
+    banded ridge). `model` is the model name whose bare "_a"/"_v" embeddings are the
+    real modality actually fed alongside the placeholder (e.g. "pe-av-small-16-frame"
+    or "omni3b_layer9_mp"). `dummy_modality` is "a" (dummy VIDEO + real AUDIO,
+    i.e. "_clsav_from_a") or "v" (dummy AUDIO + real VIDEO, "_clsav_from_v").
+    """
+    dummy_model = f"{model}_clsav_from_{dummy_modality}"
+    return PartialRSARun(
+        target   = (dummy_model, "av"),
+        nuisance = [(model, dummy_modality)],
+        label    = f"{dummy_model}_av_INTEGRATION",
+        description = (
+            f"{model} joint-AV readout with one modality replaced by a fixed "
+            f"content-free placeholder (real {dummy_modality} + dummy "
+            f"{'video' if dummy_modality == 'a' else 'audio'}), controlling for "
+            f"{model}'s own real {dummy_modality}-only output -- tests whether the "
+            f"joint embedding carries anything beyond the one real modality present "
+            f"(Move 3's modality-presence counterpart of the scramble binding control)."
+        ),
+        kind = "integration",
+    )
+
+
+def _lasttoken_dummy_integration_run(base_model: str, dummy_modality: str) -> PartialRSARun:
+    """Dummy-modality counterpart of _lasttoken_scramble_integration_run(): TARGET is
+    the "_lt_clsav_from_{a,v}" last-token joint-AV readout; NUISANCE is the
+    corresponding "_mp_clsav_from_{a,v}" model's own real-modality stream (mirrors
+    _dummy_integration_run's reasoning: the placeholder modality is a constant
+    stimulus repeated every row, so it can't be a nuisance band). `base_model` is
+    the BARE identifier with neither suffix (e.g. "omni3b_layer9").
+    """
+    mp_dummy_model = f"{base_model}_mp_clsav_from_{dummy_modality}"
+    lt_dummy_model = f"{base_model}_lt_clsav_from_{dummy_modality}"
+    return PartialRSARun(
+        target   = (lt_dummy_model, "av"),
+        nuisance = [(f"{base_model}_mp", dummy_modality)],
+        label    = f"{lt_dummy_model}_av_INTEGRATION",
+        description = (
+            f"{base_model} last-token joint-AV readout with one modality replaced by "
+            f"a fixed content-free placeholder (real {dummy_modality} + dummy "
+            f"{'video' if dummy_modality == 'a' else 'audio'}), controlling for the "
+            f"base model's own real {dummy_modality}-only output -- last-token "
+            f"counterpart of _dummy_integration_run()."
+        ),
+        kind = "integration",
+    )
+
+
+def _cross_baseline_partial_corr_run(model: str, modality: str = "av") -> PartialRSARun:
+    """Generalizes run_A (originally PE-AV-only) to any native AV model: partial
+    correlation between the target's RDM and the brain RDM, controlling for
+    AudioMAE(a) + VideoMAEv2-Large(v) (two independent unimodal specialists,
+    not the target's own unimodal streams). Tests cross-architecture unique
+    variance for every model in NATIVE_AV_MODELS, not just PE-AV. Routed as
+    "cross_baseline" kind (legacy rsa/partial/ output convention) since,
+    unlike the Move-1 integration runs, nuisance here is NOT the target's own
+    unimodal decoders.
+    """
+    return PartialRSARun(
+        target   = (model, modality),
+        nuisance = [("audiomae", "a"), ("videomaev2-large", "v")],
+        label    = f"{model}_{modality}_partial_corr",
+        description = (
+            f"{model} {modality} joint embedding, controlling for "
+            f"AudioMAE (audio) + VideoMAEv2-Large (video) -- cross-architecture "
+            f"unique-variance partial correlation, generalized across all "
+            f"NATIVE_AV_MODELS."
+        ),
+    )
+
+
 PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     # Run A: regress out independently-trained unimodal baselines (AudioMAE + VideoMAE)
     # from PE-AV joint.  Tests whether PE-AV encodes something beyond what two
@@ -430,6 +581,14 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer9_lasttoken":  _lasttoken_integration_run("topoomni_layer9"),
     "integration_topoomni_layer18_lasttoken": _lasttoken_integration_run("topoomni_layer18"),
     "integration_topoomni_layer27_lasttoken": _lasttoken_integration_run("topoomni_layer27"),
+    # ── topoomni cortical-sheet variant's INTACT integration run was missing
+    # (only its avscramble/dummy counterparts had been added) -- added for parity.
+    "integration_topoomni_layer9_sheet":    _own_unimodal_integration_run("topoomni_layer9_sheet_mp"),
+    "integration_topoomni_layer18_sheet":   _own_unimodal_integration_run("topoomni_layer18_sheet_mp"),
+    "integration_topoomni_layer27_sheet":   _own_unimodal_integration_run("topoomni_layer27_sheet_mp"),
+    "integration_topoomni_layer9_sheet_lasttoken":  _lasttoken_integration_run("topoomni_layer9_sheet"),
+    "integration_topoomni_layer18_sheet_lasttoken": _lasttoken_integration_run("topoomni_layer18_sheet"),
+    "integration_topoomni_layer27_sheet_lasttoken": _lasttoken_integration_run("topoomni_layer27_sheet"),
     # ── Move 3: temporal-scramble binding control. Same own-unimodal integration
     # contrast, computed on the scrambled embeddings. BINDING MAP =
     # integration(intact) - integration(scrambled), computed downstream.
@@ -453,7 +612,76 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer9_lasttoken_avscramble":  _lasttoken_scramble_integration_run("topoomni_layer9"),
     "integration_topoomni_layer18_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer18"),
     "integration_topoomni_layer27_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer27"),
+    # ── topoomni cortical-sheet variant was missing from the Move 3 scramble
+    # sweep above (only the non-sheet readout was covered) -- added for parity.
+    "integration_topoomni_layer9_sheet_avscramble":  _own_unimodal_integration_run("topoomni_layer9_sheet_mp_avscramble"),
+    "integration_topoomni_layer18_sheet_avscramble": _own_unimodal_integration_run("topoomni_layer18_sheet_mp_avscramble"),
+    "integration_topoomni_layer27_sheet_avscramble": _own_unimodal_integration_run("topoomni_layer27_sheet_mp_avscramble"),
+    "integration_topoomni_layer9_sheet_lasttoken_avscramble":  _lasttoken_scramble_integration_run("topoomni_layer9_sheet"),
+    "integration_topoomni_layer18_sheet_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer18_sheet"),
+    "integration_topoomni_layer27_sheet_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer27_sheet"),
+
+    # ── Move 3, modality-presence control: dummy-modality (clsav_from_a/_v)
+    # counterpart of the scramble integration runs above. Expectation (per
+    # the AV-integration hypothesis): both this AND the avscramble integration
+    # runs should show WEAKER alignment in true integration regions than the
+    # intact integration run, while non-integration regions stay flat.
+    "integration_pe-av-small-16-frame_clsav_from_a": _dummy_integration_run("pe-av-small-16-frame", "a"),
+    "integration_pe-av-small-16-frame_clsav_from_v": _dummy_integration_run("pe-av-small-16-frame", "v"),
+    "integration_omni3b_layer9_clsav_from_a":    _dummy_integration_run("omni3b_layer9_mp", "a"),
+    "integration_omni3b_layer9_clsav_from_v":    _dummy_integration_run("omni3b_layer9_mp", "v"),
+    "integration_omni3b_layer18_clsav_from_a":   _dummy_integration_run("omni3b_layer18_mp", "a"),
+    "integration_omni3b_layer18_clsav_from_v":   _dummy_integration_run("omni3b_layer18_mp", "v"),
+    "integration_omni3b_layer27_clsav_from_a":   _dummy_integration_run("omni3b_layer27_mp", "a"),
+    "integration_omni3b_layer27_clsav_from_v":   _dummy_integration_run("omni3b_layer27_mp", "v"),
+    "integration_topoomni_layer9_clsav_from_a":   _dummy_integration_run("topoomni_layer9_mp", "a"),
+    "integration_topoomni_layer9_clsav_from_v":   _dummy_integration_run("topoomni_layer9_mp", "v"),
+    "integration_topoomni_layer18_clsav_from_a":  _dummy_integration_run("topoomni_layer18_mp", "a"),
+    "integration_topoomni_layer18_clsav_from_v":  _dummy_integration_run("topoomni_layer18_mp", "v"),
+    "integration_topoomni_layer27_clsav_from_a":  _dummy_integration_run("topoomni_layer27_mp", "a"),
+    "integration_topoomni_layer27_clsav_from_v":  _dummy_integration_run("topoomni_layer27_mp", "v"),
+    "integration_topoomni_layer9_sheet_clsav_from_a":  _dummy_integration_run("topoomni_layer9_sheet_mp", "a"),
+    "integration_topoomni_layer9_sheet_clsav_from_v":  _dummy_integration_run("topoomni_layer9_sheet_mp", "v"),
+    "integration_topoomni_layer18_sheet_clsav_from_a": _dummy_integration_run("topoomni_layer18_sheet_mp", "a"),
+    "integration_topoomni_layer18_sheet_clsav_from_v": _dummy_integration_run("topoomni_layer18_sheet_mp", "v"),
+    "integration_topoomni_layer27_sheet_clsav_from_a": _dummy_integration_run("topoomni_layer27_sheet_mp", "a"),
+    "integration_topoomni_layer27_sheet_clsav_from_v": _dummy_integration_run("topoomni_layer27_sheet_mp", "v"),
+    "integration_nemotron_layer9_clsav_from_a":   _dummy_integration_run("nemotron_layer9_mp", "a"),
+    "integration_nemotron_layer9_clsav_from_v":   _dummy_integration_run("nemotron_layer9_mp", "v"),
+    "integration_nemotron_layer18_clsav_from_a":  _dummy_integration_run("nemotron_layer18_mp", "a"),
+    "integration_nemotron_layer18_clsav_from_v":  _dummy_integration_run("nemotron_layer18_mp", "v"),
+    "integration_nemotron_layer27_clsav_from_a":  _dummy_integration_run("nemotron_layer27_mp", "a"),
+    "integration_nemotron_layer27_clsav_from_v":  _dummy_integration_run("nemotron_layer27_mp", "v"),
+    "integration_nemotron_layer36_clsav_from_a":  _dummy_integration_run("nemotron_layer36_mp", "a"),
+    "integration_nemotron_layer36_clsav_from_v":  _dummy_integration_run("nemotron_layer36_mp", "v"),
+
+    # ── Last-token dummy counterparts (mirrors the lasttoken_avscramble block).
+    "integration_omni3b_layer9_lasttoken_clsav_from_a":    _lasttoken_dummy_integration_run("omni3b_layer9", "a"),
+    "integration_omni3b_layer9_lasttoken_clsav_from_v":    _lasttoken_dummy_integration_run("omni3b_layer9", "v"),
+    "integration_omni3b_layer18_lasttoken_clsav_from_a":   _lasttoken_dummy_integration_run("omni3b_layer18", "a"),
+    "integration_omni3b_layer18_lasttoken_clsav_from_v":   _lasttoken_dummy_integration_run("omni3b_layer18", "v"),
+    "integration_omni3b_layer27_lasttoken_clsav_from_a":   _lasttoken_dummy_integration_run("omni3b_layer27", "a"),
+    "integration_omni3b_layer27_lasttoken_clsav_from_v":   _lasttoken_dummy_integration_run("omni3b_layer27", "v"),
+    "integration_topoomni_layer9_lasttoken_clsav_from_a":  _lasttoken_dummy_integration_run("topoomni_layer9", "a"),
+    "integration_topoomni_layer9_lasttoken_clsav_from_v":  _lasttoken_dummy_integration_run("topoomni_layer9", "v"),
+    "integration_topoomni_layer18_lasttoken_clsav_from_a": _lasttoken_dummy_integration_run("topoomni_layer18", "a"),
+    "integration_topoomni_layer18_lasttoken_clsav_from_v": _lasttoken_dummy_integration_run("topoomni_layer18", "v"),
+    "integration_topoomni_layer27_lasttoken_clsav_from_a": _lasttoken_dummy_integration_run("topoomni_layer27", "a"),
+    "integration_topoomni_layer27_lasttoken_clsav_from_v": _lasttoken_dummy_integration_run("topoomni_layer27", "v"),
+    "integration_topoomni_layer9_sheet_lasttoken_clsav_from_a":  _lasttoken_dummy_integration_run("topoomni_layer9_sheet", "a"),
+    "integration_topoomni_layer9_sheet_lasttoken_clsav_from_v":  _lasttoken_dummy_integration_run("topoomni_layer9_sheet", "v"),
+    "integration_topoomni_layer18_sheet_lasttoken_clsav_from_a": _lasttoken_dummy_integration_run("topoomni_layer18_sheet", "a"),
+    "integration_topoomni_layer18_sheet_lasttoken_clsav_from_v": _lasttoken_dummy_integration_run("topoomni_layer18_sheet", "v"),
+    "integration_topoomni_layer27_sheet_lasttoken_clsav_from_a": _lasttoken_dummy_integration_run("topoomni_layer27_sheet", "a"),
+    "integration_topoomni_layer27_sheet_lasttoken_clsav_from_v": _lasttoken_dummy_integration_run("topoomni_layer27_sheet", "v"),
 }
+
+# ── Cross-baseline partial correlation, generalized across every native AV
+# model (run_A generalized beyond just pe-av-small-16-frame). name tag: _partial_corr.
+PARTIAL_RSA_RUNS.update({
+    f"partial_corr_{m}": _cross_baseline_partial_corr_run(m)
+    for m in NATIVE_AV_MODELS
+})
 
 
 # ── Diagonal-masking configurations ──────────────────────────────────────────

@@ -1,0 +1,219 @@
+"""
+notebooks/feature_extraction/compute_projection_residual_embeddings.py
+===========================================================================
+Generates "_projection_resid" pseudo-model embeddings: the per-timepoint
+orthogonal-projection residual of a joint AV embedding after removing its
+component in span{a_t, v_t} (see rsa.shared.residuals.projection_residual --
+distinct from "_linear_resid", which fits one shared linear map ACROSS all
+samples; this is a purely local, per-row geometric decomposition).
+
+Two families of runs:
+
+1. Own-unimodal variant (dimension-compatible: target and nuisance share the
+   SAME embedding space, so a genuine 2D projection is well-defined):
+     - PE-AV:      av=cls-av        vs (a=cls-a,  v=cls-v)         [own encoders]
+     - omni-family: av={base}_mp/_lt vs (a={base}_mp_a, v={base}_mp_v)
+                    [thinker-space nuisance -- "_lt" targets are regressed
+                    against the base model's "_mp" real unimodal streams,
+                    mirroring model_registry._lasttoken_integration_run]
+   Saved as {target_model}_av_projection_resid.
+
+2. Encoder-penultimate variant, omni-family only: intended nuisance is
+   {family}_encoder_penultimate (a/v), extracted by
+   notebooks/feature_extraction/{omni3b,topo_omni,nemotron}_extract_encoder_penultimate.py.
+   IMPORTANT CAVEAT: encoder-penultimate embeddings live in the tower's OWN
+   pre-projection hidden space (d=1280, before the audio_tower.proj /
+   visual.merger step that maps into the thinker's embedding space), while
+   av_mp/av_lt live in the THINKER's hidden space (d=2048 for omni3b/
+   topoomni, d=4096 for nemotron per its text_config). These are NOT the
+   same vector space, so a genuine geometric projection (which requires
+   target and nuisance to share one space) is mathematically undefined here
+   -- unlike the own-unimodal variant above. We use the cross-validated
+   RIDGE residual (rsa.shared.residuals.linear_residual, same method as
+   "_linear_resid") for this pairing instead, and tag it "_linear_resid_encoder"
+   rather than mislabeling a regression as a "projection". Flagged explicitly
+   here and in the run summary -- this is a judgment call made to resolve a
+   genuine dimensionality mismatch in the original request, not a silent
+   substitution.
+
+Usage
+-----
+conda run --no-capture-output -n movie python \
+    notebooks/feature_extraction/compute_projection_residual_embeddings.py \
+    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
+    --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \
+    --run-trs /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy \
+    --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from rsa.shared.rsa_utils import preprocess_fmri, process_model_embeddings, align_and_assert_bins
+from rsa.shared.model_registry import BIN_SEC_DEFAULT, DELAY_SEC_DEFAULT, TR_DEFAULT, emb_path
+from rsa.shared.residuals import projection_residual, linear_residual
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+
+# base identifiers (no _mp/_lt suffix) with both readouts extracted
+OMNI_FAMILY_BASES = [
+    "omni3b_layer9", "omni3b_layer18", "omni3b_layer27", "omni3b_layer34",
+    "topoomni_layer9", "topoomni_layer18", "topoomni_layer27", "topoomni_layer34",
+    "topoomni_layer9_sheet", "topoomni_layer18_sheet", "topoomni_layer27_sheet", "topoomni_layer34_sheet",
+    "nemotron_layer9", "nemotron_layer18", "nemotron_layer27", "nemotron_layer36", "nemotron_layer35",
+]
+READOUTS = ["mp", "lt"]
+
+
+def _family(base: str) -> str:
+    if base.startswith("omni3b"):
+        return "omni3b"
+    if base.startswith("topoomni"):
+        return "topoomni"
+    if base.startswith("nemotron"):
+        return "nemotron"
+    raise ValueError(f"Unknown family for base={base}")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Generate _projection_resid (and, where dims mismatch, _linear_resid_encoder) pseudo-models.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument("--embeddings-dir", required=True)
+    p.add_argument("--timing-csv", required=True)
+    p.add_argument("--run-trs", required=True, dest="run_trs")
+    p.add_argument("--bin-sec", type=float, default=BIN_SEC_DEFAULT)
+    p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec")
+    p.add_argument("--delay-sec", type=float, default=DELAY_SEC_DEFAULT)
+    p.add_argument("--tr", type=float, default=TR_DEFAULT)
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    if args.skip_sec is None:
+        args.skip_sec = args.bin_sec
+
+    timing_df = pd.read_csv(args.timing_csv)
+    run_trs = np.load(args.run_trs)
+    n_trs_total = int(run_trs.sum())
+    fmri_binned = preprocess_fmri(
+        np.zeros((1, n_trs_total), dtype=np.float32), timing_df, run_trs,
+        args.bin_sec, args.tr, args.delay_sec, skip_sec=args.skip_sec,
+    )
+    log.info(f"Reference n_bins={fmri_binned.shape[0]}")
+
+    def load_emb(model, modality):
+        path = emb_path(args.embeddings_dir, model, modality, args.bin_sec, args.skip_sec)
+        if not path.exists():
+            raise FileNotFoundError(str(path))
+        emb = process_model_embeddings(
+            str(path), timing_df, bin_sec=args.bin_sec, tr=args.tr,
+            run_trs=run_trs, delay_sec=args.delay_sec, skip_sec=args.skip_sec,
+        )
+        _, emb = align_and_assert_bins(fmri_binned, emb)
+        return emb.astype(np.float64)
+
+    def save(out_model, R):
+        out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(out_path, R.astype(np.float32))
+        return out_path
+
+    done, skipped = [], []
+
+    # ── 1. PE-AV: own-encoder projection residual ────────────────────────────
+    try:
+        av = load_emb("pe-av-small-16-frame", "av")
+        a = load_emb("pe-av-small-16-frame", "a")
+        v = load_emb("pe-av-small-16-frame", "v")
+        R = projection_residual(av, a, v)
+        out_model = "pe-av-small-16-frame_av_projection_resid"
+        p = save(out_model, R)
+        rel_norm = float(np.linalg.norm(R) / np.linalg.norm(av))
+        log.info(f"[{out_model}] ||R||/||av||={rel_norm:.4f} -> {p}")
+        done.append(out_model)
+    except FileNotFoundError as e:
+        log.warning(f"[pe-av-small-16-frame] SKIP projection_resid -- {e}")
+        skipped.append("pe-av-small-16-frame")
+
+    # ── 2. omni-family: own-mp-unimodal projection residual (mp and lt targets) ──
+    for base in OMNI_FAMILY_BASES:
+        try:
+            a_mp = load_emb(f"{base}_mp", "a")
+            v_mp = load_emb(f"{base}_mp", "v")
+        except FileNotFoundError as e:
+            log.warning(f"[{base}] SKIP (own-unimodal nuisance missing) -- {e}")
+            skipped.append(f"{base}_*_projection_resid")
+            continue
+
+        for readout in READOUTS:
+            target_model = f"{base}_{readout}"
+            try:
+                target = load_emb(target_model, "av")
+            except FileNotFoundError as e:
+                log.warning(f"[{target_model}] SKIP projection_resid -- {e}")
+                skipped.append(f"{target_model}_projection_resid")
+                continue
+            if target.shape[1] != a_mp.shape[1]:
+                log.warning(f"[{target_model}] SKIP projection_resid -- dim mismatch "
+                            f"target={target.shape[1]} nuisance={a_mp.shape[1]}")
+                skipped.append(f"{target_model}_projection_resid (dim mismatch)")
+                continue
+            R = projection_residual(target, a_mp, v_mp)
+            out_model = f"{target_model}_av_projection_resid"
+            p = save(out_model, R)
+            rel_norm = float(np.linalg.norm(R) / np.linalg.norm(target))
+            log.info(f"[{out_model}] ||R||/||av||={rel_norm:.4f} -> {p}")
+            done.append(out_model)
+
+    # ── 3. omni-family: encoder-penultimate variant. Dimension mismatch vs.
+    # thinker-space av_mp/av_lt (see module docstring) -- uses linear_residual
+    # (ridge) instead of a true geometric projection; tagged _linear_resid_encoder.
+    for family in ("omni3b", "topoomni", "nemotron"):
+        enc_model = f"{family}_encoder_penultimate"
+        try:
+            enc_a = load_emb(enc_model, "a")
+            enc_v = load_emb(enc_model, "v")
+        except FileNotFoundError as e:
+            log.warning(f"[{enc_model}] SKIP encoder-penultimate variant -- {e}")
+            skipped.append(f"{family}_*_linear_resid_encoder")
+            continue
+
+        for base in OMNI_FAMILY_BASES:
+            if _family(base) != family:
+                continue
+            for readout in READOUTS:
+                target_model = f"{base}_{readout}"
+                try:
+                    target = load_emb(target_model, "av")
+                except FileNotFoundError as e:
+                    log.warning(f"[{target_model}] SKIP linear_resid_encoder -- {e}")
+                    skipped.append(f"{target_model}_linear_resid_encoder")
+                    continue
+                R, ms, alpha = linear_residual(target, [enc_a, enc_v])
+                out_model = f"{target_model}_av_linear_resid_encoder"
+                p = save(out_model, R)
+                log.info(f"[{out_model}] MS={ms:.4f} alpha={alpha:.2e} -> {p}")
+                done.append(out_model)
+
+    log.info("=" * 60)
+    log.info(f"Done. {len(done)} pseudo-models saved, {len(skipped)} skipped.")
+    if skipped:
+        log.info("Skipped: " + ", ".join(skipped))
+
+
+if __name__ == "__main__":
+    main()

@@ -152,15 +152,52 @@ MODELS=(
 
 # omni3b / topoomni layer sweep — add a layer index here to wire it into every
 # analysis.sh run; no need to hand-write new MODELS entries per layer.
-LAYERS=(35 27 18 9 1)
+# BUG FIX: layers 9/18/27 need the "_mp" (mean-pool) suffix -- since the
+# mp/lt naming migration, "omni3b_layer9" (no suffix) has no embeddings on
+# disk at all (only "_mp"/"_lt" exist), so those three layers were silently
+# no-ops in every past encoding run. Only layers 1/35 have no suffix (no
+# lasttoken counterpart exists for them) -- same rule as rsa/analysis.sh.
+# Layer 34 (penultimate of 36) is a genuine "_mp" probe, same as 9/18/27 --
+# NOT the same layer as the pre-existing stale bare "35" (that's the FINAL
+# layer under this family's 0-indexed convention; see model_registry.py).
+LAYERS=(35 34 27 18 9 1)
 OMNI3B_MODALITIES="av,a,v"
 TOPOOMNI_MODALITIES="av"     # av only for now — switch to "av,a,v" once ready
 
 for L in "${LAYERS[@]}"; do
-    MODELS+=("omni3b_layer${L}:${OMNI3B_MODALITIES}")
-    MODELS+=("topoomni_layer${L}:${TOPOOMNI_MODALITIES}")
-    MODELS+=("topoomni_layer${L}_sheet:${TOPOOMNI_MODALITIES}")
+    case "$L" in
+        9|18|27|34) SUFFIX="_mp" ;;
+        *)          SUFFIX="" ;;
+    esac
+    MODELS+=("omni3b_layer${L}${SUFFIX}:${OMNI3B_MODALITIES}")
+    MODELS+=("topoomni_layer${L}${SUFFIX}:${TOPOOMNI_MODALITIES}")
+    MODELS+=("topoomni_layer${L}_sheet${SUFFIX}:${TOPOOMNI_MODALITIES}")
 done
+
+# nemotron (omni-embed-nemotron-3b): no bare layer1/2/4/35-style probes on
+# disk -- only 9/18/27/36 plus 35 (penultimate of 36; its own 1-indexed
+# hidden_states convention already matches "layer35" directly), all
+# "_mp"-suffixed (see rsa/analysis.sh's identical sweep and model_registry.py's
+# docstring on why nemotron needs no "_lt").
+NEMOTRON_MODALITIES="av,a,v"
+for L in 9 18 27 35 36; do
+    MODELS+=("nemotron_layer${L}_mp:${NEMOTRON_MODALITIES}")
+done
+
+# Own-encoder (audio_tower/visual, pre-thinker-fusion) penultimate-layer
+# probes -- no "av" readout (see model_registry.py).
+MODELS+=("omni3b_encoder_penultimate:a,v")
+MODELS+=("topoomni_encoder_penultimate:a,v")
+MODELS+=("nemotron_encoder_penultimate:a,v")
+
+# ── Scramble/dummy diff-study models: own registry, not swept into the
+# general MODELS array above (same reasoning as rsa/run_diff_study.sh --
+# these are control CONDITIONS paired against a native-AV baseline, not
+# independent models). Populated by encoding/run_diff_study.sh via
+# ENCODING_MODELS_OVERRIDE; left empty here so default runs are unaffected.
+if [ -n "${ENCODING_MODELS_OVERRIDE:-}" ]; then
+    IFS=';' read -ra MODELS <<< "$ENCODING_MODELS_OVERRIDE"
+fi
 
 # ── Parallelisation ─────────────────────────────────────────────────────────
 CONDA_ENV="movie"

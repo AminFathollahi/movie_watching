@@ -8,7 +8,7 @@ Inputs (all pre-computed):
         map 'searchlight_spearman_rho'
   - plain RSA, intact:     {GROUP_DIR}/{model}_av/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii
         map 'searchlight_spearman_rho'
-  - partial RSA, scrambled (Move 1 integration contrast, re-run on scrambled embeddings):
+  - partial RSA, scrambled (best-additive integration contrast, re-run on scrambled embeddings):
         {GROUP_DIR}/{model}_avscramble_av_INTEGRATION/k100_delay5s_bin5s_skip5s_spearman/integration_partial_r_searchlight.dscalar.nii
   - partial RSA, intact (the same integration contrast on the intact model):
         {GROUP_DIR}/{model}_av_INTEGRATION/k100_delay5s_bin5s_skip5s_spearman/integration_partial_r_searchlight.dscalar.nii
@@ -33,11 +33,8 @@ import logging
 import sys
 from pathlib import Path
 
-import nibabel as nib
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cifti_io import merge_into_combined  # noqa: E402
+from cifti_io import load_named_map, load_single_map, merge_into_combined  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
 log = logging.getLogger(__name__)
@@ -58,17 +55,6 @@ MODELS = [
 ]
 
 
-def load_map(cifti_path: Path, map_name: str) -> np.ndarray:
-    img = nib.load(str(cifti_path))
-    names = list(img.header.get_axis(0).name)
-    idx = names.index(map_name)
-    return img.get_fdata(dtype=np.float32)[idx]
-
-
-def _load_partial(path: Path) -> np.ndarray:
-    return nib.load(str(path)).get_fdata(dtype=np.float32)[0]
-
-
 def main():
     done, partial_done, skipped = [], [], []
     for model in MODELS:
@@ -83,9 +69,9 @@ def main():
             skipped.append(model)
             continue
 
-        plain_scrambled = load_map(scrambled_plain_path, "searchlight_spearman_rho")
-        plain_intact = load_map(intact_plain_path, "searchlight_spearman_rho")
-        partial_scrambled = _load_partial(partial_scrambled_path)
+        plain_scrambled = load_named_map(scrambled_plain_path, "searchlight_spearman_rho")
+        plain_intact = load_named_map(intact_plain_path, "searchlight_spearman_rho")
+        partial_scrambled = load_single_map(partial_scrambled_path)
 
         diff_plain = plain_intact - plain_scrambled
 
@@ -102,7 +88,7 @@ def main():
             log.info(f"[{model}] partial diff SKIP — missing intact integration map: {partial_intact_path}")
             continue
 
-        partial_intact = _load_partial(partial_intact_path)
+        partial_intact = load_single_map(partial_intact_path)
         binding = partial_intact - partial_scrambled
         merge_into_combined(binding, "binding", out_path, str(scrambled_plain_path))
         log.info(f"[{model}] DONE (binding) — mean binding={binding.mean():.4f}  "

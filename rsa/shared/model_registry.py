@@ -204,7 +204,7 @@ MODELS: dict[str, dict] = {
         "description": "Topo-Omni audio_tower/visual encoder, penultimate layer (pre-thinker-fusion, own-encoder space)"},
     "nemotron_encoder_penultimate": {"modalities": ["a", "v"], "joint": False,
         "description": "Omni-Embed-Nemotron-3B audio_tower/visual encoder, penultimate layer (pre-thinker-fusion, own-encoder space)"},
-    # ── Move 3: temporal-scramble binding control. Each bin's video paired with
+    # ── Temporal-scramble binding control. Each bin's video paired with
     # a randomly permuted bin's audio (fixed seed) before extraction -- breaks
     # correct A-V temporal binding while preserving each modality's marginal
     # content. Same modalities as the intact model.
@@ -355,7 +355,7 @@ class PartialRSARun(NamedTuple):
     description: str                   # human-readable description
     kind:     str = "cross_baseline"   # "cross_baseline" | "integration"
     # "integration" runs regress a native-AV model's OWN unimodal streams out of
-    # its OWN joint embedding (the best-additive-combination contrast — Move 1).
+    # its OWN joint embedding (the best-additive-combination contrast).
     # "cross_baseline" runs regress OTHER models' unimodal streams out instead.
     # Both kinds share one output convention (see partial_rsa.py's save block):
     # group_average/<label>/k{K}_delay{D}s_bin{B}s_skip{S}s_{method}/<file>.
@@ -363,7 +363,7 @@ class PartialRSARun(NamedTuple):
 
 def _own_unimodal_integration_run(model: str, modality: str = "av") -> PartialRSARun:
     """Best-additive integration contrast: model's own joint embedding, controlling
-    for its own unimodal (a, v) streams. See Move 1 of the AV-integration extension.
+    for its own unimodal (a, v) streams -- the best-additive integration contrast.
     """
     return PartialRSARun(
         target   = (model, modality),
@@ -426,7 +426,7 @@ def _lasttoken_scramble_integration_run(base_model: str, modality: str = "av") -
         description = (
             f"{base_model} last-token joint-AV readout under scrambled (mismatched) "
             f"audio-video pairing, controlling for the audio/video actually fed to "
-            f"the model at each row (reindexed a[perm[i]], true v[i]) -- Move 3 "
+            f"the model at each row (reindexed a[perm[i]], true v[i]) -- temporal-scramble "
             f"binding control counterpart of the intact lasttoken integration run."
         ),
         kind = "integration",
@@ -456,7 +456,7 @@ def _dummy_integration_run(model: str, dummy_modality: str) -> PartialRSARun:
             f"{'video' if dummy_modality == 'a' else 'audio'}), controlling for "
             f"{model}'s own real {dummy_modality}-only output -- tests whether the "
             f"joint embedding carries anything beyond the one real modality present "
-            f"(Move 3's modality-presence counterpart of the scramble binding control)."
+            f"(the modality-presence counterpart of the scramble binding control)."
         ),
         kind = "integration",
     )
@@ -545,7 +545,7 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
             "specialist baseline."
         ),
     ),
-    # ── Move 1: best-additive integration contrast, generalized across every
+    # ── Best-additive integration contrast, generalized across every
     # native-AV model that has separable _a/_v/_av embeddings at bin5s_skip5s.
     # (imagebind is 2s-only — no _a/_v at 5s — so it is intentionally excluded here.)
     "integration_cav-mae-sync": _own_unimodal_integration_run("cav-mae-sync"),
@@ -571,21 +571,21 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer9_lasttoken":  _lasttoken_integration_run("topoomni_layer9"),
     "integration_topoomni_layer18_lasttoken": _lasttoken_integration_run("topoomni_layer18"),
     "integration_topoomni_layer27_lasttoken": _lasttoken_integration_run("topoomni_layer27"),
-    # ── topoomni cortical-sheet variant's INTACT integration run was missing
-    # (only its avscramble/dummy counterparts had been added) -- added for parity.
+    # ── Intact integration run for the topoomni cortical-sheet variant,
+    # matching its avscramble/dummy counterparts below.
     "integration_topoomni_layer9_sheet":    _own_unimodal_integration_run("topoomni_layer9_sheet_mp"),
     "integration_topoomni_layer18_sheet":   _own_unimodal_integration_run("topoomni_layer18_sheet_mp"),
     "integration_topoomni_layer27_sheet":   _own_unimodal_integration_run("topoomni_layer27_sheet_mp"),
     "integration_topoomni_layer9_sheet_lasttoken":  _lasttoken_integration_run("topoomni_layer9_sheet"),
     "integration_topoomni_layer18_sheet_lasttoken": _lasttoken_integration_run("topoomni_layer18_sheet"),
     "integration_topoomni_layer27_sheet_lasttoken": _lasttoken_integration_run("topoomni_layer27_sheet"),
-    # ── Move 3: temporal-scramble binding control. Same own-unimodal integration
+    # ── Temporal-scramble binding control. Same own-unimodal integration
     # contrast, computed on the scrambled embeddings. BINDING MAP =
     # integration(intact) - integration(scrambled), computed downstream.
     "integration_pe-av-small-16-frame_avscramble": _own_unimodal_integration_run("pe-av-small-16-frame_avscramble"),
     "integration_cav-mae-sync_avscramble":         _own_unimodal_integration_run("cav-mae-sync_avscramble"),
-    # ── Move 3 extended to omni3b/topoomni (the models where the av=(a+v)/2
-    # circularity fix originated) per user request -- not just cav-mae-sync.
+    # ── Temporal-scramble binding control for omni3b/topoomni (the models
+    # where the av=(a+v)/2 circularity fix originated), not just cav-mae-sync.
     "integration_omni3b_layer9_avscramble":    _own_unimodal_integration_run("omni3b_layer9_mp_avscramble"),
     "integration_omni3b_layer18_avscramble":   _own_unimodal_integration_run("omni3b_layer18_mp_avscramble"),
     "integration_omni3b_layer27_avscramble":   _own_unimodal_integration_run("omni3b_layer27_mp_avscramble"),
@@ -602,8 +602,8 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer9_lasttoken_avscramble":  _lasttoken_scramble_integration_run("topoomni_layer9"),
     "integration_topoomni_layer18_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer18"),
     "integration_topoomni_layer27_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer27"),
-    # ── topoomni cortical-sheet variant was missing from the Move 3 scramble
-    # sweep above (only the non-sheet readout was covered) -- added for parity.
+    # ── Temporal-scramble control for the topoomni cortical-sheet variant,
+    # matching the non-sheet readout's sweep above.
     "integration_topoomni_layer9_sheet_avscramble":  _own_unimodal_integration_run("topoomni_layer9_sheet_mp_avscramble"),
     "integration_topoomni_layer18_sheet_avscramble": _own_unimodal_integration_run("topoomni_layer18_sheet_mp_avscramble"),
     "integration_topoomni_layer27_sheet_avscramble": _own_unimodal_integration_run("topoomni_layer27_sheet_mp_avscramble"),
@@ -611,7 +611,7 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer18_sheet_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer18_sheet"),
     "integration_topoomni_layer27_sheet_lasttoken_avscramble": _lasttoken_scramble_integration_run("topoomni_layer27_sheet"),
 
-    # ── Move 3, modality-presence control: dummy-modality (clsav_from_a/_v)
+    # ── Modality-presence control: dummy-modality (clsav_from_a/_v)
     # counterpart of the scramble integration runs above. Expectation (per
     # the AV-integration hypothesis): both this AND the avscramble integration
     # runs should show WEAKER alignment in true integration regions than the

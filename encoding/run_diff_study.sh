@@ -8,14 +8,15 @@
 #
 # Hypothesis under test (AV-integration claim, encoding-currency version): in
 # true integration regions, BOTH plain predictive alignment (encoding_r2_av)
-# AND unique-fusion variance (encoding_r2_unique_av, Move 6) should be high
-# for the native/intact condition and WEAKEN under scramble and dummy.
+# AND unique-fusion variance (encoding_r2_unique_av, from variance_partition.py)
+# should be high for the native/intact condition and WEAKEN under scramble
+# and dummy.
 #
 # Stages
 #   plain     Group-average plain encoding (encoding.py, modality=av) for
 #             every {base_model}_{condition} in BASE_MODELS x CONDITIONS.
 #             Reuses encoding/analysis.sh via ENCODING_MODELS_OVERRIDE.
-#   avresid   Group-average Move-6 banded-ridge unique-AV-variance
+#   avresid   Group-average banded-ridge unique-AV-variance
 #             (encoding/variance_partition.py) for every condition. Scramble
 #             uses the condition's OWN a/v (--nuisance-model defaults to
 #             --model); dummy conditions point --nuisance-model at the
@@ -103,7 +104,7 @@ run_diff_study_plain() {
 
 run_diff_study_avresid() {
     local BASE COND MODEL NUISANCE_MODEL NUISANCE_MODS
-    log "=== Diff-study AVresid (Move 6, group-average) ==="
+    log "=== Diff-study AVresid (group-average) ==="
     for BASE in "${BASE_MODELS[@]}"; do
         for COND in "${CONDITIONS[@]}"; do
             MODEL="${BASE}_${COND}"

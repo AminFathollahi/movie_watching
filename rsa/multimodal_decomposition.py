@@ -284,10 +284,9 @@ def compute_interaction_residual_cv(
     RAW EMBEDDING space with n_samples << n_nuisance_features (e.g. 626 time
     bins vs. 2048 concatenated unimodal feature columns): with more
     predictors than samples, the near-unregularized fit trivially drives the
-    residual to ~0 (this IS the mechanism behind the near-null CKA
-    interaction-residual numbers that motivated Move 1's switch to properly
-    cross-validated banded ridge in rsa/partial_rsa.py). Used by
-    encoding/variance_partition.py (Move 6) to build the AV-joint-residual
+    residual to ~0 (this is why rsa/partial_rsa.py's integration contrast
+    uses properly cross-validated banded ridge instead of a near-zero eps).
+    Used by encoding/variance_partition.py to build the AV-joint-residual
     feature band with a real, cross-validated regularization strength
     instead of that near-zero eps.
 

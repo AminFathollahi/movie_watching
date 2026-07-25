@@ -1,24 +1,25 @@
 """
 rsa/temporal_scramble_binding.py
 ==================================
-Move 3 — Temporal-scramble binding control: per-vertex binding maps.
+Temporal-scramble binding control: per-vertex binding maps.
 
-For each native-AV model with both an INTACT and a SCRAMBLED (Move-3,
-video[i] paired with audio[perm(i)], seed=42) best-additive integration map
+For each native-AV model with both an INTACT and a SCRAMBLED (video[i]
+paired with audio[perm(i)], seed=42) best-additive integration map
 (rsa/partial_rsa.py, kind="integration"), computes
 
     binding[v] = integration_intact[v] - integration_scrambled[v]
 
 A positive binding value at vertex v means the model's fusion signal there
 depends on audio and video being correctly TEMPORALLY paired -- i.e. genuine
-cross-modal binding, not just co-occurrence of unimodal content. This is the
-complement to Move 1 (which shows fusion is non-additive) and Move 4 (which
-shows fusion is architecture-general): Move 3 shows the fusion is actually
-PAIRING-sensitive, ruling out the trivial "same average content" explanation.
+cross-modal binding, not just co-occurrence of unimodal content. This
+complements the integration contrast (which shows fusion is non-additive)
+and the cross-architecture convergence map (which shows fusion is
+architecture-general) by showing the fusion is actually PAIRING-sensitive,
+ruling out the trivial "same average content" explanation.
 
-Also computes a Move-4-style cross-model convergence summary over the
-per-model binding maps (mean of per-model z-scored binding maps, and a
-descriptive sign-agreement count) -- same caveat as integration_convergence.py:
+Also computes a cross-model convergence summary over the per-model binding
+maps (mean of per-model z-scored binding maps, and a descriptive
+sign-agreement count) -- same caveat as integration_convergence.py:
 sign_count is descriptive, not an FDR-significance count.
 
 Usage

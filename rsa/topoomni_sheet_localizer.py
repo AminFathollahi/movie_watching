@@ -1,31 +1,26 @@
 """
 rsa/topoomni_sheet_localizer.py
 =================================
-Move 5 — Topo-Omni cortical-sheet localizer, faithfully replicating
-Algorithm 1 / papers/Topo-omni.pdf Sec 2.6 & 4.7.2.
+Topo-Omni cortical-sheet localizer, implementing Algorithm 1 from
+papers/Topo-omni.pdf Sec 2.6 & 4.7.2.
 
-REWRITE NOTE: an earlier version of this script clustered cortical-SHEET
-UNITS by their response profile. Re-reading the paper's actual Algorithm 1
-showed that is backwards: Alg. 1 clusters STIMULI (video/movie segments) via
-Ward's linkage on an INDEPENDENT semantic embedding (the paper uses
-omni-embed-nemotron-3b), scores each candidate cluster by a Welch's t-test
-computed PER CORTICAL-SHEET UNIT (in-cluster vs out-of-cluster stimuli),
-summarized as the median t-value across units, then does a top-down
-dendrogram traversal with selectivity-based early stopping (exact pseudocode
-in Sec 4.7.2, reproduced in ward_cluster_and_score() / _split() below). This
-version replaces the unit-clustering approach with the paper's actual
-stimulus-clustering procedure.
+Algorithm 1 clusters STIMULI (video/movie segments) via Ward's linkage on an
+INDEPENDENT semantic embedding (the paper uses omni-embed-nemotron-3b),
+scores each candidate cluster by a Welch's t-test computed PER
+CORTICAL-SHEET UNIT (in-cluster vs out-of-cluster stimuli), summarized as
+the median t-value across units, then does a top-down dendrogram traversal
+with selectivity-based early stopping (exact pseudocode in Sec 4.7.2,
+reproduced in ward_cluster_and_score() / _split() below).
 
 Cross-model independence (avoids using a model to validate itself):
   - Stimulus-clustering embedding : an INDEPENDENT model's embedding, not
     topoomni's own. Default: pe-av-small-16-frame's _event_t (ModernBERT
     text embedding of the per-bin caption/transcript "event" text) --
-    independent of Topo-Omni's own audio/video pathways, and (per user
-    design) the general convention going forward: use a DIFFERENT model's
-    embedding to drive each model's own sheet-selectivity analysis (e.g. use
-    PE-AV to drive omni3b/topoomni sheet analyses; use omni3b to drive any
-    future PE-AV sheet analysis), with text (_event_t) embeddings as a
-    shared baseline narrative comparison across all of them.
+    independent of Topo-Omni's own audio/video pathways. General convention:
+    use a DIFFERENT model's embedding to drive each model's own
+    sheet-selectivity analysis (e.g. PE-AV drives omni3b/topoomni sheet
+    analyses; omni3b drives PE-AV sheet analyses), with text (_event_t)
+    embeddings as a shared baseline narrative comparison across all of them.
   - Cortical response : topoomni_layer{N}_sheet_av.npy (the model's OWN
     joint-condition cortical sheet -- this is what Alg. 1 actually scores
     against, matching the paper).
@@ -33,24 +28,20 @@ Cross-model independence (avoids using a model to validate itself):
 POSITIVE-CONTROL (speech) LOCALIZER. Among the terminal clusters from Alg. 1,
 pick the one whose member bins have the highest mean whisper_speech_proxy
 per-bin drive (an independent, non-topoomni audio-content proxy derived from
-Whisper-large-v3; an earlier AudioMAE-based proxy showed no usable in-cluster/
-overall separation and was replaced). Validates the pipeline: should land on
-auditory/STG cortex.
+Whisper-large-v3, chosen over an AudioMAE-based proxy that does not reliably
+separate in-cluster from overall drive). Validates the pipeline: should land
+on auditory/STG cortex.
 
-RETIRED: this script used to also have an "AV-integration localizer" branch
-(pick the terminal cluster with the highest mean Move-1 interaction-residual
-drive). That branch has been dropped in favor of
-rsa/topoomni_av_separability_localizer.py's direct, no-external-proxy
-condition-enrichment test, which was built specifically to replace it.
+The AV-integration / condition-enrichment analysis lives in
+rsa/topoomni_av_separability_localizer.py, which tests condition enrichment
+directly on the terminal clusters without an external proxy.
 
 For each winning cluster, the RSA "model embedding" fed to
 rsa/searchlight.py is built from the TOP-|t| cortical-sheet units that drove
-that cluster's score (the same units used to compute the winning score),
-read out over ALL 626 bins -- i.e. the model's own predicted topographic
-territory for that cluster, in a form with enough feature dimensions
-(>= 2 units) for a valid correlation-distance RDM (see the module-level
-note in the pre-rewrite git history: a single-feature-per-bin embedding
-degenerates the RDM).
+that cluster's score, read out over ALL 626 bins -- i.e. the model's own
+predicted topographic territory for that cluster, in a form with enough
+feature dimensions (>= 2 units) for a valid correlation-distance RDM (a
+single-feature-per-bin embedding degenerates the RDM).
 
 Usage
 -----

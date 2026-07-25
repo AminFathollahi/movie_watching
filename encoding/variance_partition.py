@@ -1,19 +1,20 @@
 """
 encoding/variance_partition.py
 ================================
-Move 6 — Encoding fold-in: banded-ridge unique-AV-variance map.
+Banded-ridge unique-AV-variance map: the encoding (prediction-currency)
+counterpart of rsa/partial_rsa.py's integration contrast, which asks the
+same question in representational-geometry currency instead. Both test
+whether a model's native multimodal features carry information beyond what
+a post-hoc combination of its own unimodal features already explains.
 
-Asks the SAME integration question as rsa/partial_rsa.py's Move-1 contrast,
-but in PREDICTION currency instead of representational-geometry currency
-(MIRAGE framing: native multimodal features beat post-hoc unimodal
-aggregation). Fits a group ridge (himalaya GroupRidgeCV, i.e. "BandedRidgeCV")
-with one feature band per --nuisance-modalities entry, plus:
+Fits a group ridge (himalaya GroupRidgeCV, i.e. "BandedRidgeCV") with one
+feature band per --nuisance-modalities entry, plus:
 
   AV-resid-band : the component of --model's AV joint embedding that is
                   orthogonal to the nuisance band(s) — computed by
                   rsa.multimodal_decomposition.compute_interaction_residual_cv(),
-                  the encoding-currency counterpart of Move 1's best-additive
-                  integration contrast.
+                  the encoding-currency counterpart of the RSA integration
+                  contrast's best-additive residual.
 
 --nuisance-modalities defaults to "a,v" (2 bands: A, V — the intact/scramble
 case, where --model's OWN a/v are the right nuisance, since --nuisance-model
@@ -91,7 +92,7 @@ log = logging.getLogger(__name__)
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Move 6: banded-ridge unique-AV-variance encoding map.",
+        description="Banded-ridge unique-AV-variance encoding map.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--preprocessed-dir", required=True, dest="preprocessed_dir")
@@ -152,7 +153,7 @@ def run_analysis(args):
     out_path = out_root / "encoding_r2_unique_av.dscalar.nii"
 
     log.info("=" * 70)
-    log.info(f"Move 6 — Banded-ridge unique-AV-variance: {args.model}")
+    log.info(f"Banded-ridge unique-AV-variance: {args.model}")
     log.info(f"  bin_sec={args.bin_sec}  skip_sec={args.skip_sec}  "
              f"delay_sec={args.delay_sec}  tr={args.tr}")
     log.info(f"  Output: {out_path}")

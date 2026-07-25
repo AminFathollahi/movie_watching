@@ -36,6 +36,38 @@ def load_cifti_data(cifti_path: str) -> np.ndarray:
     return img.get_fdata(dtype=np.float32).T
 
 
+def load_named_map(cifti_path, map_name: str) -> np.ndarray:
+    """Load one named scalar map from a multi-map CIFTI dscalar file.
+
+    Args:
+        cifti_path: str or Path — path to a .dscalar.nii with a ScalarAxis
+        map_name: str — label of the map to extract
+
+    Returns:
+        (n_grayordinates,) float32
+
+    Raises:
+        KeyError: if map_name is not present in the file.
+    """
+    img = nib.load(str(cifti_path))
+    names = list(img.header.get_axis(0).name)
+    if map_name not in names:
+        raise KeyError(f"Map '{map_name}' not found in {cifti_path}. Available: {names}")
+    return img.get_fdata(dtype=np.float32)[names.index(map_name)]
+
+
+def load_single_map(cifti_path) -> np.ndarray:
+    """Load the (only) scalar map from a single-map CIFTI dscalar file.
+
+    Args:
+        cifti_path: str or Path — path to a .dscalar.nii with exactly one map
+
+    Returns:
+        (n_grayordinates,) float32
+    """
+    return nib.load(str(cifti_path)).get_fdata(dtype=np.float32)[0]
+
+
 def save_cifti_map(data_1d: np.ndarray, template_path: str, output_path: str,
                    map_name: str = "rsa") -> None:
     """Save a 1-D cortical map as a CIFTI dscalar.nii.

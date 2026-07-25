@@ -55,11 +55,10 @@ import logging
 import sys
 from pathlib import Path
 
-import nibabel as nib
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cifti_io import merge_into_combined  # noqa: E402
+from cifti_io import load_named_map, load_single_map, merge_into_combined  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
 log = logging.getLogger(__name__)
@@ -67,8 +66,7 @@ log = logging.getLogger(__name__)
 GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average")
 CONFIG = "k100_delay5s_bin5s_skip5s_spearman"
 
-# Same 4 model families requested for the scramble diff-study, at every layer
-# already covered there (rsa/scramble_diff_maps.py's MODELS list).
+# Same model families and layers as rsa/scramble_diff_maps.py's MODELS list.
 MODELS = [
     "pe-av-small-16-frame",
     "omni3b_layer9_mp", "omni3b_layer18_mp", "omni3b_layer27_mp",
@@ -84,17 +82,6 @@ MODELS = [
 DUMMY_CONDITIONS = ["clsav_from_a", "clsav_from_v"]
 
 
-def load_map(cifti_path: Path, map_name: str) -> np.ndarray:
-    img = nib.load(str(cifti_path))
-    names = list(img.header.get_axis(0).name)
-    idx = names.index(map_name)
-    return img.get_fdata(dtype=np.float32)[idx]
-
-
-def _load_partial(path: Path) -> np.ndarray:
-    return nib.load(str(path)).get_fdata(dtype=np.float32)[0]
-
-
 def main():
     done, partial_model_done, skipped = [], [], []
     for model in MODELS:
@@ -103,7 +90,7 @@ def main():
             log.info(f"[{model}] SKIP — missing intact RSA: {intact_path}")
             skipped.append(model)
             continue
-        plain_intact = load_map(intact_path, "searchlight_spearman_rho")
+        plain_intact = load_named_map(intact_path, "searchlight_spearman_rho")
 
         partial_dummy_by_cond = {}
         for cond in DUMMY_CONDITIONS:
@@ -114,7 +101,7 @@ def main():
                 skipped.append(f"{model}/{cond}")
                 continue
 
-            plain_dummy = load_map(dummy_path, "searchlight_spearman_rho")
+            plain_dummy = load_named_map(dummy_path, "searchlight_spearman_rho")
             diff = plain_intact - plain_dummy
 
             out_path = GROUP_DIR / dummy_dir / "dummy_consolidated_maps.dscalar.nii"
@@ -124,7 +111,7 @@ def main():
             partial_dummy_path = (GROUP_DIR / f"{dummy_dir}_INTEGRATION" / CONFIG
                                    / "integration_partial_r_searchlight.dscalar.nii")
             if partial_dummy_path.exists():
-                partial_dummy = _load_partial(partial_dummy_path)
+                partial_dummy = load_single_map(partial_dummy_path)
                 merge_into_combined(partial_dummy, "partial_rsa_dummy", out_path, str(dummy_path))
                 partial_dummy_by_cond[cond] = partial_dummy
 
@@ -144,7 +131,7 @@ def main():
             log.info(f"[{model}] partial diff SKIP — no dummy condition has a partial rerun yet")
             continue
 
-        partial_intact = _load_partial(partial_intact_path)
+        partial_intact = load_single_map(partial_intact_path)
         max_dummy_partial = np.maximum.reduce(list(partial_dummy_by_cond.values()))
         modality_presence_diff = partial_intact - max_dummy_partial
 

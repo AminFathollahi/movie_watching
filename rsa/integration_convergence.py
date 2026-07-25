@@ -1,27 +1,25 @@
 """
 rsa/integration_convergence.py
 ================================
-Move 4 — Cross-architecture convergence map.
+Cross-architecture integration convergence map.
 
-Combines the Move-1 best-additive integration maps (rsa/partial_rsa.py,
+Combines the best-additive integration maps (rsa/partial_rsa.py,
 kind="integration") across every native-AV model that succeeded, to show
 that the integration territory is a property of the BRAIN, not an artifact
-of any one embedding. Executes the hypothesis already stated in
-rsa/multimodal_decomposition.py's docstring: integration lives in the
+of any one embedding. Tests the hypothesis that integration lives in the
 INFORMATION content, not the training objective, so it should be visible
-across architecturally distinct native-AV models.
+across architecturally distinct native-AV models (see
+rsa/multimodal_decomposition.py's docstring for the underlying decomposition).
 
-Two convergence layers (both saved, both reported — see module docstring
-in the prompt this implements):
+Two convergence layers, both saved and reported:
   convergence_mean_z    : per-vertex mean of z-scored (across-cortex)
                           integration maps -- the primary convergence signal.
   convergence_sign_count: per-vertex count (0..n_models) of models with a
-                          POSITIVE integration value. NOTE: this is a
-                          descriptive sign-agreement count, NOT a formal
-                          FDR-significance count -- per-model FDR would need
-                          per-subject or permutation-based null distributions
-                          that were not computed in this session (see
-                          project VALIDATION notes). Labelled honestly rather
+                          POSITIVE integration value. This is a descriptive
+                          sign-agreement count, NOT a formal FDR-significance
+                          count -- per-model FDR would need per-subject or
+                          permutation-based null distributions, which this
+                          script does not compute. Labelled honestly rather
                           than mislabelled as "FDR-significant".
 
 Usage
@@ -158,8 +156,8 @@ def main():
         "sign_count_pct_none_positive": float(100 * (sign_count == 0).mean()),
         "note": ("convergence_sign_count is a descriptive per-vertex count of models "
                  "with positive integration rho, NOT a formal FDR-significance count "
-                 "(that would need per-subject or permutation null distributions, not "
-                 "computed in this session)."),
+                 "(that would need per-subject or permutation null distributions, "
+                 "which this script does not compute)."),
     }
     import json
     json.dump(summary, open(out_dir / "convergence_summary.json", "w"), indent=2)

@@ -6,7 +6,7 @@ Encoding-currency analogue of rsa/scramble_diff_maps.py + rsa/dummy_diff_maps.py
 For each native-AV model, consolidates the intact-vs-scramble and
 intact-vs-dummy diffs on BOTH signals encoding produces:
   - plain     : encoding_r2_av (encoding.py) -- raw predictive alignment.
-  - AVresid   : encoding_r2_unique_av (encoding/variance_partition.py, Move 6)
+  - AVresid   : encoding_r2_unique_av (encoding/variance_partition.py)
                 -- the encoding-currency counterpart of RSA's "integration".
 
 Naming mirrors the RSA side exactly (same words, same meaning, so a reader
@@ -43,11 +43,10 @@ import logging
 import sys
 from pathlib import Path
 
-import nibabel as nib
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cifti_io import merge_into_combined  # noqa: E402
+from cifti_io import load_named_map, merge_into_combined  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
 log = logging.getLogger(__name__)
@@ -69,12 +68,10 @@ DUMMY_CONDITIONS = ["clsav_from_a", "clsav_from_v"]
 def _load(path: Path, map_name: str) -> np.ndarray | None:
     if not path.exists():
         return None
-    img = nib.load(str(path))
-    names = list(img.header.get_axis(0).name)
-    if map_name not in names:
+    try:
+        return load_named_map(path, map_name)
+    except KeyError:
         return None
-    idx = names.index(map_name)
-    return img.get_fdata(dtype=np.float32)[idx]
 
 
 def _model_dir(model: str, cond: str | None = None) -> Path:

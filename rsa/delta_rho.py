@@ -83,9 +83,9 @@ log = logging.getLogger(__name__)
 # on already-computed per-subject rho maps (no searchlight re-run needed).
 
 DELTA_RHO_RUNS: dict[str, dict] = {
-    # run_A: PE-AV joint vs its own unimodal decoders (within-architecture)
-    # Answers: does the joint embedding exceed the better of its own A or V modes?
-    "run_A": {
+    # Within-architecture: does the joint embedding exceed the better of its
+    # own audio-only or video-only decoder?
+    "within_architecture_unimodal": {
         "target":      ("pe-av-small-16-frame", "av"),
         "baselines":   [("pe-av-small-16-frame", "a"), ("pe-av-small-16-frame", "v")],
         "description": (
@@ -93,9 +93,9 @@ DELTA_RHO_RUNS: dict[str, dict] = {
             "within-architecture AV advantage over own unimodal decoders."
         ),
     },
-    # run_B: PE-AV joint vs independently-trained specialist unimodals (AudioMAE + VideoMAE)
-    # Stricter cross-architecture test: does PE-AV/av beat the best specialist available?
-    "run_B": {
+    # Cross-architecture: does PE-AV/av beat the best independently-trained
+    # specialist available (AudioMAE for audio, VideoMAEv2 for video)?
+    "cross_architecture_specialist": {
         "target":      ("pe-av-small-16-frame", "av"),
         "baselines":   [("audiomae", "a"), ("videomaev2-large", "v")],
         "description": (
@@ -103,9 +103,9 @@ DELTA_RHO_RUNS: dict[str, dict] = {
             "cross-architecture AV advantage over independently-trained specialists."
         ),
     },
-    # run_C: PE-AV joint vs WavLM + PE-Core — strictest specialist baseline
-    # WavLM is the strongest speech/audio model; PE-Core is vision-only Perception Encoder.
-    "run_C": {
+    # Strictest specialist baseline: WavLM is the strongest speech/audio
+    # model; PE-Core is a vision-only Perception Encoder.
+    "cross_family_specialist_strict": {
         "target":      ("pe-av-small-16-frame", "av"),
         "baselines":   [("wavlm-large", "a"), ("pe-core-l14", "v")],
         "description": (

@@ -7,7 +7,10 @@
 # ONCE (no per-subject loop) — see subcortical_io.py.
 #
 # Usage
-#   bash subcortical/analysis.sh MODE
+#   bash subcortical/analysis.sh MODE [N_BLOCKS]
+#
+#   N_BLOCKS   groupstats df control (default 16), same convention as
+#              rsa/analysis.sh's positional N_BLOCKS override.
 #
 #   MODE   neighbors     Precompute + cache k=100 neighbor arrays for every
 #                         structure (voxel-graph geodesic; purist SUIT
@@ -53,9 +56,77 @@ GROUP_AVERAGE_DIR="${OUTPUT_DIR}/group_average_cache"
 # Template CIFTI built by subcortical_io.make_subcortical_template
 TEMPLATE_CIFTI="${OUTPUT_DIR}/subcortical_template.dscalar.nii"
 
-# ── Analysis parameters (match established cortical run per subcortex.txt §1) ──
-MODEL="pe-av-small-16-frame"
-MODALITY="av"
+# ── Model registry (mirrors rsa/analysis.sh's MODELS + LAYERS convention) ──
+# "model:modality,modality" — uncomment/add entries to sweep more.
+MODELS=(
+    "pe-av-small-16-frame:av"
+    "pe-av-small-16-frame_avscramble:av"
+    "pe-av-small-16-frame_clsav_from_a:av"
+    "pe-av-small-16-frame_clsav_from_v:av"
+)
+
+# omni3b / topoomni layer sweep — mirrors rsa/analysis.sh's LAYERS block (this
+# was previously missing the omni3b intact entries -- only topoomni's intact
+# was added here, so omni3b_layer*_mp/lt never got a plain group-average RSA
+# run outside of its scramble/dummy conditions).
+LAYERS=(35 27 18 9 1)
+OMNI3B_MODALITIES="av"
+TOPOOMNI_MODALITIES="av"
+if [ "${SKIP_LAYER_SWEEP:-false}" != "true" ]; then
+    for L in "${LAYERS[@]}"; do
+        case "$L" in
+            9|18|27) SUFFIX="_mp" ;;
+            *)       SUFFIX="" ;;
+        esac
+        MODELS+=("omni3b_layer${L}${SUFFIX}:${OMNI3B_MODALITIES}")
+        MODELS+=("topoomni_layer${L}${SUFFIX}:${TOPOOMNI_MODALITIES}")
+        MODELS+=("topoomni_layer${L}_sheet${SUFFIX}:${TOPOOMNI_MODALITIES}")
+        # Layers 9/18/27 also have a "_lt" (last-token) intact readout, needed
+        # by diff_maps.py's mp+lt roster (nemotron has no _lt -- see below).
+        if [ "$SUFFIX" = "_mp" ]; then
+            MODELS+=("omni3b_layer${L}_lt:${OMNI3B_MODALITIES}")
+            MODELS+=("topoomni_layer${L}_lt:${TOPOOMNI_MODALITIES}")
+            MODELS+=("topoomni_layer${L}_sheet_lt:${TOPOOMNI_MODALITIES}")
+        fi
+    done
+
+    # nemotron (omni-embed-nemotron-3b): no bare layer1/2/4/35 probes exist on
+    # disk (unlike omni3b/topoomni) -- only the 9/18/27/36 depth-sweep. Its
+    # native "_av" readout ("_mp") is already genuinely joint from the start,
+    # so "_lt" is never used as an INTEGRATION target (see model_registry.py)
+    # -- but diff_maps.py's plain-RSA roster still tracks "_lt" as a
+    # depth-comparability probe, so both poolings get an intact plain run.
+    NEMOTRON_MODALITIES="av"
+    for L in 9 18 27 36; do
+        MODELS+=("nemotron_layer${L}_mp:${NEMOTRON_MODALITIES}")
+        MODELS+=("nemotron_layer${L}_lt:${NEMOTRON_MODALITIES}")
+    done
+fi
+
+# ── Layer-swept native multimodal models: avscramble + avdummy ────────────
+# nemotron / omni3b / topoomni(+_sheet) each build their own joint AV
+# embedding at a given layer, pooled two ways (_mp mean-pool, _lt last-token
+# — both are independent conditions per the mp/lt naming migration, kept
+# side by side rather than picking one). Only layers with a pooled variant
+# on disk have scramble/dummy embeddings (9/18/27; nemotron also has 36).
+NATIVE_MM_LAYER_BASES=(
+    nemotron_layer9 nemotron_layer18 nemotron_layer27 nemotron_layer36
+    omni3b_layer9 omni3b_layer18 omni3b_layer27
+    topoomni_layer9 topoomni_layer18 topoomni_layer27
+    topoomni_layer9_sheet topoomni_layer18_sheet topoomni_layer27_sheet
+)
+POOLING=(mp lt)
+if [ "${SKIP_SCRAMBLE_DUMMY_SWEEP:-false}" != "true" ]; then
+    for BASE in "${NATIVE_MM_LAYER_BASES[@]}"; do
+        for POOL in "${POOLING[@]}"; do
+            NAME="${BASE}_${POOL}"
+            MODELS+=("${NAME}_avscramble:av")
+            MODELS+=("${NAME}_clsav_from_a:av")
+            MODELS+=("${NAME}_clsav_from_v:av")
+        done
+    done
+fi
+
 K=100
 BIN_SEC=5.0
 SKIP_SEC=5.0
@@ -63,11 +134,16 @@ DELAY_SEC=5.0
 TR=1.0
 METHOD="spearman"
 
+# groupstats df control: df = min(n_subjects-1, N_BLOCKS-1)
+N_BLOCKS=16
+
 # Noise-ceiling subject subset (fast streaming-mode reliability check; not
 # the full 176-subject roster — mirrors how the cortical noise ceiling was run).
 NC_SUBJECTS="${NC_SUBJECTS:-100610 102311 102816 104416 105923 111514 114823 118225 125525 130518}"
 
 MODE=${1:-groupavg}
+N_BLOCKS_ARG=${2:-""}
+[ -n "$N_BLOCKS_ARG" ] && N_BLOCKS="$N_BLOCKS_ARG"
 run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -93,21 +169,27 @@ run_neighbors() {
 
 run_groupavg() {
     ensure_template
-    log "Group-average subcortical RSA: ${MODEL}/${MODALITY}"
-    run_python "${SCRIPT_DIR}/subcortical_rsa.py" \
-        --raw-dir "$CIFTI_DIR" \
-        --subjects-list "$SUBJECTS_LIST" \
-        --subject "group_average" \
-        --timing-csv "$TIMING_CSV" \
-        --embeddings-dir "$EMBEDDINGS_DIR" \
-        --template-cifti "$TEMPLATE_CIFTI" \
-        --output-dir "$OUTPUT_DIR" \
-        --group-average-dir "$GROUP_AVERAGE_DIR" \
-        --neighbor-cache-dir "$NEIGHBOR_CACHE_DIR" \
-        --workbench "$WORKBENCH" \
-        --model "$MODEL" --modality "$MODALITY" \
-        --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" \
-        --method "$METHOD" --tr "$TR"
+    for MODEL_ENTRY in "${MODELS[@]}"; do
+        IFS=':' read -r MODEL_NAME MODALITIES_ENTRY <<< "$MODEL_ENTRY"
+        IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
+        for MOD in "${MODS[@]}"; do
+            log "Group-average subcortical RSA: ${MODEL_NAME}/${MOD}"
+            run_python "${SCRIPT_DIR}/subcortical_rsa.py" \
+                --raw-dir "$CIFTI_DIR" \
+                --subjects-list "$SUBJECTS_LIST" \
+                --subject "group_average" \
+                --timing-csv "$TIMING_CSV" \
+                --embeddings-dir "$EMBEDDINGS_DIR" \
+                --template-cifti "$TEMPLATE_CIFTI" \
+                --output-dir "$OUTPUT_DIR" \
+                --group-average-dir "$GROUP_AVERAGE_DIR" \
+                --neighbor-cache-dir "$NEIGHBOR_CACHE_DIR" \
+                --workbench "$WORKBENCH" \
+                --model "$MODEL_NAME" --modality "$MOD" \
+                --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" \
+                --method "$METHOD" --tr "$TR"
+        done
+    done
     log "Group-average subcortical RSA complete."
 }
 
@@ -132,41 +214,54 @@ run_persubject() {
     local SUBJECTS
     SUBJECTS=$(grep -v '^\s*#' "$SUBJECTS_LIST" | sed 's/#.*//' | awk '{print $1}' | grep -v '^$')
     local N_TOTAL; N_TOTAL=$(echo "$SUBJECTS" | wc -l)
-    log "Per-subject subcortical RSA: ${N_TOTAL} subjects (sequential, streaming preprocessing) ..."
-    local i=0
-    for SUB in $SUBJECTS; do
-        i=$((i + 1))
-        log "  [$i/$N_TOTAL] ${SUB}"
-        run_python "${SCRIPT_DIR}/subcortical_rsa.py" \
-            --raw-dir "$CIFTI_DIR" \
-            --subject "$SUB" \
-            --timing-csv "$TIMING_CSV" \
-            --embeddings-dir "$EMBEDDINGS_DIR" \
-            --template-cifti "$TEMPLATE_CIFTI" \
-            --output-dir "$OUTPUT_DIR" \
-            --neighbor-cache-dir "$NEIGHBOR_CACHE_DIR" \
-            --workbench "$WORKBENCH" \
-            --model "$MODEL" --modality "$MODALITY" \
-            --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" \
-            --method "$METHOD" --tr "$TR" \
-            || log "  WARNING: ${SUB} failed — continuing"
+    for MODEL_ENTRY in "${MODELS[@]}"; do
+        IFS=':' read -r MODEL_NAME MODALITIES_ENTRY <<< "$MODEL_ENTRY"
+        IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
+        for MOD in "${MODS[@]}"; do
+            log "Per-subject subcortical RSA: ${MODEL_NAME}/${MOD} — ${N_TOTAL} subjects (sequential, streaming preprocessing) ..."
+            local i=0
+            for SUB in $SUBJECTS; do
+                i=$((i + 1))
+                log "  [$i/$N_TOTAL] ${SUB}"
+                run_python "${SCRIPT_DIR}/subcortical_rsa.py" \
+                    --raw-dir "$CIFTI_DIR" \
+                    --subject "$SUB" \
+                    --timing-csv "$TIMING_CSV" \
+                    --embeddings-dir "$EMBEDDINGS_DIR" \
+                    --template-cifti "$TEMPLATE_CIFTI" \
+                    --output-dir "$OUTPUT_DIR" \
+                    --neighbor-cache-dir "$NEIGHBOR_CACHE_DIR" \
+                    --workbench "$WORKBENCH" \
+                    --model "$MODEL_NAME" --modality "$MOD" \
+                    --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" \
+                    --method "$METHOD" --tr "$TR" \
+                    || log "  WARNING: ${SUB} failed — continuing"
+            done
+        done
     done
     log "Per-subject subcortical RSA complete."
 }
 
 run_groupstats() {
     ensure_template
-    log "Subcortical group stats (across-subject t-test): ${MODEL}/${MODALITY}"
-    run_python "${SCRIPT_DIR}/../rsa/group_stats.py" \
-        --output-dir "$OUTPUT_DIR" \
-        --model "$MODEL" --modality "$MODALITY" \
-        --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" \
-        --method "$METHOD" \
-        --fmri-tag "raw" \
-        --fname-prefix "rsa_subcortical" \
-        --template-cifti "$TEMPLATE_CIFTI" \
-        --left-surface "unused" --right-surface "unused" \
-        --n-blocks 16
+    for MODEL_ENTRY in "${MODELS[@]}"; do
+        IFS=':' read -r MODEL_NAME MODALITIES_ENTRY <<< "$MODEL_ENTRY"
+        IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
+        for MOD in "${MODS[@]}"; do
+            log "Subcortical group stats (across-subject t-test): ${MODEL_NAME}/${MOD} (n_blocks=${N_BLOCKS})"
+            run_python "${SCRIPT_DIR}/../rsa/group_stats.py" \
+                --output-dir "$OUTPUT_DIR" \
+                --model "$MODEL_NAME" --modality "$MOD" \
+                --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" \
+                --method "$METHOD" \
+                --fmri-tag "raw" \
+                --fname-prefix "rsa_subcortical" \
+                --template-cifti "$TEMPLATE_CIFTI" \
+                --left-surface "unused" --right-surface "unused" \
+                --n-blocks "$N_BLOCKS" \
+                || log "  WARNING: group stats skipped for ${MODEL_NAME}/${MOD}"
+        done
+    done
     log "Subcortical group stats complete."
 }
 

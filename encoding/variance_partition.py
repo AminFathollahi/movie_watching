@@ -6,21 +6,27 @@ Move 6 — Encoding fold-in: banded-ridge unique-AV-variance map.
 Asks the SAME integration question as rsa/partial_rsa.py's Move-1 contrast,
 but in PREDICTION currency instead of representational-geometry currency
 (MIRAGE framing: native multimodal features beat post-hoc unimodal
-aggregation). Fits a 3-band group ridge (himalaya GroupRidgeCV, i.e.
-"BandedRidgeCV") with feature bands:
+aggregation). Fits a group ridge (himalaya GroupRidgeCV, i.e. "BandedRidgeCV")
+with one feature band per --nuisance-modalities entry, plus:
 
-  A-band        : model's own audio-only embedding
-  V-band        : model's own video-only embedding
-  AV-resid-band : the component of the model's AV joint embedding that is
-                  orthogonal to [A | V] — computed by
-                  rsa.multimodal_decomposition.compute_interaction_residual(),
-                  the SAME residual R used by the CKA decomposition and by
-                  Move 1's best-additive integration contrast.
+  AV-resid-band : the component of --model's AV joint embedding that is
+                  orthogonal to the nuisance band(s) — computed by
+                  rsa.multimodal_decomposition.compute_interaction_residual_cv(),
+                  the encoding-currency counterpart of Move 1's best-additive
+                  integration contrast.
+
+--nuisance-modalities defaults to "a,v" (2 bands: A, V — the intact/scramble
+case, where --model's OWN a/v are the right nuisance, since --nuisance-model
+also defaults to --model). Pass a single modality (e.g. "a") together with
+--nuisance-model pointing at the INTACT base model for a dummy-modality
+--model: the placeholder modality has ~zero variance and can't be a nuisance
+band, so only the one real modality is used (mirrors
+rsa/shared/model_registry.py's _dummy_integration_run() reasoning).
 
 r2_score_split() (himalaya) partitions the joint model's test-set R^2 into a
 contribution per band; the AV-resid band's split R^2 is the UNIQUE variance
-explained by fusion beyond any linear reweighting of A and V — the encoding
-analogue of the RSA integration map.
+explained by fusion beyond any linear reweighting of the nuisance band(s) —
+the encoding analogue of the RSA integration map ("encoding_r2_unique_av").
 
 Design choices vs. cf_modeling/02_fit_cf_model.py's himalaya pattern
 ----------------------------------------------------------------------
@@ -78,8 +84,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-BAND_NAMES = ["A", "V", "AVresid"]
-
 
 # =============================================================================
 # CLI
@@ -98,7 +102,19 @@ def parse_args():
     p.add_argument("--output-dir",       required=True)
     p.add_argument("--subject",          default="group_average")
     p.add_argument("--model",            required=True,
-                   help="Native-AV model name (must have _a/_v/_av embeddings).")
+                   help="Native-AV model name (must have an _av embedding under this name).")
+    p.add_argument("--nuisance-model",      default=None, dest="nuisance_model",
+                   help="Model whose unimodal embedding(s) form the nuisance band(s). "
+                        "Defaults to --model (the intact/scramble case, where the "
+                        "target's OWN _a/_v are the right nuisance). Pass the INTACT "
+                        "base model here for a dummy-modality --model (e.g. "
+                        "--model omni3b_layer9_mp_clsav_from_a --nuisance-model "
+                        "omni3b_layer9_mp --nuisance-modalities a) -- the placeholder "
+                        "modality has ~zero variance and can't be a nuisance band.")
+    p.add_argument("--nuisance-modalities", default="a,v", dest="nuisance_modalities",
+                   help="Comma-separated modalities to load from --nuisance-model as "
+                        "nuisance bands, e.g. 'a,v' (default, intact/scramble) or "
+                        "'a' / 'v' (dummy-modality: only the real modality is usable).")
     p.add_argument("--bin-sec",   type=float, required=True)
     p.add_argument("--skip-sec",  type=float, default=None, dest="skip_sec")
     p.add_argument("--delay-sec", type=float, default=5.0)
@@ -153,34 +169,47 @@ def run_analysis(args):
     )
     log.info(f"  Y_train={Y_train.shape}  Y_test={Y_test.shape}  run_onsets={run_onsets}")
 
-    # ── Load raw AV/A/V embeddings, compute the AV-joint residual band ───────
+    # ── Load the target AV embedding and the nuisance modality embedding(s).
+    # Nuisance defaults to --model's own a/v (intact + scramble: the target's
+    # OWN unimodal streams are the right nuisance). Dummy-modality --model
+    # values pass --nuisance-model/--nuisance-modalities to point at the
+    # INTACT base model's real modality instead -- the placeholder modality
+    # has ~zero variance and can't be a nuisance band (see parse_args()). ───
+    nuisance_model = args.nuisance_model or args.model
+    nuisance_mods = [m.strip() for m in args.nuisance_modalities.split(",")]
+    band_names = [m.upper() for m in nuisance_mods] + ["AVresid"]
+
     emb_dir = (Path(args.embeddings_dir) / args.model /
                f"bin{int(args.bin_sec)}s_skip{int(args.skip_sec)}s")
-    a_emb  = np.load(emb_dir / f"{args.model}_a.npy")
-    v_emb  = np.load(emb_dir / f"{args.model}_v.npy")
     av_emb = np.load(emb_dir / f"{args.model}_av.npy")
-    log.info(f"  Embeddings: a={a_emb.shape}  v={v_emb.shape}  av={av_emb.shape}")
+
+    nuisance_dir = (Path(args.embeddings_dir) / nuisance_model /
+                    f"bin{int(args.bin_sec)}s_skip{int(args.skip_sec)}s")
+    nuisance_embs = [np.load(nuisance_dir / f"{nuisance_model}_{m}.npy") for m in nuisance_mods]
+    log.info(f"  Embeddings: av={av_emb.shape}  nuisance({nuisance_model}, {nuisance_mods})="
+             f"{[e.shape for e in nuisance_embs]}")
 
     # NOTE: uses the cross-validated-ridge variant, NOT
     # rsa.multimodal_decomposition.compute_interaction_residual()'s near-zero-eps
     # closed form — that form degenerates (R -> ~0) when n_samples (626 bins) <<
     # n_nuisance_features (2048 concatenated A+V dims), which is exactly the
     # regime here. See compute_interaction_residual_cv()'s docstring.
-    R, ms_score, best_alpha = compute_interaction_residual_cv(av_emb, [a_emb, v_emb])
+    R, ms_score, best_alpha = compute_interaction_residual_cv(av_emb, nuisance_embs)
     log.info(f"  AV-joint residual (CV ridge, alpha={best_alpha:.2e}): shape={R.shape}  "
              f"multimodality_score(||R||^2/||J||^2)={ms_score:.4f}")
 
     # ── Split each band into train/test using the SAME segment logic as
     #    encoding.py's build_embedding_arrays (per-run demean/normalize on
     #    training bins only, applied consistently to test bins). ─────────────
-    bands_raw = {"A": a_emb, "V": v_emb, "AVresid": R}
+    bands_raw = dict(zip([m.upper() for m in nuisance_mods], nuisance_embs))
+    bands_raw["AVresid"] = R
     X_train_bands, X_test_bands, band_sizes = [], [], []
-    for name in BAND_NAMES:
+    for name in band_names:
         X_tr, X_te = split_embedding_array(
             bands_raw[name], timing_df, test_ids, args.bin_sec,
             hrf=False, normalize=args.normalize, skip_sec=args.skip_sec,
         )
-        log.info(f"  [{name}] X_train={X_tr.shape}  X_test={X_te.shape}")
+        log.info(f"  [{name}] X_train={X_tr.shape}  X_te={X_te.shape}")
         X_train_bands.append(X_tr.astype(np.float32))
         X_test_bands.append(X_te.astype(np.float32))
         band_sizes.append(X_tr.shape[1])
@@ -214,7 +243,7 @@ def run_analysis(args):
         fit_intercept=False,
         Y_in_cpu=True,
     )
-    log.info(f"  Fitting GroupRidgeCV (banded ridge): bands={BAND_NAMES} "
+    log.info(f"  Fitting GroupRidgeCV (banded ridge): bands={band_names} "
              f"sizes={band_sizes}  n_iter={args.n_iter}  backend={backend}")
     model.fit(X_train_bands, Y_train)
 
@@ -237,14 +266,15 @@ def run_analysis(args):
         r2_full = r2_full.cpu().numpy()
     r2_full = np.asarray(r2_full, dtype=np.float32)
 
-    r2_unique_av = r2_split[BAND_NAMES.index("AVresid")]
-    r2_A = r2_split[BAND_NAMES.index("A")]
-    r2_V = r2_split[BAND_NAMES.index("V")]
+    r2_unique_av = r2_split[band_names.index("AVresid")]
+    r2_nuisance = {name: r2_split[band_names.index(name)] for name in band_names if name != "AVresid"}
 
+    nuisance_log = "\n".join(
+        f"  r2_{name}: mean={vals.mean():.4f} max={vals.max():.4f}" for name, vals in r2_nuisance.items()
+    )
     log.info(
         f"  r2_full: mean={r2_full.mean():.4f} max={r2_full.max():.4f}\n"
-        f"  r2_A: mean={r2_A.mean():.4f} max={r2_A.max():.4f}\n"
-        f"  r2_V: mean={r2_V.mean():.4f} max={r2_V.max():.4f}\n"
+        f"{nuisance_log}\n"
         f"  r2_unique_av (AVresid band, PRIMARY): mean={r2_unique_av.mean():.4f} "
         f"max={r2_unique_av.max():.4f} frac_pos={(r2_unique_av > 0).mean():.3f}"
     )
@@ -254,10 +284,9 @@ def run_analysis(args):
                map_name="encoding_r2_unique_av")
     save_cifti(r2_full, args.template_cifti,
                str(out_root / "encoding_r2_full.dscalar.nii"), map_name="encoding_r2_full")
-    save_cifti(r2_A, args.template_cifti,
-               str(out_root / "encoding_r2_A.dscalar.nii"), map_name="encoding_r2_A")
-    save_cifti(r2_V, args.template_cifti,
-               str(out_root / "encoding_r2_V.dscalar.nii"), map_name="encoding_r2_V")
+    for name, vals in r2_nuisance.items():
+        save_cifti(vals, args.template_cifti,
+                   str(out_root / f"encoding_r2_{name}.dscalar.nii"), map_name=f"encoding_r2_{name}")
     log.info(f"Saved: {out_path}")
 
 

@@ -356,10 +356,9 @@ class PartialRSARun(NamedTuple):
     kind:     str = "cross_baseline"   # "cross_baseline" | "integration"
     # "integration" runs regress a native-AV model's OWN unimodal streams out of
     # its OWN joint embedding (the best-additive-combination contrast — Move 1).
-    # partial_rsa.py routes these to the group_average/<model>_<modality>_INTEGRATION/
-    # output convention consumed by the report's auto-discovery. "cross_baseline"
-    # runs (regressing OTHER models' unimodal streams out) keep the legacy
-    # rsa/partial/ output convention untouched.
+    # "cross_baseline" runs regress OTHER models' unimodal streams out instead.
+    # Both kinds share one output convention (see partial_rsa.py's save block):
+    # group_average/<label>/k{K}_delay{D}s_bin{B}s_skip{S}s_{method}/<file>.
 
 
 def _own_unimodal_integration_run(model: str, modality: str = "av") -> PartialRSARun:
@@ -489,14 +488,12 @@ def _lasttoken_dummy_integration_run(base_model: str, dummy_modality: str) -> Pa
 
 
 def _cross_baseline_partial_corr_run(model: str, modality: str = "av") -> PartialRSARun:
-    """Generalizes run_A (originally PE-AV-only) to any native AV model: partial
-    correlation between the target's RDM and the brain RDM, controlling for
-    AudioMAE(a) + VideoMAEv2-Large(v) (two independent unimodal specialists,
-    not the target's own unimodal streams). Tests cross-architecture unique
-    variance for every model in NATIVE_AV_MODELS, not just PE-AV. Routed as
-    "cross_baseline" kind (legacy rsa/partial/ output convention) since,
-    unlike the Move-1 integration runs, nuisance here is NOT the target's own
-    unimodal decoders.
+    """Partial correlation between the target's RDM and the brain RDM,
+    controlling for AudioMAE(a) + VideoMAEv2-Large(v) (two independent
+    unimodal specialists, not the target's own unimodal streams). Tests
+    cross-architecture unique variance for every model in NATIVE_AV_MODELS.
+    Routed as "cross_baseline" kind since, unlike the Move-1 integration runs,
+    nuisance here is NOT the target's own unimodal decoders.
     """
     return PartialRSARun(
         target   = (model, modality),
@@ -512,25 +509,17 @@ def _cross_baseline_partial_corr_run(model: str, modality: str = "av") -> Partia
 
 
 PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
-    # Run A: regress out independently-trained unimodal baselines (AudioMAE + VideoMAE)
-    # from PE-AV joint.  Tests whether PE-AV encodes something beyond what two
-    # separate specialist models capture.
-    "run_A": PartialRSARun(
-        target   = ("pe-av-small-16-frame", "av"),
-        nuisance = [("audiomae", "a"), ("videomaev2-large", "v")],
-        label    = "peav_av_partialout_audiomae_a+videomaev2_v",
-        description = (
-            "PE-AV (small 16-frame) AV joint embedding, controlling for "
-            "AudioMAE (audio) + VideoMAEv2-Large (video) — tests cross-architecture "
-            "unique variance."
-        ),
-    ),
-    # Run B: regress out PE-AV's own unimodal decoders.  Tests whether the joint
+    # PE-AV joint controlling for AudioMAE(a) + VideoMAEv2-Large(v) has no
+    # standalone entry here: it is exactly "partial_corr_pe-av-small-16-frame",
+    # produced below by _cross_baseline_partial_corr_run() via the
+    # NATIVE_AV_MODELS sweep.
+    #
+    # Regress out PE-AV's own unimodal decoders. Tests whether the joint
     # embedding encodes cross-modal interactions beyond the simple union of its own
-    # audio-only and video-only outputs.  THIS IS the Move-1 integration contrast
-    # for the PRIMARY model (pe-av-small-16-frame) — kind="integration" routes its
+    # audio-only and video-only outputs -- the best-additive integration contrast
+    # for the primary model (pe-av-small-16-frame). kind="integration" routes its
     # output to the group_average/<model>_av_INTEGRATION/ convention.
-    "run_B": PartialRSARun(
+    "integration_pe-av-small-16-frame": PartialRSARun(
         target   = ("pe-av-small-16-frame", "av"),
         nuisance = [("pe-av-small-16-frame", "a"), ("pe-av-small-16-frame", "v")],
         label    = "pe-av-small-16-frame_av_INTEGRATION",
@@ -541,11 +530,12 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
         ),
         kind = "integration",
     ),
-    # Run C: regress out specialist unimodal models from different architectures
-    # (WavLM-Large for audio, PE-Core ViT-L/14 for vision).  Tests whether PE-AV
+    # Regress out specialist unimodal models from different architectures
+    # (WavLM-Large for audio, PE-Core ViT-L/14 for vision). Tests whether PE-AV
     # captures something beyond strong specialist priors from independent model
-    # families — a stricter cross-architecture control than run_A.
-    "run_C": PartialRSARun(
+    # families — a stricter cross-architecture control than the AudioMAE+VideoMAEv2
+    # nuisance used by partial_corr_pe-av-small-16-frame.
+    "cross_family_specialist_pe-av-small-16-frame": PartialRSARun(
         target   = ("pe-av-small-16-frame", "av"),
         nuisance = [("wavlm-large", "a"), ("pe-core-l14", "v")],
         label    = "peav_av_partialout_wavlm_a+pecore_v",
@@ -676,8 +666,8 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer27_sheet_lasttoken_clsav_from_v": _lasttoken_dummy_integration_run("topoomni_layer27_sheet", "v"),
 }
 
-# ── Cross-baseline partial correlation, generalized across every native AV
-# model (run_A generalized beyond just pe-av-small-16-frame). name tag: _partial_corr.
+# ── Cross-baseline partial correlation, one entry per native AV model.
+# name tag: _partial_corr.
 PARTIAL_RSA_RUNS.update({
     f"partial_corr_{m}": _cross_baseline_partial_corr_run(m)
     for m in NATIVE_AV_MODELS

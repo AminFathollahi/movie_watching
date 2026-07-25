@@ -3,8 +3,9 @@ Shared name construction for the Ward's-linkage sheet-localizer family
 (topoomni_sheet_localizer.py's auditory/integration branches and
 topoomni_av_separability_localizer.py's condition-contrast branch), so every
 folder/file name says which model actually drove clustering (driver) and
-which model was actually scored/read-out (sheet) -- instead of a hardcoded
-family-name prefix that used to say "topoomni" even when PE-AV was the sheet.
+which model was actually scored/read-out (sheet) -- the driver and sheet
+model are often different, so a single family-name prefix would be
+ambiguous or wrong.
 
 Convention: localizer_{kind}[_{design}]_drv-{driver}_sheet-{sheet}[suffix][_c{N}|_all]
   kind   : "speech" (auditory positive control, topoomni_sheet_localizer.py) |
@@ -38,7 +39,12 @@ MODEL_TAG = {
     "topoomni_layer18_sheet_mp": "topoomni_mp",
     "topoomni_layer18_sheet_lt": "topoomni_lt",
     "pe-av-small-16-frame": "peav",
-    "nemotron_layer36_mp": "nemotron",
+    # Keep the pooling suffix ("_mp"/"_lt") in the tag, matching topoomni's
+    # shape below -- a bare "nemotron" tag would collide between the
+    # mean-pool and last-token readouts, silently overwriting one variant's
+    # output with the other's.
+    "nemotron_layer36_mp": "nemotron_mp",
+    "nemotron_layer36_lt": "nemotron_lt",
 }
 
 # Short tags for (model, modality) pairs used as the independent clustering
@@ -88,7 +94,8 @@ def demo():
     assert model_tag("topoomni_layer18_sheet_lt") == "topoomni_lt"
     assert model_tag("topoomni_layer18_sheet_mp") == "topoomni_mp"
     assert model_tag("pe-av-small-16-frame") == "peav"
-    assert model_tag("nemotron_layer36_mp") == "nemotron"
+    assert model_tag("nemotron_layer36_mp") == "nemotron_mp"
+    assert model_tag("nemotron_layer36_lt") == "nemotron_lt"
     assert driver_tag("whisper-large-v3", "a") == "whisper"
     assert driver_tag("pe-av-small-16-frame", "event_t") == "text"
     assert driver_tag("topoomni_layer18_sheet_lt") == "topoomni_lt"

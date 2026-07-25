@@ -26,20 +26,23 @@ Methodology
     z-score, residualize via the same C, then Pearson-correlate with e_target.
 7.  Save as CIFTI .dscalar.nii.
 
-Runs defined in rsa/shared/model_registry.py::PARTIAL_RSA_RUNS.
-Default run: run_A (PE-AV joint controlling for AudioMAE + VideoMAE).
-             run_B (PE-AV joint controlling for its own unimodal decoders).
+Runs defined in rsa/shared/model_registry.py::PARTIAL_RSA_RUNS. Two commonly
+used entries:
+  partial_corr_pe-av-small-16-frame — PE-AV joint controlling for
+    AudioMAE + VideoMAE (generalized across all NATIVE_AV_MODELS).
+  integration_pe-av-small-16-frame  — PE-AV joint controlling for its own
+    unimodal decoders (the best-additive integration contrast).
 
 Usage
 -----
 python rsa/partial_rsa.py \
-    --run run_A \
+    --run partial_corr_pe-av-small-16-frame \
     --preprocessed-dir /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw \
     --fmri-suffix raw \
     --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \
     --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
     --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
-    --output-dir /home/amin/Research/Representation/Movie/outputs/rsa/partial \
+    --output-dir /home/amin/Research/Representation/Movie/outputs/rsa/raw \
     --subject group_average \
     --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0 \
     --k 100 --method spearman \
@@ -594,26 +597,20 @@ def run_analysis(args):
     gc.collect()
 
     # ── Save CIFTI ───────────────────────────────────────────────────────────
+    # One convention for every partial-RSA run (integration and cross-baseline
+    # alike), matching plain RSA / residual pseudo-models:
+    #   outputs/rsa/raw/group_average/<label>/k{K}_delay{D}s_bin{B}s_skip{S}s_{method}/<file>
     bin_sec_int  = int(args.bin_sec)
     skip_sec_int = int(args.skip_sec)
     delay_int    = int(args.delay_sec)
     map_name     = f"partial_rsa_{cfg.label}"
 
-    if cfg.kind == "integration":
-        # Move 1: outputs/rsa/{fmri_tag}/group_average/<model>_<modality>_INTEGRATION/
-        #         k{K}_delay{D}s_bin{B}s_skip{S}s_{method}/integration_partial_r_searchlight.dscalar.nii
-        target_model, target_mod = cfg.target
-        out_dir  = (Path(args.output_dir) / args.subject /
-                    f"{target_model}_{target_mod}_INTEGRATION" /
-                    f"k{args.k}_delay{delay_int}s_bin{bin_sec_int}s_skip{skip_sec_int}s_{args.method}")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "integration_partial_r_searchlight.dscalar.nii"
-    else:
-        # Legacy cross-baseline runs (run_A, run_C): unchanged output convention.
-        out_dir = (Path(args.output_dir) / args.subject / "partial_rsa" /
-                   f"k{args.k}_delay{delay_int}s_bin{bin_sec_int}s_{args.method}")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{cfg.label}_k{args.k}_delay{delay_int}s_bin{bin_sec_int}s.dscalar.nii"
+    out_dir = (Path(args.output_dir) / args.subject / cfg.label /
+               f"k{args.k}_delay{delay_int}s_bin{bin_sec_int}s_skip{skip_sec_int}s_{args.method}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    leaf = ("integration_partial_r_searchlight.dscalar.nii" if cfg.kind == "integration"
+            else "partial_corr_r_searchlight.dscalar.nii")
+    out_path = out_dir / leaf
 
     save_cifti_multimap(
         corr_full.reshape(1, -1),

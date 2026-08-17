@@ -65,7 +65,21 @@ is flagged, not over-interpreted.
 - `subcortical_noise_ceiling.py` — streaming-mode inter-subject noise
   ceiling on a subject subset (reuses `rsa/noise_ceiling.py`'s GPU/CPU
   kernels verbatim).
-- `analysis.sh` — `neighbors | groupavg | noiseceiling` modes.
+- `subcortical_visualization.py` — the only module that writes into
+  `workbench_visualization/`. Owns mesh generation (boundary meshes, SUIT
+  cerebellar surfaces, atlas staging) and metric export end to end, and
+  exports every current group result into independent Workbench files: one
+  cerebellum, one brain stem, and one bilateral file for each paired
+  subcortical structure. Every exported filename fully encodes the analysis
+  that produced it —
+  `<category>__<model_modality>__<config>__<result>__<STRUCTURE>.func.gii` —
+  so files can be told apart and loaded by hand without opening them. Its
+  spec deliberately excludes all-subcortical CIFTIs and whole-hemisphere
+  meshes. After writing each overlay it reloads it and asserts the vertex
+  count matches its carrier mesh, so a mismatch fails loudly at build time
+  instead of silently in wb_view.
+- `analysis.sh` — `neighbors | groupavg | noiseceiling | persubject |
+  groupstats | visualize` modes.
 
 ## Run
 
@@ -74,7 +88,20 @@ conda activate movie
 bash subcortical/analysis.sh neighbors      # one-time, ~4 min
 bash subcortical/analysis.sh groupavg       # primary first pass
 bash subcortical/analysis.sh noiseceiling   # mandatory reliability gate
+bash subcortical/analysis.sh visualize      # rebuild complete wb_view spec
 ```
+
+For viewing, open `outputs/rsa_movie.scene` and import
+`outputs/subcortical/workbench_visualization/subcortical_wb_view.spec`. The
+spec loads every anatomical mesh and all current group-average, groupstats,
+and noise-ceiling overlays (partial-RSA/integration, scramble, and dummy
+runs included — anything under `group_average/`, `groupstats/`, or
+`noise_ceiling/`). To add a later analysis (e.g. a new omni3b run) without
+rerunning `visualize`, drop its exported `.func.gii` next to the existing
+ones for that structure and load it manually in wb_view — the naming
+convention and vertex-count self-check guarantee it is compatible with the
+already-loaded mesh. `workbench_visualization/` is fully derived from the
+`.dscalar.nii` results and safe to delete and rebuild at any time.
 
 Per-subject RSA (`group_stats.py` t-test across subjects) and
 `subcortical_encoding.py` are the natural next steps but are **gated on the

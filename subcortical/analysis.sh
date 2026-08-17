@@ -146,6 +146,11 @@ N_BLOCKS_ARG=${2:-""}
 [ -n "$N_BLOCKS_ARG" ] && N_BLOCKS="$N_BLOCKS_ARG"
 run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+refresh_visualization_if_enabled() {
+    if [ "${REFRESH_VISUALIZATION:-true}" = "true" ]; then
+        run_visualize
+    fi
+}
 
 ensure_template() {
     if [ ! -f "$TEMPLATE_CIFTI" ]; then
@@ -191,6 +196,7 @@ run_groupavg() {
         done
     done
     log "Group-average subcortical RSA complete."
+    refresh_visualization_if_enabled
 }
 
 run_noiseceiling() {
@@ -207,6 +213,7 @@ run_noiseceiling() {
         --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" \
         --method "$METHOD" --tr "$TR"
     log "Noise ceiling complete."
+    refresh_visualization_if_enabled
 }
 
 run_persubject() {
@@ -263,6 +270,17 @@ run_groupstats() {
         done
     done
     log "Subcortical group stats complete."
+    refresh_visualization_if_enabled
+}
+
+run_visualize() {
+    ensure_template
+    log "Rebuilding per-structure subcortical Workbench bundle ..."
+    run_python "${SCRIPT_DIR}/subcortical_visualization.py" \
+        --output-dir "$OUTPUT_DIR" \
+        --template "$TEMPLATE_CIFTI" \
+        --wb-command "$WORKBENCH"
+    log "Workbench bundle complete: ${OUTPUT_DIR}/workbench_visualization/subcortical_wb_view.spec"
 }
 
 case "$MODE" in
@@ -271,5 +289,6 @@ case "$MODE" in
     noiseceiling) run_noiseceiling ;;
     persubject)   run_persubject ;;
     groupstats)   run_groupstats ;;
-    *) echo "Unknown MODE: $MODE (use: neighbors | groupavg | noiseceiling | persubject | groupstats)"; exit 1 ;;
+    visualize)    run_visualize ;;
+    *) echo "Unknown MODE: $MODE (use: neighbors | groupavg | noiseceiling | persubject | groupstats | visualize)"; exit 1 ;;
 esac

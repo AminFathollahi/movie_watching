@@ -85,6 +85,10 @@ def parse_args():
                    help="Root RSA output directory (contains per-subject subdirs).")
     p.add_argument("--model",            required=True)
     p.add_argument("--modality",         required=True, choices=["v", "a", "av", "at", "vt", "avt", "t"])
+    p.add_argument("--analysis-label",   default=None, dest="analysis_label",
+                   help="Override the per-subject directory/groupstats label. "
+                        "Used for derived analyses such as partial RSA; ordinary "
+                        "RSA defaults to {model}_{modality}.")
     p.add_argument("--k",                type=int, required=True)
     p.add_argument("--bin-sec",          type=float, required=True)
     p.add_argument("--skip-sec",         type=float, default=None, dest="skip_sec",
@@ -236,8 +240,8 @@ def main():
     delay_tag    = f"delay{int(args.delay_sec)}s"
     config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}"
 
-    out_dir = (Path(args.output_dir) / "groupstats" /
-               f"{args.model}_{args.modality}" / config)
+    analysis_label = args.analysis_label or f"{args.model}_{args.modality}"
+    out_dir = Path(args.output_dir) / "groupstats" / analysis_label / config
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.method == "rho_a":
@@ -247,7 +251,7 @@ def main():
         fname_pattern = (f"{args.fname_prefix}_{args.fmri_tag}_k{args.k}_{delay_tag}"
                          f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy")
 
-    model_mod_dir = f"{args.model}_{args.modality}"
+    model_mod_dir = analysis_label
     subject_rho_files = sorted(
         Path(args.output_dir).glob(
             f"subject_data/*/{model_mod_dir}/{config}/{fname_pattern}"
@@ -455,6 +459,7 @@ def main():
     summary = {
         "model":                  args.model,
         "modality":               args.modality,
+        "analysis_label":         analysis_label,
         "config":                 config,
         "fmri_tag":               args.fmri_tag,
         "n_subjects":             n_subs,

@@ -13,12 +13,20 @@ before trusting the scrambled output; if intact-mode files already exist on
 disk this script will not overwrite them unless --force is passed.
 
 Scrambled mode pairs each video segment with a RANDOMLY PERMUTED audio segment
-(fixed seed 42, same convention as extract_cav_mae_sync.py's --scramble-av) and
+(default seed 42, same convention as extract_cav_mae_sync.py's --scramble-av) and
 saves to outputs/model_embeddings/pe-av-small-16-frame_avscramble/bin5s_skip5s/.
+
+--seed lets this run be repeated with a DIFFERENT random AV pairing, saving to a
+seed-tagged model name (pe-av-small-16-frame_avscramble_seed{N}) instead of the
+canonical seed-42 output, so it doesn't clobber the intact-vs-scrambled control used
+elsewhere (partial_rsa.py, temporal_scramble_binding.py). This is what
+rsa/run_av_scramble_permutations.sh uses to build an empirical null of
+re-inferred (not RDM-reindexed) AV pairings -- see that script's docstring for why
+this can't be done cheaply by permuting an RDM post-hoc (PE-AV's fusion is nonlinear).
 
 Run with:
     conda run --no-capture-output -n avtransformer \
-        python notebooks/feature_extraction/pe_av_extract_scramble.py --scramble-av
+        python notebooks/feature_extraction/pe_av_extract_scramble.py --scramble-av [--seed 1]
 """
 
 import argparse
@@ -98,10 +106,19 @@ def extract_embeddings(model, processor, pairs, batch_size, device) -> dict:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--scramble-av", action="store_true", dest="scramble_av")
+    p.add_argument("--seed", type=int, default=SCRAMBLE_SEED,
+                   help="AV-pairing permutation seed (only used with --scramble-av). "
+                        "Seed 42 is the canonical control and keeps the legacy output name; "
+                        "any other seed is tagged into the output model name.")
     p.add_argument("--force", action="store_true")
     args = p.parse_args()
 
-    model_out_name = f"{MODEL_NAME}_avscramble" if args.scramble_av else MODEL_NAME
+    if not args.scramble_av:
+        model_out_name = MODEL_NAME
+    elif args.seed == SCRAMBLE_SEED:
+        model_out_name = f"{MODEL_NAME}_avscramble"
+    else:
+        model_out_name = f"{MODEL_NAME}_avscramble_seed{args.seed}"
     out_dir = OUTPUT_BASE / model_out_name / f"bin{int(SEG_SEC)}s_skip{int(SEG_SEC)}s"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -119,7 +136,7 @@ def main():
     pairs = find_chunk_pairs(DATA_BASE, SEG_SEC)
     print(f"{len(pairs)} intact (video, audio) pairs found.")
     if args.scramble_av:
-        pairs = scramble_audio(pairs, SCRAMBLE_SEED)
+        pairs = scramble_audio(pairs, args.seed)
 
     print(f"Extracting from {len(pairs)} pairs (scramble_av={args.scramble_av}) ...")
     embeds = extract_embeddings(model, processor, pairs, BATCH_SIZE, DEVICE)

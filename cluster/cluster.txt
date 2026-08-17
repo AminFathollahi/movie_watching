@@ -1,0 +1,379 @@
+================================================================================
+cluster/  —  dual-clustering pipeline (stimulus temporal states × brain spatial networks)
+PLANNER PASS OUTPUT:  (PART A) verified Step-0 findings   (PART B) Sonnet implementation prompt
+Author: planner agent.  Convention: fork-and-adapt subcortical/ — IMPORT, do not re-implement.
+================================================================================
+
+################################################################################
+# PART A — STEP 0 FINDINGS (verified against the live repo, 2026-07-21)
+################################################################################
+
+All facts below were CONFIRMED by loading the actual files, not inferred.
+
+--------------------------------------------------------------------------------
+A.1  CIFTI dtseries loading and the real V × T
+--------------------------------------------------------------------------------
+The group-average cortical timeseries ALREADY EXISTS on disk (built by
+`rsa/analysis.sh preprocess`). The cluster pipeline does NOT build a group
+average — it loads the cached one. This is the cortical analog of the
+subcortical group-average cache.
+
+  FILE  : /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii
+  run_trs: /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy
+
+  CONFIRMED shapes:
+    on-disk CIFTI (T, V) = (3655, 108441)   → transposed to (V, T) = (108441, 3655)
+    V = 108441  cortex grayordinates (medial wall excluded)
+          left = 54216 verts, right = 54225 verts   (54216 + 54225 = 108441)
+    T = 3655  TRs (TR = 1.0 s)
+    run_trs = [921, 918, 915, 901]  (sum = 3655), 4 movie runs
+
+  >>> IMPORTANT CORRECTION to the task brief: V is 108441, NOT ~59412. The
+      "59k" in the filename is the *per-hemisphere* 1.6 mm 59k_fs_LR mesh
+      resolution (~54k/hemi), not total grayordinates. T ≈ 3655 was correct.
+
+  Import to load (identical function in two places — use cifti_io):
+    from cifti_io import load_cifti_data, get_bm_axis, get_cortex_vertex_indices
+        load_cifti_data(path) -> (V, T) float32          # transposes on-disk (T,V)
+        get_bm_axis(path)     -> nibabel BrainModelAxis   # the vertex/index axis
+        get_cortex_vertex_indices(bm_axis) -> (L_idx, R_idx)
+    (rsa/shared/rsa_utils.load_fmri_cifti is byte-identical to load_cifti_data.)
+
+  The SAME group-average file is the TEMPLATE_CIFTI whose BrainModelAxis maps
+  labels back to original vertex indices (see rsa/analysis.sh:161).
+
+--------------------------------------------------------------------------------
+A.2  Binning stimulus↔brain to segments, and run boundaries (the temporal grid)
+--------------------------------------------------------------------------------
+  from rsa.shared.rsa_utils import (
+      preprocess_fmri,             # (V,T) fMRI -> (n_segments, V), mean-pool per 5s window + z-score per run
+      process_model_embeddings,    # emb .npy   -> (n_segments, n_features), same windowing + z-score per run
+      get_run_bin_counts,          # -> (n_runs,) segments-per-run  [USE THIS FOR PERMUTATION BLOCKS + HMM lengths]
+      align_and_assert_bins,       # assert fmri_binned.shape[0] == emb.shape[0]
+  )
+
+  CONFIRMED at bin_sec=5, skip_sec=5, delay_sec=5, tr=1:
+    get_run_bin_counts(...) = [151, 161, 156, 158]   TOTAL n_segments = 626
+    process_model_embeddings(nemotron_layer27_mp_av) -> (626, 2048)   ✔ aligns exactly
+
+  So the temporal axis has ~626 "conditions" (segments), grouped into 4 runs of
+  [151,161,156,158]. These run lengths are the block structure for:
+    - hmmlearn `lengths=` argument (fit HMM respecting run boundaries), AND
+    - the block/circular permutation null (permute within each run).
+
+  Signatures (call exactly as subcortical_rsa.py does):
+    preprocess_fmri(fmri, timing_df, run_trs, bin_sec, tr, delay_sec, skip_sec=..., normalize=True)
+    process_model_embeddings(emb_path, timing_df, bin_sec=, tr=, run_trs=, delay_sec=, hrf=False, skip_sec=, normalize=True)
+    get_run_bin_counts(timing_df, run_trs, bin_sec, tr, delay_sec=, skip_sec=)
+
+  timing_df = pd.read_csv("/home/amin/Research/Representation/Movie/data/movie_timing.csv")
+    (columns: video_id, onset_sec, end_sec, duration_sec, run_id — onset_sec is GLOBAL time)
+
+--------------------------------------------------------------------------------
+A.3  Precomputed embedding storage / loading, keyed by (model, modality, bin, skip)
+--------------------------------------------------------------------------------
+  PATTERN (rsa/analysis.sh:341, subcortical_rsa.py:181):
+    {EMBEDDINGS_DIR}/{model}/bin{BIN_INT}s_skip{SKIP_INT}s/{model}_{modality}.npy
+    EMBEDDINGS_DIR = /home/amin/Research/Representation/Movie/outputs/model_embeddings
+    BIN_INT/SKIP_INT = integer part of bin_sec/skip_sec ("5.0" -> "5")
+
+  CONFIRMED on disk (shape (626, 2048) float32 each):
+    .../nemotron_layer27_mp/bin5s_skip5s/nemotron_layer27_mp_{a,v,av}.npy
+
+  >>> MODEL-NAME RESOLUTION (task shorthand vs disk): the brief's default
+      "nemotron:a,v,av" has NO bare `nemotron` dir on disk. Real nemotron dirs
+      are nemotron_layer{9,18,27,36}_{mp,lt}. PLANNER DECISION: default to
+      nemotron_layer27_mp (verified present, a/v/av all (626,2048)). This is a
+      one-line edit in cluster.sh MODELS to swap the layer.
+
+--------------------------------------------------------------------------------
+A.4  Runner / argparse convention (MODE, model:modality, output layout)
+--------------------------------------------------------------------------------
+  The closest template is subcortical/analysis.sh (a self-contained fork). Copy
+  its shape verbatim:
+    - MODELS=( "model:mod,mod" ... ); loop `IFS=':' read MODEL MODS`; `IFS=',' read -ra MODS`.
+    - `run_python(){ conda run --no-capture-output -n movie python "$@"; }`
+    - MODE positional arg dispatches functions via `case "$MODE" in ...`.
+    - Output root: {OUTPUT_DIR}/group_average/{model}_{modality}/{config}/  (persubject: .../subject_data/{sub}/...)
+    - Driver argparse mirrors subcortical_rsa.py:parse_args (--raw-dir, --subjects-list,
+      --subject group_average, --timing-csv, --embeddings-dir, --template-cifti,
+      --output-dir, --model, --modality, --bin-sec, --skip-sec, --delay-sec, --tr, ...).
+  Config-string convention (subcortical_rsa.py:154): "k{K}_delay{d}s_bin{b}s_skip{s}s_{method}".
+  Cluster has no k/method → define its own descriptive tag (see B).
+
+--------------------------------------------------------------------------------
+A.5  CIFTI writers — what exists, what is MISSING
+--------------------------------------------------------------------------------
+  EXISTS (cifti_io.py): save_cifti_map (1×V dscalar), save_cifti_multimap
+    (n×V dscalar), merge_into_combined, _save_cifti_atomic.
+  MISSING: there is NO .dlabel WRITER anywhere in the repo — only .dlabel
+    READERS (rsa/rdm_diagonal.py:_load_glasser_parcels, rsa/multimodal_decomposition.py).
+    The task assumed a writer to reuse; there isn't one. cluster/io_cluster.py
+    must add a minimal one (~15 lines): build nib.cifti2.LabelAxis(label_table)
+    + reuse get_bm_axis(template) for the BrainModelAxis. This is legitimate new
+    code (nothing to reuse), kept tiny.
+
+--------------------------------------------------------------------------------
+A.6  Dependencies (verified in conda env `movie`, python 3.10)
+--------------------------------------------------------------------------------
+  PRESENT: scikit-learn 1.7.2, numpy 1.26.2, scipy 1.15.2, nibabel 5.4.0, pandas 2.3.3
+  KEY WIN: sklearn 1.7.2 ships `from sklearn.cluster import HDBSCAN` (built in
+           since 1.3). DO NOT add the standalone `hdbscan` package — use sklearn's.
+           Params confirmed: min_cluster_size, min_samples, ... ; labels_ = -1 for noise.
+  MISSING: hmmlearn (REQUIRED this pass) — `pip install hmmlearn` verified to
+           install 0.3.3 with ZERO pin changes (numpy/scipy/sklearn all already satisfy).
+  MISSING: tphate, phate (DEFERRED — not run this pass). Import them LAZILY inside
+           their reducer branches so their absence never blocks the pca/pca run.
+  NOTE: hmmlearn.GaussianHMM has NO `n_init` argument. Implement n_init by fitting
+        n_init times with different random_state and keeping the highest .score().
+
+--------------------------------------------------------------------------------
+A.7  Planner decisions baked into PART B (deviations from a literal read)
+--------------------------------------------------------------------------------
+  D1. Interaction is computed on the SEGMENT grid (fmri_binned, 626×V), which IS
+      the existing brain↔stimulus alignment. Bins are contiguous, non-overlapping
+      5 s windows, so a per-TR broadcast would only repeat each segment value
+      bin_trs times and leave every mean identical. Sonnet logs the segment shape
+      AND the equivalent TR count, but does NOT write a redundant TR-length file.
+      Permutation blocks = the 4 run segment-lengths [151,161,156,158].
+  D2. Spatial clustering is computed ONCE (brain is modality-invariant) and cached
+      under .../group_average/_spatial/{spatial_config}/, then reused by all three
+      modalities' interaction step. Only temporal states + interaction are per-modality.
+  D3. .dlabel keys: HDBSCAN noise (-1) is remapped to dlabel key 0 = "unassigned"
+      (transparent); networks -> keys 1..G. The plain .npy keeps raw -1. Mapping logged.
+  D4. silhouette_score on 108k points is O(n²) — compute it on a random subsample
+      of non-noise points (cap ~10000). Marked with a ponytail ceiling comment.
+
+
+################################################################################
+# PART B — SONNET IMPLEMENTATION PROMPT  (self-contained; implement + RUN)
+################################################################################
+
+You are implementing a new `cluster/` pipeline in the repo
+/home/amin/Research/Representation/Movie/movie_watching . It relates
+STIMULUS-derived temporal states (from precomputed model embeddings) to
+BRAIN-derived spatial networks (from the group-average cortical timeseries).
+
+Follow the "fork and adapt" convention of subcortical/: IMPORT existing loaders
+and alignment functions; do NOT re-implement CIFTI I/O, binning, embedding
+alignment, or run-boundary logic. Functional, mathematically explicit code —
+scikit-learn / hmmlearn used directly. NO OO wrapper hierarchies, no abstractions
+with one implementation. Every matrix transformation prints its exact shape;
+every PCA prints cumulative explained-variance.
+
+Read these files FIRST to copy their exact call patterns:
+  subcortical/subcortical_rsa.py   (driver structure, group-average loading, config strings)
+  subcortical/analysis.sh          (runner structure — clone its shape for cluster.sh)
+  rsa/shared/rsa_utils.py          (preprocess_fmri, process_model_embeddings, get_run_bin_counts, align_and_assert_bins)
+  cifti_io.py                      (load_cifti_data, get_bm_axis, get_cortex_vertex_indices, save_cifti_map)
+
+----------------------------------------------------------------------
+STEP 0 (do first): environment
+----------------------------------------------------------------------
+  conda run --no-capture-output -n movie pip install hmmlearn
+Verify: `from sklearn.cluster import HDBSCAN`, `import hmmlearn.hmm`. Use sklearn's
+HDBSCAN (do NOT install the standalone `hdbscan`). Do NOT install tphate/phate
+now — import them lazily inside their branches only.
+
+----------------------------------------------------------------------
+SCOPE THIS PASS
+----------------------------------------------------------------------
+RUN end to end: temporal_reduction=pca, spatial_reduction=pca, spatial_cluster=hdbscan,
+MODE=groupaverage, MODEL=nemotron_layer27_mp with modalities a, v, av,
+bin_sec=skip_sec=5, delay_sec=5, N_STATES=10 fixed (hmm_covariance=diag, hmm_n_init=10).
+Compute the K=2..15 CV-LL/BIC/restart-ARI sweep as a saved DIAGNOSTIC only — do
+NOT branch on it (state assignment always uses K=10 this pass).
+
+WRITE but DO NOT RUN (wire the flags, leave the code paths reachable, add a lazy
+import or a clear NotImplementedError-free stub): tphate/phate reducers, NMF
+spatial clusterer (semi-NMF / pos-neg split, soft W + argmax hard label),
+persubject mode, --stability, and --select-states (branching on the sweep).
+
+----------------------------------------------------------------------
+EXACT PATHS / CONSTANTS (verified — use literally)
+----------------------------------------------------------------------
+  GROUP_AVG_CIFTI = /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii
+  GROUP_AVG_TRS   = /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy
+  TEMPLATE_CIFTI  = GROUP_AVG_CIFTI            # its BrainModelAxis maps labels -> original vertices
+  TIMING_CSV      = /home/amin/Research/Representation/Movie/data/movie_timing.csv
+  EMBEDDINGS_DIR  = /home/amin/Research/Representation/Movie/outputs/model_embeddings
+  EMB pattern     = {EMBEDDINGS_DIR}/{model}/bin{bin_int}s_skip{skip_int}s/{model}_{modality}.npy
+  OUTPUT_DIR      = /home/amin/Research/Representation/Movie/outputs/cluster
+  V = 108441 cortex grayordinates ; T = 3655 TRs ; run_trs = [921,918,915,901]
+  n_segments = 626 = [151,161,156,158] per run (bin5/skip5/delay5) — DERIVE at runtime, don't hardcode.
+
+----------------------------------------------------------------------
+FILE-BY-FILE SPEC
+----------------------------------------------------------------------
+
+cluster/io_cluster.py  — thin re-exports/wrappers over existing loaders (import, don't rewrite)
+  ROOT = Path(__file__).resolve().parents[1]; sys.path.insert for ROOT, ROOT/"rsa".
+  Re-export from rsa.shared.rsa_utils: preprocess_fmri, process_model_embeddings,
+    get_run_bin_counts, align_and_assert_bins.
+  Re-export from cifti_io: load_cifti_data, get_bm_axis, get_cortex_vertex_indices, save_cifti_map.
+  def load_group_average(cifti_path=GROUP_AVG_CIFTI, trs_path=GROUP_AVG_TRS):
+      returns (X (V,T) float32, run_trs (n_runs,), bm_axis). Log X.shape, run_trs.
+  def write_dlabel(labels_1d, template_path, out_path, network_rgba=None):
+      # NEW minimal writer (none exists). labels_1d int length V, noise=-1.
+      # Remap: key 0 = "unassigned" (rgba 0,0,0,0) for -1; networks -> 1..G with
+      # distinct colors (matplotlib tab20 or evenly-spaced HSV). Build
+      # nib.cifti2.LabelAxis([{key:(name,(r,g,b,a))...}]) + get_bm_axis(template);
+      # Cifti2Header.from_axes((label_axis, bm_axis)); save (1,V) int32 image.
+      # Return the -1->0 remapped vector actually written. Log the key mapping.
+  Add a `demo()` / __main__ assert-check: load_group_average returns V=108441,
+    T=3655, run_trs sums to 3655; write_dlabel round-trips (reload has V columns
+    and a label table with G+1 entries).
+
+cluster/reduce.py  — dispatch + EVR/scree logging
+  def reduce_temporal(emb, method="pca", n_components=50, adv_n_components=10):
+      pca -> PCA(n_components=n_components, svd_solver="randomized", random_state=0).fit_transform(emb);
+             log per-component and CUMULATIVE explained_variance_ratio_.
+      tphate -> lazy `import tphate`; tphate.TPHATE(n_components=adv_n_components).fit_transform(emb). (deferred)
+      Log input and output shapes. Return (features, info_dict).
+  def reduce_spatial(X, method="pca", n_components=100, adv_n_components=10):
+      # X is (V, T); reduce over T so each vertex -> n_components features.
+      pca -> PCA(n_components=n_components, svd_solver="randomized", random_state=0).fit_transform(X);
+             log cumulative EVR. In-code comment: "PCA default capped at 100 for
+             HDBSCAN density; this is BELOW the variance-optimal k (EVR< ~full)."
+      phate -> lazy `import phate`; phate.PHATE(n_components=adv_n_components, n_landmark=2000).fit_transform(X). (deferred)
+      Return (features, info_dict). Log shapes.
+
+cluster/cluster_temporal.py  — Gaussian HMM on reduced temporal features
+  def fit_hmm(features, lengths, n_states=10, covariance_type="diag", n_init=10, random_state=0):
+      # hmmlearn has NO n_init: loop n_init fits with random_state+i, keep best .score(features, lengths).
+      # GaussianHMM(n_components=n_states, covariance_type=covariance_type, n_iter=200, random_state=...).
+      # Fit with lengths= (run boundaries) so transitions don't cross runs.
+      # Return dict: labels=model.predict(features,lengths) (n_seg,),
+      #   posteriors=model.predict_proba(features,lengths) (n_seg,K), model, loglik.
+      Log labels.shape and posteriors.shape.
+  def sweep_states(features, lengths, k_min=2, k_max=15, n_init=10, covariance_type="diag"):
+      # DIAGNOSTIC ONLY this pass. For each K:
+      #   - CV held-out log-likelihood: leave-one-RUN-out over the runs implied by
+      #     `lengths` (fit on the other runs' concatenation, score the held-out run); primary.
+      #   - BIC on the full fit; secondary.
+      #   - restart stability: ARI (sklearn.metrics.adjusted_rand_score) between the
+      #     best and 2nd-best restart's matched labels.
+      # Return dict of arrays keyed by K. Caller saves as JSON; does NOT branch on it.
+
+cluster/cluster_spatial.py  — HDBSCAN (default) or NMF (documented alt)
+  def cluster_spatial(features, method="hdbscan", min_cluster_size=100, min_samples=10):
+      hdbscan -> from sklearn.cluster import HDBSCAN; HDBSCAN(min_cluster_size=..., min_samples=...).fit_predict.
+                 labels_ has -1 for noise. Log labels.shape.
+      nmf -> DOCUMENTED ALTERNATIVE (write, don't run): fMRI is signed, so pos/neg
+             split (concat [relu(X), relu(-X)]) then sklearn NMF(n_components=rank);
+             keep soft W (graded membership) AND argmax hard label; rank via
+             silhouette + cophenetic/consensus stability. Guard behind method=="nmf".
+      Return labels (V,) int, noise=-1.
+  def spatial_report(features, labels):
+      # silhouette on NON-NOISE points, subsampled to <=10000 (ponytail: O(n^2)).
+      # n_networks = #unique labels != -1 ; noise_fraction = mean(labels==-1) ;
+      # per-network sizes. Return dict. Log it.
+
+cluster/interaction.py  — network × state interaction + block-permutation inference
+  def interaction_matrix(fmri_binned, state_labels, vertex_labels):
+      # fmri_binned (n_seg, V); state_labels (n_seg,) 0..K-1; vertex_labels (V,) -1..G-1.
+      # M[k,g] = mean over segments-in-state-k of ( mean over network-g vertices of fmri_binned ).
+      # Exclude vertex_labels == -1. Return M (K,G). Log shape.
+  def block_permutation_test(fmri_binned, state_labels, vertex_labels, run_lengths,
+                             n_perm=1000, correction="fdr", random_state=0):
+      # Observed M. For each cell test M[k,g] vs the across-STATE mean for network g
+      #   (i.e., network-g grand mean over all segments).
+      # NULL: circular-shift the state_labels sequence WITHIN each run (blocks =
+      #   run_lengths = [151,161,156,158]) by a random offset; recompute M; repeat n_perm.
+      #   This preserves run boundaries AND state autocorrelation (contiguous states).
+      # p = fraction of |null cell deviation| >= |observed cell deviation|.
+      # correction: "fdr" (BH over K*G cells) or "maxstat" (max |deviation| across cells per perm).
+      # Return (M, pvals_corrected (K,G), stats_dict). Descriptive M is ALWAYS returned.
+  # Only called when temporal_source == "embedding". If "brain", skip permutation
+  # (circular) and save the descriptive matrix only.
+
+cluster/run_cluster.py  — the single Python entrypoint (argparse), mirrors subcortical_rsa.py
+  Orchestration for ONE (model, modality):
+    1. load_group_average -> X (V,T), run_trs, bm_axis.  timing_df = read TIMING_CSV.
+    2. get_run_bin_counts(...) -> seg_lengths (the [151,161,156,158]); n_seg=sum.
+    3. fmri_binned = preprocess_fmri(X, timing_df, run_trs, bin_sec, tr, delay_sec, skip_sec, normalize=True)  # (n_seg, V)
+    4. SPATIAL (cache once, keyed by spatial_config under OUTPUT_DIR/group_average/_spatial/):
+         if cached vertex_labels.npy exists -> load; else reduce_spatial(X) -> HDBSCAN ->
+         write vertex_labels.npy (raw -1) + vertex_labels.dlabel.nii + spatial_report.json.
+    5. TEMPORAL (per modality): emb = process_model_embeddings(EMB_path, ...);
+         align_and_assert_bins(fmri_binned, emb);
+         temporal-source: "embedding" (default) uses emb; "brain" builds features from
+           fmri_binned and WARNS the interaction is descriptive-only (skip permutation).
+         reduce_temporal(emb) -> feats; sweep_states(...) -> save diagnostics JSON;
+         fit_hmm(feats, lengths=seg_lengths, n_states=10, ...) -> labels, posteriors.
+    6. INTERACTION: interaction_matrix(...) always saved; if temporal_source=="embedding":
+         block_permutation_test(...) -> pvals + stats.
+    7. Write manifest.json: full arg dict + the shape of EVERY step (X, fmri_binned,
+       emb, reduced temporal, reduced spatial, labels, posteriors, M) + cumulative EVR
+       for both PCAs + chosen K + n_networks + noise_fraction.
+    Output layout:
+      {OUTPUT_DIR}/group_average/{model}_{modality}/{config}/
+        temporal_state_labels.npy         (n_seg,) int
+        temporal_state_posteriors.npy     (n_seg,K) float
+        temporal_hmm_diagnostics.json     (K-sweep CV-LL, BIC, restart ARI, chosen K=10)
+        interaction_matrix.npy            (K,G)
+        interaction_pvals_fdr.npy         (K,G)   [embedding source only]
+        interaction_stats.json            (correction, n_perm, null summary) [embedding only]
+        manifest.json
+      {OUTPUT_DIR}/group_average/_spatial/{spatial_config}/
+        spatial_vertex_labels.npy         (V,) int, noise=-1
+        spatial_vertex_labels.dlabel.nii  (1,V) LabelAxis, -1->key0 unassigned
+        spatial_report.json               (n_networks, noise_fraction, silhouette, sizes)
+    config tag: treduce-{tr}_tnc{tnc}_K{K}_sreduce-{sr}_snc{snc}_scluster-{sc}_bin{b}s_skip{s}s_delay{d}s
+    spatial_config tag: sreduce-{sr}_snc{snc}_scluster-{sc}_mcs{mcs}_ms{ms}_bin{b}s_skip{s}s_delay{d}s
+    Skip-if-exists guard like subcortical_rsa.py (all expected outputs present -> return).
+
+  run_cluster.py argparse (ALL flags wired even if deferred features aren't run):
+    --group-avg-cifti (default GROUP_AVG_CIFTI)   --group-avg-trs (default GROUP_AVG_TRS)
+    --timing-csv (default TIMING_CSV)             --embeddings-dir (default EMBEDDINGS_DIR)
+    --template-cifti (default TEMPLATE_CIFTI)     --output-dir (default OUTPUT_DIR)
+    --mode {groupaverage,persubject} (default groupaverage; persubject stub)
+    --subject (default group_average)            --subjects-list (default None; persubject)
+    --model (required)                           --modality (required, choices a/v/av)
+    --bin-sec (5) --skip-sec (5) --delay-sec (5) --tr (1.0)
+    --temporal-reduction {pca,tphate} (pca)      --temporal-n-components (50)  --adv-n-components (10)
+    --spatial-reduction {pca,phate} (pca)        --spatial-n-components (100)
+    --spatial-cluster {hdbscan,nmf} (hdbscan)    --min-cluster-size (100) --min-samples (10)
+    --n-temporal-states (10) --hmm-covariance (diag) --hmm-n-init (10)
+    --select-states (flag, off) --k-min (2) --k-max (15)   # wired; not branched this pass
+    --temporal-source {embedding,brain} (embedding)
+    --stability (flag, off)                      # wired; deferred
+    --n-permutations (1000) --perm-correction {fdr,maxstat} (fdr)
+    --nmf-rank (20)                              # only used when spatial-cluster=nmf
+
+cluster/cluster.sh  — orchestrator, clone subcortical/analysis.sh shape
+  set -euo pipefail; SCRIPT_DIR; run_python(){ conda run --no-capture-output -n movie python "$@"; }; log().
+  CONFIG defaults (every one overridable via env var, expose as arg to run_cluster.py):
+    MODE=groupaverage
+    MODELS=( "nemotron_layer27_mp:a,v,av" )     # task shorthand nemotron:a,v,av -> this on-disk name
+    BIN_SEC=5  SKIP_SEC=5  DELAY_SEC=5  TR=1.0
+    TEMPORAL_REDUCTION=pca  SPATIAL_REDUCTION=pca  SPATIAL_CLUSTER=hdbscan
+    TEMPORAL_NCOMP=50  SPATIAL_NCOMP=100  ADV_NCOMP=10
+    N_STATES=10  HMM_COVARIANCE=diag  HMM_N_INIT=10
+    MIN_CLUSTER_SIZE=100  MIN_SAMPLES=10
+    N_PERM=1000  PERM_CORRECTION=fdr
+    OUTDIR=/home/amin/Research/Representation/Movie/outputs/cluster
+  MODE=${1:-groupaverage}; case dispatch. groupaverage: loop MODELS ->
+    `IFS=':' read MODEL MODS`; `IFS=',' read -ra MODS`; for MOD: run_python run_cluster.py
+    passing every flag above. persubject: same but --mode persubject over SUBJECTS_LIST
+    (stub is fine this pass). Every default reachable by editing this file only.
+
+----------------------------------------------------------------------
+LOGGING / VERIFICATION REQUIREMENTS (non-negotiable)
+----------------------------------------------------------------------
+  - Print the exact shape of EVERY matrix at EVERY transformation step.
+  - Print cumulative explained-variance at each PCA (temporal and spatial).
+  - Print the spatial report: n_networks, noise_fraction, silhouette (subsampled).
+  - Each non-trivial module leaves ONE runnable assert-based self-check
+    (demo()/__main__), no test framework: io_cluster round-trip; a synthetic
+    interaction where a planted state×network effect survives permutation.
+
+----------------------------------------------------------------------
+FINISH: run the default config end to end
+----------------------------------------------------------------------
+  bash cluster/cluster.sh groupaverage
+  This runs nemotron_layer27_mp for a, v, av. Then print the output file tree
+  under /home/amin/Research/Representation/Movie/outputs/cluster/ and a one-line
+  summary per modality: n_networks, noise_fraction, chosen K, and the count of
+  interaction cells passing FDR q<0.05.
+================================================================================

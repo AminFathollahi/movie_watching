@@ -12,24 +12,32 @@ t-test on diff (H0: mean diff = 0) -- equivalent to a paired t-test between
 the two per-subject rho maps, since same-subject/same-vertex pairing cancels
 subject-level baseline differences.
 
-PREREQUISITE (not done by this script): per-subject scrambled RSA must exist
-under {output-dir}/subject_data/{sub}/{scrambled-model}_{modality}/..., i.e.
+PREREQUISITE: per-subject scrambled RSA must exist under
+{output-dir}/subject_data/{sub}/{scrambled-model}_{modality}/..., i.e.
 rsa/searchlight.py run per-subject with the scrambled embedding, the same way
-the existing per-subject intact runs were produced. As of this writing that
-per-subject scrambled run has NOT been executed (only group-average-level
-scramble RSA exists) -- this script will simply find 0 matching files and
-exit until that run is done.
+the existing per-subject intact runs were produced. (Historically this had
+not been run; it has since been run per-subject for
+pe-av-small-16-frame_avscramble/av.)
 
 FDR convention and the optional corrected 2-factor bootstrap (Schutt et al.
 2023 Eq. 5, requires --n-blocks block-level .npy files for BOTH intact and
 scrambled) exactly mirror rsa/group_stats.py, just computed on the per-subject
 DIFF stack instead of the raw rho stack.
 
+Optional sign-flip permutation test (--n-perm > 0): a nonparametric
+alternative/complement to the parametric paired t-test above. Under H0 (no
+true AV-binding effect), each subject's diff = rho_intact - rho_scrambled is
+exchangeable in sign. For n_perm draws, flip each subject's diff sign with
+p=0.5, recompute the group mean, and use the resulting null distribution to
+derive an empirical per-vertex p-value -- no new embeddings or RSA runs
+needed, just a reshuffle of data already on disk.
+
 Output: ONE combined CIFTI with mean_rho_intact / mean_rho_scrambled /
 mean_diff / t_stat / sigmap_uncorr / sigmap_fdr (+ mean_diff_c2f / t_c2f /
-sigmap_c2f if block files are found), plus standalone fdr_mask and
-fdr_c2f_mask dscalar files -- matching group_stats.py's existing map-naming
-and file-layout conventions.
+sigmap_c2f if block files are found; + sigmap_perm / sigmap_perm_fdr if
+--n-perm > 0), plus standalone fdr_mask / fdr_c2f_mask / fdr_perm_mask
+dscalar files -- matching group_stats.py's existing map-naming and
+file-layout conventions.
 
 Run with:
     conda run -n movie python rsa/scramble_paired_stats.py \\
@@ -38,7 +46,8 @@ Run with:
         --scrambled-model pe-av-small-16-frame_avscramble \\
         --modality av --k 100 --bin-sec 5.0 --delay-sec 5.0 --method spearman \\
         --fmri-tag raw \\
-        --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii
+        --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \\
+        --n-perm 100
 """
 
 import argparse
@@ -78,6 +87,10 @@ def parse_args():
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--n-blocks", type=int, default=4, dest="n_blocks")
     p.add_argument("--n-bootstrap", type=int, default=2000, dest="n_bootstrap")
+    p.add_argument("--n-perm", type=int, default=0, dest="n_perm",
+                   help="Sign-flip permutations for a nonparametric null on the paired "
+                        "diff (0 = skip; e.g. 100).")
+    p.add_argument("--perm-seed", type=int, default=42, dest="perm_seed")
     return p.parse_args()
 
 
@@ -100,6 +113,32 @@ def _one_sample_test(x: np.ndarray, alpha: float):
     sigmap_uncorr = (np.sign(mean_val) * (-np.log10(np.maximum(p_uncorr, eps)))).astype(np.float32)
     sigmap_fdr, fdr_mask, n_sig_fdr = _compute_fdr_maps(p_uncorr, mean_val, alpha)
     return mean_val, t_vals, p_uncorr, sigmap_uncorr, sigmap_fdr, fdr_mask, n_sig_fdr
+
+
+def _sign_flip_perm_test(diff_stack: np.ndarray, mean_diff: np.ndarray,
+                          n_perm: int, seed: int, alpha: float):
+    """Sign-flip permutation null for the paired diff (n_subs, n_verts).
+
+    H0: each subject's diff sign is exchangeable (no true AV-binding effect).
+    null_mean[p, v] = mean_s( sign[p, s] * diff_stack[s, v] ), sign in {-1, +1}.
+    One-tailed empirical p in the direction of the observed mean_diff's sign,
+    matching _one_sample_test's p_uncorr convention.
+    """
+    rng = np.random.default_rng(seed)
+    n_subs = diff_stack.shape[0]
+    signs = rng.choice(np.array([-1.0, 1.0], dtype=np.float32), size=(n_perm, n_subs))
+    null_mean = (signs @ diff_stack.astype(np.float32)) / n_subs  # (n_perm, n_verts)
+
+    ge_pos = (null_mean >= mean_diff[None, :]).sum(axis=0)
+    ge_neg = (null_mean <= mean_diff[None, :]).sum(axis=0)
+    p_perm = np.where(mean_diff > 0, ge_pos, ge_neg).astype(np.float64)
+    p_perm = (p_perm + 1) / (n_perm + 1)
+
+    eps = np.finfo(np.float32).tiny
+    sigmap_perm = (np.sign(mean_diff) * (-np.log10(np.maximum(p_perm, eps)))).astype(np.float32)
+    sigmap_perm_fdr, fdr_perm_mask, n_sig_perm_fdr = _compute_fdr_maps(
+        p_perm.astype(np.float32), mean_diff, alpha)
+    return p_perm.astype(np.float32), sigmap_perm, sigmap_perm_fdr, fdr_perm_mask, n_sig_perm_fdr
 
 
 def _load_subject_stack(output_dir: Path, model: str, modality: str, config: str,
@@ -219,10 +258,22 @@ def main():
         log.info(f"No usable block files for n_blocks={args.n_blocks} for both intact and "
                  f"scrambled -- skipping corrected 2-factor bootstrap.")
 
+    # ── Optional sign-flip permutation null on the diff ──────────────────────
+    have_perm = args.n_perm > 0
+    n_sig_perm_fdr = 0
+    fdr_perm_mask = None
+    if have_perm:
+        log.info(f"Running {args.n_perm} sign-flip permutations (seed={args.perm_seed}) ...")
+        p_perm, sigmap_perm, sigmap_perm_fdr, fdr_perm_mask, n_sig_perm_fdr = _sign_flip_perm_test(
+            diff_stack, mean_diff, args.n_perm, args.perm_seed, args.alpha)
+        log.info(f"Sign-flip perm: uncorrected p<{args.alpha}: {(p_perm < args.alpha).sum():,} / {n_grays:,}  "
+                  f"BH-FDR sig: {n_sig_perm_fdr:,} / {n_grays:,}")
+
     # ── Save outputs ──────────────────────────────────────────────────────────
     out_dir = output_dir / "groupstats" / f"{args.intact_model}_vs_{args.scrambled_model}_{args.modality}" / config
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"_nblocks{args.n_blocks}" if have_blocks else ""
+    suffix += f"_perm{args.n_perm}" if have_perm else ""
     out_path = out_dir / f"scramble_paired_stats_{n_subs}subs{suffix}.dscalar.nii"
 
     maps = [mean_rho_intact, mean_rho_scrambled, mean_diff, t_vals, sigmap_uncorr, sigmap_fdr]
@@ -230,6 +281,9 @@ def main():
     if have_blocks:
         maps += [mean_diff_c2f, t_c2f, sigmap_c2f]
         map_names += ["mean_diff_c2f", "t_c2f", "sigmap_c2f"]
+    if have_perm:
+        maps += [sigmap_perm, sigmap_perm_fdr]
+        map_names += ["sigmap_perm", "sigmap_perm_fdr"]
 
     save_cifti_multimap(np.stack(maps, axis=0), map_names, args.template_cifti, str(out_path))
     log.info(f"Saved: {out_path}")
@@ -243,6 +297,11 @@ def main():
         save_cifti_map(fdr_c2f_mask, args.template_cifti, str(fdr_c2f_path), "fdr_c2f_mask")
         log.info(f"Saved 2-factor FDR mask: {fdr_c2f_path.name}")
 
+    if have_perm and fdr_perm_mask is not None:
+        fdr_perm_path = out_dir / f"scramble_paired_stats_{n_subs}subs{suffix}_fdr_perm_mask.dscalar.nii"
+        save_cifti_map(fdr_perm_mask, args.template_cifti, str(fdr_perm_path), "fdr_perm_mask")
+        log.info(f"Saved sign-flip-perm FDR mask: {fdr_perm_path.name}")
+
     summary = {
         "intact_model": args.intact_model, "scrambled_model": args.scrambled_model,
         "modality": args.modality, "config": config, "fmri_tag": args.fmri_tag,
@@ -250,6 +309,8 @@ def main():
         "n_sig_uncorr": int((p_uncorr < args.alpha).sum()), "n_sig_fdr": n_sig_fdr,
         "max_t_stat": float(t_vals.max()), "mean_diff_range": [float(mean_diff.min()), float(mean_diff.max())],
         "have_blocks": have_blocks, "n_blocks": args.n_blocks, "n_sig_c2f": n_sig_c2f,
+        "have_perm": have_perm, "n_perm": args.n_perm, "perm_seed": args.perm_seed,
+        "n_sig_perm_fdr": n_sig_perm_fdr,
         "subjects": subs,
     }
     summary_path = out_dir / f"scramble_paired_stats_{n_subs}subs{suffix}_summary.json"

@@ -23,6 +23,38 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
-# editor / agent tooling, scratch notes
-.claude/
+# local agent / editor tooling
+/.claude/
+/.agents/
+/.codex/
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# analysis-only visualizations and reports
+/viz/
+/reports/
+/graphify-out/
+/outputs_subcortical_selfcheck_cache/
+
+# local scratch files, logs, and test artifacts
 prompt.text
+*.log
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# local environments and OS metadata
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+.DS_Store
+Thumbs.db

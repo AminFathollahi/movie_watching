@@ -2,7 +2,7 @@
 notebooks/feature_extraction/compute_linear_residual_embeddings.py
 =====================================================================
 Generates the "_linear_resid" pseudo-model embeddings: for every model in
-rsa.shared.model_registry.NATIVE_AV_MODELS, the ridge-regression residual of
+rsa.shared.model_registry.RESIDUALIZED_AV_MODELS, the ridge-regression residual of
 its AV joint embedding after regressing out AudioMAE(audio) +
 VideoMAEv2-Large(video) -- two independent unimodal specialists (same
 nuisance pair as rsa/partial_rsa.py's generalized partial_corr_* runs, but
@@ -50,7 +50,7 @@ from rsa.shared.model_registry import (
     BIN_SEC_DEFAULT,
     DELAY_SEC_DEFAULT,
     TR_DEFAULT,
-    NATIVE_AV_MODELS,
+    RESIDUALIZED_AV_MODELS,
     check_embeddings_exist,
     emb_path,
 )
@@ -64,7 +64,7 @@ NUISANCE_DEFAULT = [("audiomae", "a"), ("videomaev2-large", "v")]
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Generate _linear_resid pseudo-model embeddings for all NATIVE_AV_MODELS.",
+        description="Generate _linear_resid pseudo-model embeddings for supported AV models.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--embeddings-dir", required=True)
@@ -76,9 +76,11 @@ def parse_args():
     p.add_argument("--delay-sec", type=float, default=DELAY_SEC_DEFAULT)
     p.add_argument("--tr", type=float, default=TR_DEFAULT)
     p.add_argument("--models", nargs="+", default=None,
-                    help="Subset of NATIVE_AV_MODELS to process (default: all).")
+                    help="Subset of RESIDUALIZED_AV_MODELS to process (default: all).")
     p.add_argument("--nuisance", nargs="+", default=None,
                     help="model:modality pairs (default: audiomae:a videomaev2-large:v).")
+    p.add_argument("--force", action="store_true",
+                    help="Replace residual embeddings that already exist.")
     return p.parse_args()
 
 
@@ -87,7 +89,7 @@ def main():
     if args.skip_sec is None:
         args.skip_sec = args.bin_sec
 
-    models = args.models or NATIVE_AV_MODELS
+    models = args.models or RESIDUALIZED_AV_MODELS
     nuisance_spec = (
         [tuple(s.split(":", 1)) for s in args.nuisance] if args.nuisance else NUISANCE_DEFAULT
     )
@@ -119,6 +121,11 @@ def main():
 
     results = {}
     for model in models:
+        out_model = f"{model}_av_linear_resid"
+        out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
+        if out_path.is_file() and not args.force:
+            log.info(f"[{model}] SKIP -- output exists: {out_path}")
+            continue
         try:
             J = load_emb(model, "av")
         except FileNotFoundError as e:
@@ -126,8 +133,6 @@ def main():
             continue
 
         R, ms, alpha = linear_residual(J, nuisance_embs)
-        out_model = f"{model}_av_linear_resid"
-        out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(out_path, R.astype(np.float32))
         results[model] = (ms, alpha)

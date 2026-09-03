@@ -60,6 +60,38 @@ def _signed_sigmap(p_values: np.ndarray, effect: np.ndarray) -> np.ndarray:
             -np.log10(np.maximum(p_values, eps))).astype(np.float32)
 
 
+def _alpha_tag(alpha: float) -> str:
+    """Filesystem/map-name-safe significance threshold (e.g. 0.005 -> 0p005)."""
+    return f"{alpha:g}".replace(".", "p")
+
+
+def _thresholded_sigmap(
+    p_values: np.ndarray,
+    effect: np.ndarray,
+    alpha: float,
+):
+    """Return a signed sigmap zeroed outside p < alpha and its binary mask."""
+    mask = (p_values < alpha).astype(np.float32)
+    sigmap = (_signed_sigmap(p_values, effect) * mask).astype(np.float32)
+    return sigmap, mask
+
+
+def _max_stat_critical_rho(null_max_rho: np.ndarray, alpha: float) -> float:
+    """Exact strict rho cutoff corresponding to pseudo-count p_FWE < alpha.
+
+    With p=(exceed+1)/(n+1), attainable p-values are discrete.  Selecting an
+    ordinary (1-alpha) quantile can therefore be off by one null maximum,
+    especially at alpha=0.005 with 500 permutations.
+    """
+    n_perm = len(null_max_rho)
+    max_allowed_exceed = int(np.ceil(alpha * (n_perm + 1) - 1) - 1)
+    if max_allowed_exceed < 0:
+        return float("inf")
+    if max_allowed_exceed >= n_perm:
+        return float("-inf")
+    return float(np.sort(null_max_rho)[::-1][max_allowed_exceed])
+
+
 def _fdr_maps(p_perm: np.ndarray, effect: np.ndarray, alpha: float):
     """BH-FDR adjusted p-values, signed sigmap, and binary threshold mask."""
     p_fdr = stats.false_discovery_control(p_perm, method="bh").astype(np.float32)
@@ -86,7 +118,7 @@ def _max_stat_fwe_maps(
     p_maxT_fwe = ((exceed_count + 1) / (len(null_max_rho) + 1)).astype(np.float32)
     sigmap_maxT_fwe = _signed_sigmap(p_maxT_fwe, effect)
     maxT_fwe_mask = (p_maxT_fwe < alpha).astype(np.float32)
-    critical_rho = float(np.quantile(null_max_rho, 1 - alpha, method="higher"))
+    critical_rho = _max_stat_critical_rho(null_max_rho, alpha)
     return p_maxT_fwe, sigmap_maxT_fwe, maxT_fwe_mask, null_max_rho, critical_rho
 
 
@@ -146,6 +178,23 @@ def main():
     (p_perm_maxT_fwe, sigmap_perm_maxT_fwe, maxT_fwe_mask,
      null_max_rho, maxT_critical_rho) = _max_stat_fwe_maps(
         null_stack, intact_rho, delta_rho, args.alpha)
+
+    # Keep both requested primary-inference cutoffs in every completed
+    # aggregate.  The continuous maxT-FWE sigmap itself is alpha-independent;
+    # these are its explicitly thresholded (zero-outside-mask) variants.
+    fwe_alphas = (0.01, 0.005)
+    fwe_threshold_maps = {}
+    for fwe_alpha in fwe_alphas:
+        tag = _alpha_tag(fwe_alpha)
+        thresholded_sigmap, threshold_mask = _thresholded_sigmap(
+            p_perm_maxT_fwe, delta_rho, fwe_alpha)
+        fwe_threshold_maps[tag] = {
+            "alpha": fwe_alpha,
+            "sigmap": thresholded_sigmap,
+            "mask": threshold_mask,
+            "delta_rho": (delta_rho * threshold_mask).astype(np.float32),
+            "critical_rho": _max_stat_critical_rho(null_max_rho, fwe_alpha),
+        }
     p_uncorr_mask = (p_perm < args.alpha).astype(np.float32)
     delta_rho_uncorr = (delta_rho * p_uncorr_mask).astype(np.float32)
     delta_rho_fdr = (delta_rho * fdr_mask).astype(np.float32)
@@ -194,15 +243,55 @@ def main():
         np.stack([
             sigmap_perm_maxT_fwe, delta_rho_maxT_fwe,
             sigmap_perm, sigmap_perm_fdr, delta_rho_uncorr, delta_rho_fdr,
+            fwe_threshold_maps["0p01"]["sigmap"],
+            fwe_threshold_maps["0p01"]["mask"],
+            fwe_threshold_maps["0p005"]["sigmap"],
+            fwe_threshold_maps["0p005"]["mask"],
         ], axis=0),
         [
             "sigmap_perm_maxT_fwe", "delta_rho_maxT_fwe",
             "sigmap_perm", "sigmap_perm_fdr", "delta_rho_p_uncorr",
             "delta_rho_fdr",
+            "sigmap_perm_maxT_fwe_0p01", "maxT_fwe_mask_0p01",
+            "sigmap_perm_maxT_fwe_0p005", "maxT_fwe_mask_0p005",
         ],
         args.template_cifti, str(sigmaps_path),
     )
     log.info(f"Saved significance maps: {sigmaps_path}")
+
+    threshold_tags = "_".join(fwe_threshold_maps)
+    fwe_thresholds_path = out_dir / (
+        f"av_scramble_n{n_perm}_of{args.total_permutations}_maxT_fwe_"
+        f"{threshold_tags}.dscalar.nii")
+    threshold_arrays, threshold_names = [], []
+    threshold_output_paths = {}
+    for tag, maps in fwe_threshold_maps.items():
+        sigmap_name = f"sigmap_perm_maxT_fwe_{tag}"
+        mask_name = f"maxT_fwe_mask_{tag}"
+        threshold_arrays.extend([maps["sigmap"], maps["mask"]])
+        threshold_names.extend([sigmap_name, mask_name])
+
+        sigmap_path = out_dir / (
+            f"av_scramble_n{n_perm}_of{args.total_permutations}_"
+            f"maxT_fwe_sigmap_{tag}.dscalar.nii")
+        mask_path = out_dir / (
+            f"av_scramble_n{n_perm}_of{args.total_permutations}_"
+            f"maxT_fwe_mask_{tag}.dscalar.nii")
+        save_cifti_map(maps["sigmap"], args.template_cifti, str(sigmap_path),
+                       sigmap_name)
+        save_cifti_map(maps["mask"], args.template_cifti, str(mask_path), mask_name)
+        threshold_output_paths[tag] = {
+            "sigmap_cifti": str(sigmap_path),
+            "mask_cifti": str(mask_path),
+        }
+        log.info("Saved maxT-FWE p<%g sigmap/mask: %s ; %s",
+                 maps["alpha"], sigmap_path.name, mask_path.name)
+
+    save_cifti_multimap(
+        np.stack(threshold_arrays, axis=0), threshold_names,
+        args.template_cifti, str(fwe_thresholds_path),
+    )
+    log.info("Saved both maxT-FWE threshold variants: %s", fwe_thresholds_path)
 
     p_uncorr_mask_path = out_dir / f"av_scramble_{run_tag}_uncorrected_mask.dscalar.nii"
     save_cifti_map(p_uncorr_mask, args.template_cifti, str(p_uncorr_mask_path),
@@ -240,12 +329,23 @@ def main():
         "n_verts_maxT_fwe": n_sig_maxT_fwe,
         "min_p_fdr": float(p_perm_fdr.min()),
         "maxT_critical_rho": maxT_critical_rho,
+        "maxT_fwe_threshold_variants": {
+            tag: {
+                "alpha": maps["alpha"],
+                "comparison": "p_perm_maxT_fwe < alpha",
+                "n_verts": int(maps["mask"].sum()),
+                "critical_rho": maps["critical_rho"],
+                **threshold_output_paths[tag],
+            }
+            for tag, maps in fwe_threshold_maps.items()
+        },
         "primary_inference": "maxT-FWE",
         "null_cifti": str(out_path),
         "significance_cifti": str(sigmaps_path),
         "p_uncorr_mask_cifti": str(p_uncorr_mask_path),
         "fdr_mask_cifti": str(fdr_mask_path),
         "maxT_fwe_mask_cifti": str(maxT_fwe_mask_path),
+        "maxT_fwe_thresholds_cifti": str(fwe_thresholds_path),
     }
     summary_path = out_dir / f"av_scramble_{run_tag}_summary.json"
     with summary_path.open("w") as f:

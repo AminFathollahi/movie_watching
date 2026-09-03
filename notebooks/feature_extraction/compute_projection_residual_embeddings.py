@@ -11,7 +11,9 @@ Two families of runs:
 
 1. Own-unimodal variant (dimension-compatible: target and nuisance share the
    SAME embedding space, so a genuine 2D projection is well-defined):
-     - PE-AV:      av=cls-av        vs (a=cls-a,  v=cls-v)         [own encoders]
+     - PE-AV and legacy bare probes: AV vs own A/V in the same space.
+     - CAV-MAE: av=concat(cls-a, cls-v), with own A/V placed in their
+       corresponding zero-padded blocks before projection.
      - omni-family: av={base}_mp/_lt vs (a={base}_mp_a, v={base}_mp_v)
                     [thinker-space nuisance -- "_lt" targets are regressed
                     against the base model's "_mp" real unimodal streams,
@@ -27,14 +29,10 @@ Two families of runs:
    av_mp/av_lt live in the THINKER's hidden space (d=2048 for omni3b/
    topoomni, d=4096 for nemotron per its text_config). These are NOT the
    same vector space, so a genuine geometric projection (which requires
-   target and nuisance to share one space) is mathematically undefined here
-   -- unlike the own-unimodal variant above. We use the cross-validated
-   RIDGE residual (rsa.shared.residuals.linear_residual, same method as
-   "_linear_resid") for this pairing instead, and tag it "_linear_resid_encoder"
-   rather than mislabeling a regression as a "projection". Flagged explicitly
-   here and in the run summary -- this is a judgment call made to resolve a
-   genuine dimensionality mismatch in the original request, not a silent
-   substitution.
+   target and nuisance to share one space) is mathematically undefined here.
+   This pairing therefore uses the cross-validated ridge residual
+   (rsa.shared.residuals.linear_residual) and is tagged
+   "_linear_resid_encoder" rather than "_projection_resid".
 
 Usage
 -----
@@ -60,19 +58,30 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from rsa.shared.rsa_utils import preprocess_fmri, process_model_embeddings, align_and_assert_bins
-from rsa.shared.model_registry import BIN_SEC_DEFAULT, DELAY_SEC_DEFAULT, TR_DEFAULT, emb_path
+from rsa.shared.model_registry import (
+    BIN_SEC_DEFAULT,
+    DELAY_SEC_DEFAULT,
+    LEGACY_BARE_AV_MODELS,
+    RESIDUALIZED_AV_MODELS,
+    TR_DEFAULT,
+    emb_path,
+)
 from rsa.shared.residuals import projection_residual, linear_residual
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# base identifiers (no _mp/_lt suffix) with both readouts extracted
-OMNI_FAMILY_BASES = [
-    "omni3b_layer9", "omni3b_layer18", "omni3b_layer27", "omni3b_layer34",
-    "topoomni_layer9", "topoomni_layer18", "topoomni_layer27", "topoomni_layer34",
-    "topoomni_layer9_sheet", "topoomni_layer18_sheet", "topoomni_layer27_sheet", "topoomni_layer34_sheet",
-    "nemotron_layer9", "nemotron_layer18", "nemotron_layer27", "nemotron_layer36", "nemotron_layer35",
-]
+SAME_SPACE_OWN_MODELS = (
+    "pe-av-small-16-frame",
+    "cav-mae-sync",
+    *LEGACY_BARE_AV_MODELS,
+)
+OMNI_FAMILY_BASES = list(dict.fromkeys(
+    model.rsplit("_", 1)[0]
+    for model in RESIDUALIZED_AV_MODELS
+    if model.startswith(("omni3b_layer", "topoomni_layer", "nemotron_layer"))
+    and model.endswith(("_mp", "_lt"))
+))
 READOUTS = ["mp", "lt"]
 
 
@@ -84,6 +93,29 @@ def _family(base: str) -> str:
     if base.startswith("nemotron"):
         return "nemotron"
     raise ValueError(f"Unknown family for base={base}")
+
+
+def _place_own_streams_in_av_space(
+    model: str,
+    av: np.ndarray,
+    audio: np.ndarray,
+    video: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Place CAV-MAE's own streams in its explicit concatenated AV space."""
+    if audio.shape == av.shape and video.shape == av.shape:
+        return audio, video
+    if model == "cav-mae-sync" and av.shape[1] == audio.shape[1] + video.shape[1]:
+        audio_block = np.concatenate(
+            [audio, np.zeros((audio.shape[0], video.shape[1]))], axis=1
+        )
+        video_block = np.concatenate(
+            [np.zeros((video.shape[0], audio.shape[1])), video], axis=1
+        )
+        return audio_block, video_block
+    raise ValueError(
+        f"No common projection space for {model}: "
+        f"av={av.shape} a={audio.shape} v={video.shape}"
+    )
 
 
 def parse_args():
@@ -98,6 +130,12 @@ def parse_args():
     p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec")
     p.add_argument("--delay-sec", type=float, default=DELAY_SEC_DEFAULT)
     p.add_argument("--tr", type=float, default=TR_DEFAULT)
+    p.add_argument("--force", action="store_true",
+                   help="Replace residual embeddings that already exist.")
+    p.add_argument("--models", nargs="+", default=None,
+                   help="Subset of RESIDUALIZED_AV_MODELS to process.")
+    p.add_argument("--skip-encoder", action="store_true",
+                   help="Skip the separate encoder-space linear residual variants.")
     return p.parse_args()
 
 
@@ -133,24 +171,45 @@ def main():
         return out_path
 
     done, skipped = [], []
+    selected = set(args.models or RESIDUALIZED_AV_MODELS)
+    unknown = selected.difference(RESIDUALIZED_AV_MODELS)
+    if unknown:
+        raise ValueError(f"Unsupported residualized AV model(s): {sorted(unknown)}")
 
-    # ── 1. PE-AV: own-encoder projection residual ────────────────────────────
-    try:
-        av = load_emb("pe-av-small-16-frame", "av")
-        a = load_emb("pe-av-small-16-frame", "a")
-        v = load_emb("pe-av-small-16-frame", "v")
-        R = projection_residual(av, a, v)
-        out_model = "pe-av-small-16-frame_av_projection_resid"
-        p = save(out_model, R)
-        rel_norm = float(np.linalg.norm(R) / np.linalg.norm(av))
-        log.info(f"[{out_model}] ||R||/||av||={rel_norm:.4f} -> {p}")
-        done.append(out_model)
-    except FileNotFoundError as e:
-        log.warning(f"[pe-av-small-16-frame] SKIP projection_resid -- {e}")
-        skipped.append("pe-av-small-16-frame")
+    # ── 1. Joint models with dimension-compatible own A/V embeddings ────────
+    for model in SAME_SPACE_OWN_MODELS:
+        if model not in selected:
+            continue
+        out_model = f"{model}_av_projection_resid"
+        out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
+        if out_path.is_file() and not args.force:
+            log.info(f"[{model}] SKIP projection_resid -- output exists: {out_path}")
+            continue
+        try:
+            av = load_emb(model, "av")
+            a = load_emb(model, "a")
+            v = load_emb(model, "v")
+            a, v = _place_own_streams_in_av_space(model, av, a, v)
+            R = projection_residual(av, a, v)
+            rel_norm = float(np.linalg.norm(R) / np.linalg.norm(av))
+            if rel_norm < 1e-10:
+                R = np.zeros_like(R)
+                log.info(f"[{model}] projection residual is degenerate; saving exact zeros")
+            p = save(out_model, R)
+            log.info(f"[{out_model}] ||R||/||av||={rel_norm:.4f} -> {p}")
+            done.append(out_model)
+        except FileNotFoundError as e:
+            log.warning(f"[{model}] SKIP projection_resid -- {e}")
+            skipped.append(model)
 
     # ── 2. omni-family: own-mp-unimodal projection residual (mp and lt targets) ──
     for base in OMNI_FAMILY_BASES:
+        selected_readouts = [
+            readout for readout in READOUTS
+            if f"{base}_{readout}" in selected
+        ]
+        if not selected_readouts:
+            continue
         try:
             a_mp = load_emb(f"{base}_mp", "a")
             v_mp = load_emb(f"{base}_mp", "v")
@@ -159,8 +218,13 @@ def main():
             skipped.append(f"{base}_*_projection_resid")
             continue
 
-        for readout in READOUTS:
+        for readout in selected_readouts:
             target_model = f"{base}_{readout}"
+            out_model = f"{target_model}_av_projection_resid"
+            out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
+            if out_path.is_file() and not args.force:
+                log.info(f"[{target_model}] SKIP projection_resid -- output exists: {out_path}")
+                continue
             try:
                 target = load_emb(target_model, "av")
             except FileNotFoundError as e:
@@ -173,7 +237,6 @@ def main():
                 skipped.append(f"{target_model}_projection_resid (dim mismatch)")
                 continue
             R = projection_residual(target, a_mp, v_mp)
-            out_model = f"{target_model}_av_projection_resid"
             p = save(out_model, R)
             rel_norm = float(np.linalg.norm(R) / np.linalg.norm(target))
             log.info(f"[{out_model}] ||R||/||av||={rel_norm:.4f} -> {p}")
@@ -182,6 +245,11 @@ def main():
     # ── 3. omni-family: encoder-penultimate variant. Dimension mismatch vs.
     # thinker-space av_mp/av_lt (see module docstring) -- uses linear_residual
     # (ridge) instead of a true geometric projection; tagged _linear_resid_encoder.
+    if args.skip_encoder:
+        log.info("Skipping encoder-space linear residual variants")
+        log.info(f"Done. {len(done)} pseudo-models saved, {len(skipped)} skipped.")
+        return
+
     for family in ("omni3b", "topoomni", "nemotron"):
         enc_model = f"{family}_encoder_penultimate"
         try:
@@ -197,6 +265,13 @@ def main():
                 continue
             for readout in READOUTS:
                 target_model = f"{base}_{readout}"
+                if target_model not in selected:
+                    continue
+                out_model = f"{target_model}_av_linear_resid_encoder"
+                out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
+                if out_path.is_file() and not args.force:
+                    log.info(f"[{target_model}] SKIP linear_resid_encoder -- output exists: {out_path}")
+                    continue
                 try:
                     target = load_emb(target_model, "av")
                 except FileNotFoundError as e:
@@ -204,7 +279,6 @@ def main():
                     skipped.append(f"{target_model}_linear_resid_encoder")
                     continue
                 R, ms, alpha = linear_residual(target, [enc_a, enc_v])
-                out_model = f"{target_model}_av_linear_resid_encoder"
                 p = save(out_model, R)
                 log.info(f"[{out_model}] MS={ms:.4f} alpha={alpha:.2e} -> {p}")
                 done.append(out_model)

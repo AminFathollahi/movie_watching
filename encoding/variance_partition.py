@@ -27,7 +27,8 @@ rsa/shared/model_registry.py's _dummy_integration_run() reasoning).
 r2_score_split() (himalaya) partitions the joint model's test-set R^2 into a
 contribution per band; the AV-resid band's split R^2 is the UNIQUE variance
 explained by fusion beyond any linear reweighting of the nuisance band(s) —
-the encoding analogue of the RSA integration map ("encoding_r2_unique_av").
+the encoding analogue of the RSA integration map
+("variance_partition_r2_av_residual_band").
 
 Design choices vs. cf_modeling/02_fit_cf_model.py's himalaya pattern
 ----------------------------------------------------------------------
@@ -150,7 +151,7 @@ def run_analysis(args):
 
     out_root = Path(args.output_dir) / args.subject / args.model / config
     out_root.mkdir(parents=True, exist_ok=True)
-    out_path = out_root / "encoding_r2_unique_av.dscalar.nii"
+    out_path = out_root / "variance_partition_r2_av_residual_band.dscalar.nii"
 
     log.info("=" * 70)
     log.info(f"Banded-ridge unique-AV-variance: {args.model}")
@@ -282,12 +283,15 @@ def run_analysis(args):
 
     # ── Save CIFTI outputs ─────────────────────────────────────────────────
     save_cifti(r2_unique_av, args.template_cifti, str(out_path),
-               map_name="encoding_r2_unique_av")
+               map_name="variance_partition_r2_av_residual_band")
     save_cifti(r2_full, args.template_cifti,
-               str(out_root / "encoding_r2_full.dscalar.nii"), map_name="encoding_r2_full")
+               str(out_root / "variance_partition_r2_full.dscalar.nii"),
+               map_name="variance_partition_r2_full")
     for name, vals in r2_nuisance.items():
+        modality = {"A": "audio", "V": "visual"}[name]
+        map_name = f"variance_partition_r2_{modality}_band"
         save_cifti(vals, args.template_cifti,
-                   str(out_root / f"encoding_r2_{name}.dscalar.nii"), map_name=f"encoding_r2_{name}")
+                   str(out_root / f"{map_name}.dscalar.nii"), map_name=map_name)
     log.info(f"Saved: {out_path}")
 
 

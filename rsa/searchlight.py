@@ -413,7 +413,9 @@ def _precompute_model_rdm(emb: np.ndarray, n_bins: int,
     model_norm     : (n_pairs,) float32 — normalised ranks ready for fast Pearson
                      (for Spearman; for Pearson, the normalised flat values)
     """
-    emb64 = emb.astype(np.float64)
+    # Constant features become NaN during per-run z-scoring. Treat them as
+    # zero-valued dimensions so a degenerate model RDM yields zero correlation.
+    emb64 = np.nan_to_num(emb.astype(np.float64), copy=False)
     mu = emb64.mean(axis=1, keepdims=True)
     ec = emb64 - mu
     norms = np.sqrt((ec ** 2).sum(axis=1, keepdims=True))
@@ -516,6 +518,10 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
     n_verts = fmri.shape[1]
     n_bins = fmri.shape[0]
     tril_idx = np.tril_indices(n_bins, k=-1)
+    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
+    if not np.any(model_norm):
+        log.info("  Model RDM has no variance; returning a zero RSA map")
+        return np.zeros(n_verts, dtype=np.float32)
 
     # Always attempt GPU when CUDA is available; fall back to CPU on OOM
     try:
@@ -552,7 +558,6 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
 
     # CPU joblib path
     log.info(f"  Precomputing model RDM ({method}) ...")
-    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
 
     log.info(f"  Running searchlight on {n_verts} vertices "
              f"(n_jobs={n_jobs}) ...")
@@ -730,13 +735,10 @@ def _save_significance_maps(corr_full, n_bins, combined_path, map_name, out_root
     log.info(f"  n_bins={n_bins}  FDR significant (p<0.05): {n_sig_fdr:,} / {corr_full.shape[0]:,}")
 
     if combined_path is not None:
-        existing = get_combined_map_names(combined_path)
         uncorr_name = f"{map_name}_sigmap_uncorr"
         fdr_name    = f"{map_name}_sigmap_fdr"
-        if uncorr_name not in existing:
-            merge_into_combined(sigmap_uncorr, uncorr_name, combined_path, args.template_cifti)
-        if fdr_name not in existing:
-            merge_into_combined(sigmap_fdr, fdr_name, combined_path, args.template_cifti)
+        merge_into_combined(sigmap_uncorr, uncorr_name, combined_path, args.template_cifti)
+        merge_into_combined(sigmap_fdr, fdr_name, combined_path, args.template_cifti)
 
     bin_sec_int = int(args.bin_sec)
     skip_int    = int(args.skip_sec)
@@ -744,10 +746,9 @@ def _save_significance_maps(corr_full, n_bins, combined_path, map_name, out_root
     mask_stem   = (f"rsa_59k_{fmri_tag}_k{args.k}_{delay_tag}"
                    f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}")
     fdr_mask_path = out_root / f"{mask_stem}_fdr_mask.dscalar.nii"
-    if not fdr_mask_path.exists():
-        out_root.mkdir(parents=True, exist_ok=True)
-        save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
-        log.info(f"  Saved FDR mask: {fdr_mask_path.name}")
+    out_root.mkdir(parents=True, exist_ok=True)
+    save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
+    log.info(f"  Saved FDR mask: {fdr_mask_path.name}")
 
     workbench   = getattr(args, "workbench", None)
     left_surf   = getattr(args, "left_surface", None)

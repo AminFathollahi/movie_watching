@@ -141,7 +141,7 @@ TEST_VIDEO_IDS="video5,video9,video14,video18"
 # Format: "model_name:modalities"
 MODELS=(
     "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
-    "cav-mae-sync:av,a,v"
+    "cav-mae-sync:a,v,av"
     "imagebind:av"
     "audiomae:a"
     "videomaev2-large:v"
@@ -161,8 +161,8 @@ MODELS=(
 # NOT the same layer as the pre-existing stale bare "35" (that's the FINAL
 # layer under this family's 0-indexed convention; see model_registry.py).
 LAYERS=(35 34 27 18 9 1)
-OMNI3B_MODALITIES="av,a,v"
-TOPOOMNI_MODALITIES="av"     # av only for now — switch to "av,a,v" once ready
+OMNI3B_MODALITIES="a,v,av"
+TOPOOMNI_MODALITIES="a,v,av"
 
 for L in "${LAYERS[@]}"; do
     case "$L" in
@@ -179,10 +179,13 @@ done
 # hidden_states convention already matches "layer35" directly), all
 # "_mp"-suffixed (see rsa/analysis.sh's identical sweep and model_registry.py's
 # docstring on why nemotron needs no "_lt").
-NEMOTRON_MODALITIES="av,a,v"
+NEMOTRON_MODALITIES="a,v,av"
 for L in 9 18 27 35 36; do
     MODELS+=("nemotron_layer${L}_mp:${NEMOTRON_MODALITIES}")
 done
+# Nemotron's penultimate last-token probe also has genuine separate-pass A/V
+# embeddings and therefore supports the same three-modality encoding contrast.
+MODELS+=("nemotron_layer35_lt:${NEMOTRON_MODALITIES}")
 
 # Own-encoder (audio_tower/visual, pre-thinker-fusion) penultimate-layer
 # probes -- no "av" readout (see model_registry.py).
@@ -320,6 +323,19 @@ run_avg() {
                 $(_hrf_flag) $(_normalize_flag)
         done
     done
+
+    local CONFIG_LABEL
+    local NORM_LABEL="demean"
+    [ "$NORMALIZE" = "true" ] && NORM_LABEL="norm"
+    if [ "$HRF" = "true" ]; then
+        CONFIG_LABEL="hrf_${NORM_LABEL}_bin${BIN_SEC_INT}s_skip${SKIP_INT}s"
+    else
+        CONFIG_LABEL="delay${DELAY_SEC%.*}s_${NORM_LABEL}_bin${BIN_SEC_INT}s_skip${SKIP_INT}s"
+    fi
+    run_python "${SCRIPT_DIR}/av_derived_maps.py" \
+        --encoding-root "${OUTPUT_DIR}/group_average" \
+        --all-existing \
+        --config "$CONFIG_LABEL"
 
     log "=== Group-average encoding done ==="
 }

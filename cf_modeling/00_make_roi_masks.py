@@ -24,10 +24,6 @@ Usage
         --rois 3b V1 A1 V2 TA2 MST FFC A5 \\
         --masks-dir /path/to/cf_modeling_outputs/masks
 
-Or as part of analysis.sh:
-    run_python 00_make_roi_masks.py --glasser-dlabel "$GLASSER_DLABEL" \\
-        --rois 3b V1 --masks-dir "$MASKS_DIR"
-
 Note: this script is OPTIONAL.  01_extract_geometry.py reads the dlabel directly
 for ROI masks.  Run 00_make_roi_masks.py only if you need the CSV files for
 other purposes (e.g., sharing ROI masks or using force_new=True subsurfaces).

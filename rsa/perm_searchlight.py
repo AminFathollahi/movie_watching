@@ -5,19 +5,19 @@ Permutation test for the group-average searchlight RSA.
 
 For each vertex the brain RDM is computed exactly as in searchlight.py
 (correlation-distance lower triangle over the k geodesic neighbours).
-A null distribution is built by permuting the model-RDM condition labels
-n_perm times and recomputing the RSA correlation for each permutation.
+A null distribution is built with independent nonzero circular shifts of the
+movie bins inside each run and recomputing the RSA correlation n_perm times.
 
 Mathematical basis
 ------------------
-Permuting condition labels of a symmetric RDM merely reorders the
-lower-triangle vector.  For Spearman RSA this means the null distribution
-is equivalent to shuffling the unit-normalised rank vector of the brain
-(or equivalently of the model), which reduces to a pure index look-up:
+Reordering conditions of a symmetric RDM merely reorders the lower-triangle
+vector.  The run-aware shifts therefore reduce to a pure index look-up while
+preserving the RDM's pair dependencies and within-run temporal structure:
 
     null_rho[v, p] = brain_norm[v] · model_norm[perm_p]
 
-where perm_p is a random permutation of [0, n_pairs).  For a batch of
+where perm_p maps the lower-triangle pairs after a run-aware condition shift.
+For a batch of
 B vertices and P permutations this is a single GPU matmul:
 
     null_rho_batch = brain_norm_batch  @  perm_model_batch.T
@@ -66,6 +66,7 @@ from rsa.shared.rsa_utils import (
     preprocess_fmri,
     process_model_embeddings,
     align_and_assert_bins,
+    get_run_bin_counts,
 )
 from rsa.searchlight import (
     get_neighbors,
@@ -81,6 +82,44 @@ from cifti_io import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+
+def within_run_shift_pair_indices(
+    run_bins: np.ndarray, n_perm: int, seed: int,
+) -> np.ndarray:
+    """Map RDM pairs after synchronized nonzero circular shifts within runs.
+
+    Each row indexes the original condensed lower triangle after the movie bins
+    have been circularly shifted independently inside every run.  This keeps
+    the RDM's pair dependencies and within-run temporal structure intact; it
+    does not shuffle the condensed RDM entries as if they were independent.
+    """
+    run_bins = np.asarray(run_bins, dtype=np.int64)
+    if n_perm < 1:
+        raise ValueError("n_perm must be positive")
+    if np.any(run_bins < 2):
+        raise ValueError("Every run must contain at least two binned observations")
+    n_bins = int(run_bins.sum())
+    triangle = np.tril_indices(n_bins, k=-1)
+    lookup = np.empty((n_bins, n_bins), dtype=np.int32)
+    pair_ids = np.arange(len(triangle[0]), dtype=np.int32)
+    lookup[triangle] = pair_ids
+    lookup[(triangle[1], triangle[0])] = pair_ids
+    np.fill_diagonal(lookup, -1)
+
+    rng = np.random.default_rng(seed)
+    output = np.empty((n_perm, len(pair_ids)), dtype=np.int32)
+    base = np.arange(n_bins, dtype=np.int32)
+    starts = np.r_[0, np.cumsum(run_bins[:-1])]
+    for permutation in range(n_perm):
+        shifted = base.copy()
+        for start, count in zip(starts, run_bins):
+            stop = int(start + count)
+            offset = int(rng.integers(1, int(count)))
+            shifted[start:stop] = np.roll(base[start:stop], offset)
+        output[permutation] = lookup[
+            shifted[triangle[0]], shifted[triangle[1]]]
+    return output
 
 
 # =============================================================================
@@ -137,12 +176,13 @@ def parse_args():
 
 def _perm_vertex_cpu(surf_v, fmri_cpu, model_norm, neighbors, vertex_to_col,
                      tril_idx, method, perm_idx_all):
-    """Single-vertex permutation test (CPU). Returns (actual_rho, exceed_count)."""
+    """Single-vertex test returning rho, exceedance count, and null rhos."""
     neighbor_surf = neighbors[surf_v]
     neighbor_cols = vertex_to_col[neighbor_surf]
     neighbor_cols = neighbor_cols[neighbor_cols >= 0]
     if len(neighbor_cols) < 2:
-        return 0.0, len(perm_idx_all) // 2
+        null_rhos = np.zeros(len(perm_idx_all), dtype=np.float32)
+        return 0.0, len(perm_idx_all), null_rhos
 
     hood = fmri_cpu[:, neighbor_cols]
     mu   = hood.mean(axis=1, keepdims=True)
@@ -168,7 +208,7 @@ def _perm_vertex_cpu(surf_v, fmri_cpu, model_norm, neighbors, vertex_to_col,
     # Permute model (equivalent to permuting brain condition labels)
     null_rhos    = model_norm[perm_idx_all] @ brain_norm   # (n_perm,)
     exceed_count = int((null_rhos >= actual_rho).sum())
-    return actual_rho, exceed_count
+    return actual_rho, exceed_count, null_rhos.astype(np.float32, copy=False)
 
 
 # =============================================================================
@@ -176,14 +216,15 @@ def _perm_vertex_cpu(surf_v, fmri_cpu, model_norm, neighbors, vertex_to_col,
 # =============================================================================
 
 def _perm_searchlight_gpu(fmri_hem, model_emb, neighbors, surface_indices,
-                           vertex_to_col, method, n_perm,
-                           vertex_batch_size, perm_batch_size, device, rng):
+                           vertex_to_col, method, perm_idx_all,
+                           vertex_batch_size, perm_batch_size, device):
     """GPU-batched permutation searchlight for one hemisphere.
 
     Returns
     -------
     actual_rho : (n_verts,) float32
     p_perm     : (n_verts,) float32  — empirical one-tailed p-values
+    null_max   : (n_perm,) float32 — hemisphere-wide maximum rho per shift
     """
     import torch
 
@@ -191,14 +232,14 @@ def _perm_searchlight_gpu(fmri_hem, model_emb, neighbors, surface_indices,
     n_bins   = fmri_hem.shape[0]
     tril_idx = np.tril_indices(n_bins, k=-1)
     n_pairs  = len(tril_idx[0])
+    n_perm = len(perm_idx_all)
 
     _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
     model_norm_t  = torch.from_numpy(model_norm).to(device)   # (n_pairs,)
 
-    # All permutation indices on CPU; loaded to GPU in perm_batch_size slabs
-    perm_idx_all = np.stack(
-        [rng.permutation(n_pairs) for _ in range(n_perm)]
-    ).astype(np.int64)   # (n_perm, n_pairs)
+    if perm_idx_all.shape != (n_perm, n_pairs):
+        raise ValueError(
+            f"Permutation index shape {perm_idx_all.shape}; expected {(n_perm, n_pairs)}")
 
     # fMRI transposed once to GPU: (n_hem_verts, n_bins)
     fmri_t = torch.from_numpy(fmri_hem.T.astype(np.float32)).to(device)
@@ -206,96 +247,99 @@ def _perm_searchlight_gpu(fmri_hem, model_emb, neighbors, surface_indices,
     neighbor_cols_all = vertex_to_col[neighbors]
     surf_verts_for_v  = surface_indices.astype(np.int32)
     ncols_for_v       = neighbor_cols_all[surf_verts_for_v]
-    full_k_mask       = np.all(ncols_for_v >= 0, axis=1)
-    full_k_verts      = np.where(full_k_mask)[0]
-    partial_k_verts   = np.where(~full_k_mask)[0]
+    valid_counts = np.sum(ncols_for_v >= 0, axis=1)
+    analyzable = valid_counts >= 2
+    neighborhood_sizes = np.unique(valid_counts[analyzable])[::-1]
 
     log.info(
-        f"  [GPU] {len(full_k_verts):,} full-k verts (batch={vertex_batch_size}), "
-        f"{len(partial_k_verts):,} partial-k (CPU fallback) | "
+        f"  [GPU] {analyzable.sum():,} analyzable verts in "
+        f"{len(neighborhood_sizes)} neighborhood-size groups "
+        f"(batch={vertex_batch_size}) | "
         f"n_pairs={n_pairs:,}, perm_batch={perm_batch_size}"
     )
 
     actual_rho   = np.zeros(n_verts, dtype=np.float32)
     exceed_count = np.zeros(n_verts, dtype=np.int64)
+    null_max = np.full(n_perm, -np.inf, dtype=np.float32)
 
     tril_row = torch.tensor(tril_idx[0], dtype=torch.long, device=device)
     tril_col = torch.tensor(tril_idx[1], dtype=torch.long, device=device)
 
-    for b_start in range(0, len(full_k_verts), vertex_batch_size):
-        batch_v  = full_k_verts[b_start: b_start + vertex_batch_size]
-        batch_nc = ncols_for_v[batch_v].astype(np.int64)
-        B = len(batch_v)
+    processed = 0
+    for neighbor_count in neighborhood_sizes:
+        group_verts = np.where(valid_counts == neighbor_count)[0]
+        for b_start in range(0, len(group_verts), vertex_batch_size):
+            batch_v = group_verts[b_start: b_start + vertex_batch_size]
+            batch_nc = np.stack([
+                row[row >= 0] for row in ncols_for_v[batch_v]
+            ]).astype(np.int64)
+            B = len(batch_v)
 
-        # Gather neighbourhood: (B, n_bins, k)
-        hood  = fmri_t[torch.from_numpy(batch_nc).to(device)].permute(0, 2, 1).float()
-        mu    = hood.mean(dim=2, keepdim=True)
-        hc    = hood - mu
-        norms = torch.linalg.norm(hc, dim=2, keepdim=True).clamp(min=1e-10)
-        hn    = hc / norms
-        del hood, hc, norms
+            # Gather neighbourhood: (B, n_bins, k)
+            hood = fmri_t[torch.from_numpy(batch_nc).to(device)].permute(
+                0, 2, 1).float()
+            mu = hood.mean(dim=2, keepdim=True)
+            hc = hood - mu
+            norms = torch.linalg.norm(hc, dim=2, keepdim=True).clamp(min=1e-10)
+            hn = hc / norms
+            del hood, hc, norms
 
-        # Brain RDM lower triangle: (B, n_pairs)
-        flat = (1.0 - torch.bmm(hn, hn.permute(0, 2, 1)))[:, tril_row, tril_col]
-        del hn
+            # Brain RDM lower triangle: (B, n_pairs)
+            flat = (1.0 - torch.bmm(hn, hn.permute(0, 2, 1)))[:, tril_row, tril_col]
+            del hn
 
-        # Unit-normalised rank (Spearman) or centred value (Pearson)
-        if method == "spearman":
-            ranks = torch.argsort(torch.argsort(flat, dim=1), dim=1).float()
-            fc    = ranks - ranks.mean(dim=1, keepdim=True)
-            del ranks
-        else:
-            fc = flat - flat.mean(dim=1, keepdim=True)
-        del flat
+            # Unit-normalised rank (Spearman) or centred value (Pearson)
+            if method == "spearman":
+                ranks = torch.argsort(torch.argsort(flat, dim=1), dim=1).float()
+                fc = ranks - ranks.mean(dim=1, keepdim=True)
+                del ranks
+            else:
+                fc = flat - flat.mean(dim=1, keepdim=True)
+            del flat
 
-        fn           = torch.linalg.norm(fc, dim=1, keepdim=True).clamp(min=1e-10)
-        brain_norm_t = fc / fn          # (B, n_pairs) unit vectors
-        del fc, fn
+            fn = torch.linalg.norm(fc, dim=1, keepdim=True).clamp(min=1e-10)
+            brain_norm_t = fc / fn          # (B, n_pairs) unit vectors
+            del fc, fn
 
-        # Actual rho
-        rho_batch = (brain_norm_t * model_norm_t).sum(dim=1)   # (B,)
-        actual_rho[batch_v] = rho_batch.cpu().float().numpy()
+            # Actual rho
+            rho_batch = (brain_norm_t * model_norm_t).sum(dim=1)   # (B,)
+            actual_rho[batch_v] = rho_batch.cpu().float().numpy()
 
-        # Null distribution: batch permutations
-        # null_rho[b, p] = brain_norm_t[b] · model_norm_t[perm_p]
-        #                = (brain_norm_t @ perm_model_batch.T)[b, p]
-        exceed_t = torch.zeros(B, dtype=torch.int64, device=device)
-        for p0 in range(0, n_perm, perm_batch_size):
-            p1        = min(p0 + perm_batch_size, n_perm)
-            idx_t     = torch.from_numpy(perm_idx_all[p0:p1]).to(device)  # (P, n_pairs)
-            perm_model = model_norm_t[idx_t]                               # (P, n_pairs)
-            null_rho   = brain_norm_t @ perm_model.T                      # (B, P)
-            exceed_t  += (null_rho >= rho_batch.unsqueeze(1)).sum(dim=1)
-            del idx_t, perm_model, null_rho
+            # Null distribution: batch permutations
+            exceed_t = torch.zeros(B, dtype=torch.int64, device=device)
+            for p0 in range(0, n_perm, perm_batch_size):
+                p1 = min(p0 + perm_batch_size, n_perm)
+                idx_t = torch.from_numpy(perm_idx_all[p0:p1]).to(
+                    device=device, dtype=torch.long)
+                perm_model = model_norm_t[idx_t]
+                null_rho = brain_norm_t @ perm_model.T
+                exceed_t += (null_rho >= rho_batch.unsqueeze(1)).sum(dim=1)
+                null_max[p0:p1] = np.maximum(
+                    null_max[p0:p1], null_rho.max(dim=0).values.cpu().numpy())
+                del idx_t, perm_model, null_rho
 
-        exceed_count[batch_v] = exceed_t.cpu().numpy()
-        del brain_norm_t, rho_batch, exceed_t
+            exceed_count[batch_v] = exceed_t.cpu().numpy()
+            del brain_norm_t, rho_batch, exceed_t
 
-        if device == "cuda":
-            torch.cuda.empty_cache()
+            if device == "cuda":
+                torch.cuda.empty_cache()
 
-        if (b_start // vertex_batch_size) % 20 == 0:
-            done = b_start + B
-            log.info(
-                f"  [{done:,}/{len(full_k_verts):,}] "
-                f"mean_rho={actual_rho[batch_v].mean():.4f}"
-            )
+            processed += B
+            if processed == B or processed % (20 * vertex_batch_size) < B:
+                log.info(
+                    f"  [{processed:,}/{analyzable.sum():,}] "
+                    f"neighbors={neighbor_count} "
+                    f"mean_rho={actual_rho[batch_v].mean():.4f}"
+                )
 
-    # CPU fallback for partial-k vertices (near medial wall)
-    if len(partial_k_verts) > 0:
-        log.info(f"  [CPU fallback] {len(partial_k_verts):,} partial-k vertices ...")
-        fmri_cpu = fmri_t.cpu().numpy().T   # (n_bins, n_hem_verts)
-        for v in partial_k_verts:
-            sv = int(surf_verts_for_v[v])
-            rho_v, exc_v = _perm_vertex_cpu(
-                sv, fmri_cpu, model_norm, neighbors, vertex_to_col,
-                tril_idx, method, perm_idx_all,
-            )
-            actual_rho[v]   = rho_v
-            exceed_count[v] = exc_v
+    # Degenerate searchlights remain rho=0 and p=1. Their null value of zero
+    # still belongs in the max-statistic distribution if such vertices exist.
+    if np.any(~analyzable):
+        exceed_count[~analyzable] = n_perm
+        null_max = np.maximum(null_max, 0.0)
 
     p_perm = ((exceed_count + 1.0) / (n_perm + 1.0)).astype(np.float32)
-    return actual_rho, p_perm
+    return actual_rho, p_perm, null_max
 
 
 # =============================================================================
@@ -303,7 +347,7 @@ def _perm_searchlight_gpu(fmri_hem, model_emb, neighbors, surface_indices,
 # =============================================================================
 
 def _perm_searchlight_cpu(fmri_hem, model_emb, neighbors, surface_indices,
-                           vertex_to_col, method, n_perm, rng):
+                           vertex_to_col, method, perm_idx_all):
     """CPU-only permutation searchlight using joblib threads."""
     from joblib import Parallel, delayed
 
@@ -313,9 +357,10 @@ def _perm_searchlight_cpu(fmri_hem, model_emb, neighbors, surface_indices,
     n_pairs  = len(tril_idx[0])
 
     _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
-    perm_idx_all  = np.stack(
-        [rng.permutation(n_pairs) for _ in range(n_perm)]
-    ).astype(np.int64)
+    n_perm = len(perm_idx_all)
+    if perm_idx_all.shape != (n_perm, n_pairs):
+        raise ValueError(
+            f"Permutation index shape {perm_idx_all.shape}; expected {(n_perm, n_pairs)}")
 
     surf_verts_for_v = surface_indices.astype(np.int32)
     log.info(f"  [CPU perm] {n_verts:,} vertices (joblib) ...")
@@ -330,8 +375,9 @@ def _perm_searchlight_cpu(fmri_hem, model_emb, neighbors, surface_indices,
 
     rho_arr = np.array([r[0] for r in results], dtype=np.float32)
     exc_arr = np.array([r[1] for r in results], dtype=np.int64)
+    null_max = np.max(np.stack([r[2] for r in results]), axis=0)
     p_perm  = ((exc_arr + 1.0) / (n_perm + 1.0)).astype(np.float32)
-    return rho_arr, p_perm
+    return rho_arr, p_perm, null_max
 
 
 # =============================================================================
@@ -339,7 +385,7 @@ def _perm_searchlight_cpu(fmri_hem, model_emb, neighbors, surface_indices,
 # =============================================================================
 
 def _run_hemisphere(fmri_hem, emb, neighbors, surf_indices, vertex_to_col,
-                    method, n_perm, gpu_batch_size, perm_batch_size, rng):
+                    method, perm_idx_all, gpu_batch_size, perm_batch_size):
     """Try GPU; fall back to CPU on OOM or missing torch."""
     try:
         import torch
@@ -352,7 +398,7 @@ def _run_hemisphere(fmri_hem, emb, neighbors, surf_indices, vertex_to_col,
             try:
                 return _perm_searchlight_gpu(
                     fmri_hem, emb, neighbors, surf_indices, vertex_to_col,
-                    method, n_perm, gpu_batch_size, perm_batch_size, "cuda", rng,
+                    method, perm_idx_all, gpu_batch_size, perm_batch_size, "cuda",
                 )
             except _oom as e:
                 log.warning(f"  GPU OOM ({type(e).__name__}) — falling back to CPU")
@@ -362,7 +408,7 @@ def _run_hemisphere(fmri_hem, emb, neighbors, surf_indices, vertex_to_col,
 
     return _perm_searchlight_cpu(
         fmri_hem, emb, neighbors, surf_indices, vertex_to_col,
-        method, n_perm, rng,
+        method, perm_idx_all,
     )
 
 
@@ -444,7 +490,11 @@ def main():
 
     cache_dir = (Path(args.geodesic_cache_dir) if args.geodesic_cache_dir
                  else Path(args.output_dir) / "_geodesic_cache")
-    rng = np.random.default_rng(args.seed)
+    run_bins = get_run_bin_counts(
+        timing_df, run_trs, args.bin_sec, args.tr, args.delay_sec, args.skip_sec)
+    if int(run_bins.sum()) != n_bins:
+        raise ValueError(f"Run-bin sum {run_bins.sum()} does not match {n_bins} binned rows")
+    perm_idx_all = within_run_shift_pair_indices(run_bins, n_perm, args.seed)
 
     surfaces = {
         "left":  (args.left_surface,  fmri_binned[:, :n_left],  left_indices),
@@ -468,10 +518,10 @@ def main():
         vertex_to_col[surf_indices] = np.arange(len(surf_indices), dtype=np.int32)
         n_hem = len(surf_indices)
 
-        rho_hem, p_hem = _run_hemisphere(
+        rho_hem, p_hem, _ = _run_hemisphere(
             fmri_hem, emb, neighbors, surf_indices, vertex_to_col,
-            args.method, n_perm,
-            args.gpu_batch_size, args.perm_batch_size, rng,
+            args.method, perm_idx_all,
+            args.gpu_batch_size, args.perm_batch_size,
         )
 
         rho_full[offset: offset + n_hem] = rho_hem

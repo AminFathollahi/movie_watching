@@ -5,8 +5,8 @@ Encoding-currency analogue of rsa/scramble_diff_maps.py + rsa/dummy_diff_maps.py
 
 For each native-AV model, consolidates the intact-vs-scramble and
 intact-vs-dummy diffs on BOTH signals encoding produces:
-  - plain     : encoding_r2_av (encoding.py) -- raw predictive alignment.
-  - AVresid   : encoding_r2_unique_av (encoding/variance_partition.py)
+  - plain     : encoding_r2_audiovisual (encoding.py) -- raw predictive alignment.
+  - AVresid   : variance_partition_r2_av_residual_band (variance_partition.py)
                 -- the encoding-currency counterpart of RSA's "integration".
 
 Naming mirrors the RSA side exactly (same words, same meaning, so a reader
@@ -21,8 +21,8 @@ never has to ask whether "binding" means something different here):
                               question, so never called "binding").
 
 Inputs (all pre-computed; see encoding/run_diff_study.sh):
-  {OUTPUT_DIR}/group_average/{model}/{config}/encoding_r2_av.dscalar.nii
-  {OUTPUT_DIR}/group_average/{model}/{config}/encoding_r2_unique_av.dscalar.nii
+  {OUTPUT_DIR}/group_average/{model}/{config}/encoding_r2_audiovisual.dscalar.nii
+  {OUTPUT_DIR}/group_average/{model}/{config}/variance_partition_r2_av_residual_band.dscalar.nii
   {OUTPUT_DIR}/group_average/{model}_avscramble/{config}/... (same two files)
   {OUTPUT_DIR}/group_average/{model}_clsav_from_{a,v}/{config}/... (same two files)
 
@@ -83,24 +83,24 @@ def main():
 
     for model in BASE_MODELS:
         intact_dir = _model_dir(model)
-        plain_intact = _load(intact_dir / CONFIG / "encoding_r2_av.dscalar.nii", "encoding_r2_av")
-        avresid_intact = _load(intact_dir / CONFIG / "encoding_r2_unique_av.dscalar.nii", "encoding_r2_unique_av")
+        plain_intact = _load(intact_dir / CONFIG / "encoding_r2_audiovisual.dscalar.nii", "encoding_r2_audiovisual")
+        avresid_intact = _load(intact_dir / CONFIG / "variance_partition_r2_av_residual_band.dscalar.nii", "variance_partition_r2_av_residual_band")
         if plain_intact is None:
-            log.info(f"[{model}] SKIP — missing intact encoding_r2_av")
+            log.info(f"[{model}] SKIP — missing intact encoding_r2_audiovisual")
             skipped.append(model)
             continue
 
         # ── Scramble ──────────────────────────────────────────────────────
         scr_dir = _model_dir(model, "avscramble")
-        plain_scr = _load(scr_dir / CONFIG / "encoding_r2_av.dscalar.nii", "encoding_r2_av")
+        plain_scr = _load(scr_dir / CONFIG / "encoding_r2_audiovisual.dscalar.nii", "encoding_r2_audiovisual")
         if plain_scr is not None:
             diff_plain = plain_intact - plain_scr
             out_path = scr_dir / CONFIG / "scramble_consolidated_maps.dscalar.nii"
-            template = str(scr_dir / CONFIG / "encoding_r2_av.dscalar.nii")
+            template = str(scr_dir / CONFIG / "encoding_r2_audiovisual.dscalar.nii")
             merge_into_combined(plain_scr, "plain_r2_scrambled", out_path, template)
             merge_into_combined(diff_plain, "diff_plain", out_path, template)
 
-            avresid_scr = _load(scr_dir / CONFIG / "encoding_r2_unique_av.dscalar.nii", "encoding_r2_unique_av")
+            avresid_scr = _load(scr_dir / CONFIG / "variance_partition_r2_av_residual_band.dscalar.nii", "variance_partition_r2_av_residual_band")
             if avresid_intact is not None and avresid_scr is not None:
                 binding = avresid_intact - avresid_scr
                 merge_into_combined(avresid_scr, "avresid_r2_scrambled", out_path, template)
@@ -111,23 +111,23 @@ def main():
                 log.info(f"[{model}] scramble plain diff done; binding SKIP (missing AVresid)")
             scramble_done.append(model)
         else:
-            log.info(f"[{model}] scramble SKIP — missing encoding_r2_av")
+            log.info(f"[{model}] scramble SKIP — missing encoding_r2_audiovisual")
 
         # ── Dummy (both conditions; also feeds the per-model max() combo) ──
         avresid_dummy_by_cond = {}
         for cond in DUMMY_CONDITIONS:
             cond_dir = _model_dir(model, cond)
-            plain_dummy = _load(cond_dir / CONFIG / "encoding_r2_av.dscalar.nii", "encoding_r2_av")
+            plain_dummy = _load(cond_dir / CONFIG / "encoding_r2_audiovisual.dscalar.nii", "encoding_r2_audiovisual")
             if plain_dummy is None:
-                log.info(f"[{model}/{cond}] SKIP — missing encoding_r2_av")
+                log.info(f"[{model}/{cond}] SKIP — missing encoding_r2_audiovisual")
                 continue
             diff_plain = plain_intact - plain_dummy
             out_path = cond_dir / CONFIG / "dummy_consolidated_maps.dscalar.nii"
-            template = str(cond_dir / CONFIG / "encoding_r2_av.dscalar.nii")
+            template = str(cond_dir / CONFIG / "encoding_r2_audiovisual.dscalar.nii")
             merge_into_combined(plain_dummy, "plain_r2_dummy", out_path, template)
             merge_into_combined(diff_plain, "diff_plain", out_path, template)
 
-            avresid_dummy = _load(cond_dir / CONFIG / "encoding_r2_unique_av.dscalar.nii", "encoding_r2_unique_av")
+            avresid_dummy = _load(cond_dir / CONFIG / "variance_partition_r2_av_residual_band.dscalar.nii", "variance_partition_r2_av_residual_band")
             if avresid_dummy is not None:
                 merge_into_combined(avresid_dummy, "avresid_r2_dummy", out_path, template)
                 avresid_dummy_by_cond[cond] = avresid_dummy
@@ -144,7 +144,7 @@ def main():
         modality_presence_diff = avresid_intact - max_dummy
         mp_out_path = intact_dir / CONFIG / "dummy_partial_diff_maps.dscalar.nii"
         merge_into_combined(modality_presence_diff, "modality_presence_diff", mp_out_path,
-                             str(intact_dir / CONFIG / "encoding_r2_unique_av.dscalar.nii"))
+                             str(intact_dir / CONFIG / "variance_partition_r2_av_residual_band.dscalar.nii"))
         log.info(f"[{model}] modality_presence_diff DONE (max over {list(avresid_dummy_by_cond)}) — "
                  f"mean={modality_presence_diff.mean():.4f}")
         modpres_done.append(model)

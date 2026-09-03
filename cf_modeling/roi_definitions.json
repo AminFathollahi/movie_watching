@@ -1,0 +1,66 @@
+{
+  "cca_temporal_islands": {
+    "description": "Bilateral anterior and posterior temporal-lobe CCA islands from a thresholded cortical map",
+    "names": {
+      "anterior": "cca_a",
+      "posterior": "cca_p"
+    },
+    "threshold": 0.12,
+    "max_lboe_per_hemisphere": 100,
+    "n_targets_batch": 4000,
+    "backend": "torch",
+    "cpu_threads": 16,
+    "surface_ample": {
+      "status": "prepared_exploratory_definition",
+      "expanded_name": "activation mapping as a percentage of local excitation",
+      "seed_top_percent_global": 1.0,
+      "prepared_peak_fractions": [0.7, 0.75, 0.8, 0.9],
+      "minimum_within_mask_mesh_degree": 3,
+      "rule": "Within each hemisphere, locate two temporal seed islands at the global top 1%, apply the named peak fraction, retain each peak-connected component, reject definitions with raw overlap, then apply a three-neighbour support filter.",
+      "excluded_variants": [
+        {
+          "tag": "topoomni_layer_18_mp_ample70",
+          "reason": "The right-hemisphere peak-connected candidates overlap by 221 vertices before support filtering."
+        }
+      ],
+      "topology_validation": "Topo-Omni layer-18 MP therefore begins at 75%. At 75% all four selected families have zero raw overlap and at least 130 vertices in every ROI hemisphere.",
+      "lboe_feasibility": "All retained 70% and 75% variants permit 100 LBOEs per hemisphere. Some 80% and all 90% families contain a hemisphere with fewer than 102 vertices and will use the documented n_vertices-2 cap."
+    },
+    "layer18_top1pct_lboe100": {
+      "status": "prepared_not_fit",
+      "requested_lboe_per_roi_per_hemisphere": 100,
+      "backend": "torch_cuda",
+      "n_targets_batch": 4000,
+      "selection_rule": "Global top 1% of finite cortical RSA values, followed by the two largest qualifying temporal surface components independently in each hemisphere.",
+      "variants": [
+        {"tag": "nemotron_layer_18_mp_1pct", "source": "nemotron_layer18_mp_av", "threshold": 0.2094479620, "vertices_a_lr": [247, 293], "vertices_p_lr": [168, 300]},
+        {"tag": "topoomni_layer_18_mp_1pct", "source": "topoomni_layer18_mp_av", "threshold": 0.2872528315, "vertices_a_lr": [286, 354], "vertices_p_lr": [118, 284]},
+        {"tag": "topoomni_layer_18_lt_1pct", "source": "topoomni_layer18_lt_av", "threshold": 0.2724501431, "vertices_a_lr": [281, 342], "vertices_p_lr": [128, 251]}
+      ],
+      "cap_check": "Every island has at least 118 vertices per hemisphere, so all requested 100-LBOE fits are uncapped."
+    },
+    "adaptive_hemisphere_saddle": {
+      "status": "exploratory_sensitivity_definition",
+      "seed_top_percent_global": 1.0,
+      "rule": "Within each hemisphere, track the two largest qualifying temporal components at the global seed threshold and lower the strict superlevel threshold until the next included saddle vertex would merge them.",
+      "comparison": "map_value > hemisphere_threshold",
+      "lboe_choice": {
+        "count_per_hemisphere": 100,
+        "rationale": "Default for future fits; historical requested-200 results remain identified by their lboe200 suffix."
+      },
+      "lm_selection": {
+        "metric": "maximum finite rho in the raw group-average RSA searchlight map",
+        "selected": "nemotron_layer_18_lt",
+        "selected_reason": "Highest maximum rho and clean bilateral temporal seed components at the global top 1%.",
+        "ranking": [
+          {"model": "nemotron_layer_18_lt", "max_rho": 0.531097233},
+          {"model": "nemotron_layer_9_lt", "max_rho": 0.522922814},
+          {"model": "topoomni_layer_18_lt", "max_rho": 0.477922916},
+          {"model": "omni3b_layer_18_lt", "max_rho": 0.476612031},
+          {"model": "topoomni_layer_27_lt", "max_rho": 0.384452045},
+          {"model": "omni3b_layer_27_lt", "max_rho": 0.381877631}
+        ]
+      }
+    }
+  }
+}

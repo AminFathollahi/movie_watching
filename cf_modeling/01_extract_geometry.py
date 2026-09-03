@@ -42,12 +42,10 @@ Usage
   conda activate movie
   python cf_modeling/01_extract_geometry.py \\
       --mode group_average --roi-a 3b --roi-b V1
-
-  python cf_modeling/01_extract_geometry.py \\
-      --mode per_subject --roi-a A5 --roi-b FFC
 """
 
 import argparse
+import json
 import logging
 import os
 import pickle
@@ -58,6 +56,11 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 import scipy as sp
+
+try:
+    from cf_naming import strip_lboe_suffix
+except ModuleNotFoundError:  # package-style imports in tests and notebooks
+    from cf_modeling.cf_naming import strip_lboe_suffix
 
 # ---------------------------------------------------------------------------
 # Vicsompy import (direct from source repo, no installation)
@@ -88,7 +91,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Defaults (overridable via CLI)
 # ---------------------------------------------------------------------------
-N_LBOE        = 200
+N_LBOE        = 100
 CX_SUB        = "hcp_999999_draw_NH"
 SURF_TYPE     = "fiducial"    # 'fiducial' = midthickness in pycortex; sphere absent
 N_VERTS_PER_HEM = 59292
@@ -202,16 +205,17 @@ def load_dlabel_masks(glasser_dlabel: str, roi_a: str, roi_b: str,
 
     masks = {}
     for roi in [roi_a, roi_b]:
-        lk = n2k.get(f"L_{roi}_ROI")
-        rk = n2k.get(f"R_{roi}_ROI")
+        source_roi = strip_lboe_suffix(roi)
+        lk = n2k.get(f"L_{source_roi}_ROI")
+        rk = n2k.get(f"R_{source_roi}_ROI")
 
         if lk is None or rk is None:
             if masks_dir is not None:
                 log.info(
                     "  '%s' not found in dlabel — loading CSV from %s",
-                    roi, masks_dir,
+                    source_roi, masks_dir,
                 )
-                masks[roi] = _load_csv_masks(roi, masks_dir)
+                masks[roi] = _load_csv_masks(source_roi, masks_dir)
             else:
                 available = sorted(
                     n.replace("L_", "").replace("_ROI", "")
@@ -219,7 +223,7 @@ def load_dlabel_masks(glasser_dlabel: str, roi_a: str, roi_b: str,
                     if n.startswith("L_") and n.endswith("_ROI")
                 )
                 raise ValueError(
-                    f"ROI '{roi}' not found in dlabel and --masks-dir not set. "
+                    f"ROI '{source_roi}' not found in dlabel and --masks-dir not set. "
                     f"Available Glasser names:\n  {available}"
                 )
             continue
@@ -422,7 +426,7 @@ def main():
                                masks_dir=args.masks_dir)
 
     log.info("\nBuilding '%s' subsurface …", args.roi_a)
-    build_subsurface(
+    sub_a = build_subsurface(
         args.roi_a,
         masks[args.roi_a][0], masks[args.roi_a][1],
         cache_dir,
@@ -430,14 +434,46 @@ def main():
     )
 
     log.info("\nBuilding '%s' subsurface …", args.roi_b)
-    build_subsurface(
+    sub_b = build_subsurface(
         args.roi_b,
         masks[args.roi_b][0], masks[args.roi_b][1],
         cache_dir,
         cx_sub=args.cx_sub, surf_type=args.surf_type, n_lboe_max=args.n_lboe,
     )
 
+    provenance = {
+        "analysis_rois": {"a": args.roi_a, "b": args.roi_b},
+        "source_mask_rois": {
+            "a": strip_lboe_suffix(args.roi_a),
+            "b": strip_lboe_suffix(args.roi_b),
+        },
+        "requested_lboe_per_roi_per_hemisphere": int(args.n_lboe),
+        "cap_rule": "min(requested_lboe, n_vertices_left - 2, n_vertices_right - 2)",
+        "minus_two_rationale": (
+            "scipy.sparse.linalg.eigs requires k to remain strictly below the "
+            "graph dimension; a two-mode margin avoids the degenerate boundary "
+            "and numerical failures in small surface ROIs"
+        ),
+        "rois": {
+            args.roi_a: {
+                "n_vertices_left": int(len(sub_a.subsurface_verts_L)),
+                "n_vertices_right": int(len(sub_a.subsurface_verts_R)),
+                "actual_lboe_per_hemisphere": int(sub_a.n_lboe),
+            },
+            args.roi_b: {
+                "n_vertices_left": int(len(sub_b.subsurface_verts_L)),
+                "n_vertices_right": int(len(sub_b.subsurface_verts_R)),
+                "actual_lboe_per_hemisphere": int(sub_b.n_lboe),
+            },
+        },
+    }
+    provenance_path = os.path.join(
+        cache_dir, f"lboe_provenance_{args.roi_a}_{args.roi_b}.json")
+    Path(provenance_path).write_text(
+        json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+
     log.info("\nDone. Subsurfaces cached to: %s", cache_dir)
+    log.info("LBOE provenance: %s", provenance_path)
     log.info("Next: python cf_modeling/02_fit_cf_model.py --mode %s "
              "--roi-a %s --roi-b %s", args.mode, args.roi_a, args.roi_b)
 

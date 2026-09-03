@@ -1,3 +1,4 @@
+FROZEN 2026-07-21 PLANNING ARTIFACT — not live documentation; see cluster/README.md.
 ================================================================================
 cluster/  —  dual-clustering pipeline (stimulus temporal states × brain spatial networks)
 PLANNER PASS OUTPUT:  (PART A) verified Step-0 findings   (PART B) Sonnet implementation prompt

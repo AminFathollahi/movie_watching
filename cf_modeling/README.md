@@ -156,6 +156,95 @@ bash cf_modeling/analysis.sh persubject 8 # per-subject, 8 parallel jobs
 bash cf_modeling/analysis.sh persubject 8 100610  # resume from subject 100610
 ```
 
+To define the bilateral anterior/posterior CCA multimodal convergence areas directly
+from the default PE-AV 5-second RSA map and fit their group-average CF model:
+
+```bash
+bash cf_modeling/run_analysis.sh cca
+```
+
+The `cca` mode first calls `run_cca_islands.py`, which only thresholds the map
+at `0.12`, selects the two largest
+temporal-lobe surface components in each hemisphere, pairs them by vertical
+centroid, and writes reusable 59k functional ROI masks. Names and defaults are
+defined centrally in `roi_definitions.json`. Each ROI is saved as hemisphere
+CSV masks and a cortex-aligned `*_mask.dscalar.nii`; a combined two-map
+`cca_islands_masks.dscalar.nii` is also written. A single categorical
+`cca_islands_labels.dlabel.nii` assigns anterior and posterior islands different
+colours for direct inspection in `wb_view`. The runner then hands the masks to
+the existing geometry and fitting scripts. Geometry requests the current
+100-LBOE default and caps it to the largest safe shared count for each ROI.
+After fitting, the mode executes the existing `viz.ipynb` plotting functions
+for the CCA pair and saves the flat and inflated pycortex maps under `figures/`.
+
+### Threshold, adaptive-saddle, and surface-AMPLE variants
+
+All alternatives are additive: their suffix is appended to ROI names, masks,
+geometry caches, fit directories, CIFTIs, and figures. Fixed and global-percent
+variants use `--threshold` or `--top-percent` in `run_cca_islands.py`.
+
+Every fitted analysis ROI now ends in `_lboeN`, where `N` is the requested
+maximum per ROI and per hemisphere. Source masks remain LBOE-independent;
+`01_extract_geometry.py` strips the terminal qualifier only when resolving the
+mask, then writes `lboe_provenance_*.json` with requested/actual counts, left
+and right vertex counts, and the cap rule. Historical unqualified fitted trees
+can be migrated in place without copying their large arrays (dry run first):
+
+```bash
+python cf_modeling/migrate_lboe_artifacts.py /path/to/outputs/cf_modeling
+python cf_modeling/migrate_lboe_artifacts.py /path/to/outputs/cf_modeling --apply
+```
+
+The exploratory `cca_hemi_saddle_selected` mode runs two morphology-constrained
+definitions: PE-AV and Nemotron layer 18 last-token. It identifies the two
+largest qualifying temporal components at the global top 1%, then lowers the
+threshold independently in each hemisphere to the strict superlevel-set value
+immediately before those two components merge. Every run writes
+`cca_islands_<suffix>.json`, recording the source map, seed cutoff, exact left
+and right thresholds, retained percentages, component sizes/centroids/parcels,
+and rule. The categorical `cca_islands_labels_<suffix>.dlabel.nii` provides the
+recommended visual separation check.
+
+The peak-relative sensitivity grid uses **surface-connected AMPLE** at 70%,
+75%, 80%, and 90%. It finds two temporal peaks from global top-1% seed
+components, applies the named peak fraction, and applies a 3-core support
+filter. Definitions whose raw peak-connected regions overlap are excluded;
+therefore Topo-Omni layer-18 MP begins at 75%. See `status.md` for preparation
+and LBOE-feasibility notes.
+
+```bash
+bash cf_modeling/run_analysis.sh cca_peav_0p104
+bash cf_modeling/run_analysis.sh cca_hemi_saddle_selected
+bash cf_modeling/run_analysis.sh cca_prepare_variants
+```
+
+Historical MCA artifact trees can be migrated either additively to a separate
+destination or in place. Both modes are dry runs unless `--apply` is supplied.
+The in-place mode is intended for the large existing output tree: it writes a
+rollback manifest, rewrites text and CIFTI map/label names, merges equivalent
+canonical duplicates, and never overwrites a differing file.
+
+```bash
+python cf_modeling/migrate_cca_artifacts.py /path/to/old_cf_modeling /path/to/cca_cf_modeling
+python cf_modeling/migrate_cca_artifacts.py /path/to/old_cf_modeling /path/to/cca_cf_modeling --apply
+python cf_modeling/migrate_cca_artifacts.py /path/to/outputs/cf_modeling --in-place
+python cf_modeling/migrate_cca_artifacts.py /path/to/outputs/cf_modeling --in-place --apply
+```
+
+The old names remain readable only through the explicitly historical extractor;
+all active pipeline modes and new artifacts use `cca_a`/`cca_p`.
+
+The language-model choice is documented in `roi_definitions.json`: candidates
+are ranked by maximum finite rho in their raw group-average RSA map. Nemotron
+layer 18 LT ranks first and passes the bilateral seed-component check, so lower
+ranked candidates are screened but not fit.
+
+Historical 200-LBOE fits follow Hedger et al.'s reconstruction calibration (2 mm
+fields adequately recovered, >=4 mm fields near ceiling, trivial gains above
+200). Banded-ridge penalties are selected with leave-one-run-out CV and scored
+on separately held-out movie TRs. Adaptive ROIs all exceed 200 vertices per
+hemisphere, so these comparisons use the same uncapped 200-LBOE basis.
+
 Add or remove ROI pairs by editing `PERSUBJECT_PAIRS` and `AVG_PAIRS` in
 `analysis.sh`.
 
@@ -179,7 +268,7 @@ python cf_modeling/00_make_roi_masks.py \
 ### `01_extract_geometry.py`
 
 Builds `StableSubsurface` objects (Subsurface subclass with σ=1e-6 Laplacian
-regularisation) and computes up to 200 LBOEs for two Glasser ROIs.
+regularisation) and computes up to the requested LBOE count (default 100).
 
 - **Surface**: pycortex `fiducial` (midthickness) from `hcp_999999_draw_NH`.
   Uses sphere LBOEs in the same mathematical sense as Hedger et al. (2025);
@@ -308,6 +397,98 @@ wb_view \
 Load `R2_V1_nc` (visual) as blue and `R2_3b_nc` (somatosensory) as red,
 both transparent below 0, for a Figure 3a-style dual-colour display.
 
+For every group-average CCA pair, the pipeline also writes exact ROI-mean
+partial correlations and Figure 3a-style 2-D Workbench labels.  The partial
+outputs include bilateral ROI means, a combined within-hemisphere map, and
+left- and right-hemisphere maps separately:
+
+```text
+roi_mean_partial_connectivity_{CCA_A}_{CCA_P}.dscalar.nii
+bivariate_partial_r_{CCA_A}_{CCA_P}_bilateral_32bin.dlabel.nii
+bivariate_partial_r_{CCA_A}_{CCA_P}_within_hemisphere_32bin.dlabel.nii
+bivariate_partial_r_{CCA_A}_{CCA_P}_L_32bin.dlabel.nii
+bivariate_partial_r_{CCA_A}_{CCA_P}_R_32bin.dlabel.nii
+bivariate_partial_r_{CCA_A}_{CCA_P}_legend.png
+```
+
+The dlabels deliberately use the same positive 0--0.4 scale and pycortex 2-D
+texture as the CF map.  Negative partial correlations are clipped to the
+zero-colour edge for this view only; their signed values remain unchanged in
+the source dscalar.  A vertex may have positive partial correlation with both
+CCAs: partial correlation removes variance shared by the two ROI means but is
+not a winner-take-all or exclusivity operation.
+
+The common implementation is `bivariate_cifti.py`; both
+`export_bivariate_cifti.py` (CF maps) and
+`export_partial_bivariate_cifti.py` (partial-r maps) only provide ROI names,
+input maps, and labels.  Import the shared module for any additional bivariate
+CIFTI view instead of copying either exporter.
+
+Ordinary ROI-mean correlations are saved separately from CF `_nc`.  For each
+CCA pair, `roi_mean_raw_connectivity.py` writes bilateral,
+within-hemisphere, left-only, and right-only Pearson-r maps, and
+`export_raw_corr_bivariate_cifti.py` writes their matching Figure 3a-style
+labels:
+
+```text
+roi_mean_raw_connectivity_{CCA_A}_{CCA_P}.dscalar.nii
+bivariate_raw_corr_{CCA_A}_{CCA_P}_{bilateral|within_hemisphere|L|R}_32bin.dlabel.nii
+```
+
+These `_raw_corr` maps correlate a CCA mean timecourse with each cortical
+timecourse without controlling for the other CCA.  They are not `_nc`, which
+is the split CF R² minus the single-ROI-mean OLS null R².
+
+The AV-channel analysis is launched independently of CF fitting:
+
+```bash
+bash cf_modeling/run_channel_cca_analysis.sh analyze
+bash cf_modeling/run_channel_cca_analysis.sh topoomni
+bash cf_modeling/run_channel_cca_analysis.sh nemotron-own-rois
+```
+
+`analyze` runs PE-AV, Nemotron-18 MP, and Topo-Omni layer-18 sheet MP only with
+their own top-1% CCA masks. Each family is analyzed once at channel level using
+its full AV embedding: 626×1,024 for PE-AV and 626×2,048 for both Omni models.
+Audio and video effects are computed channel by channel as true-AV minus the
+matching without-audio or without-video dummy embedding. These within-model
+results are descriptive: the same model contributes to ROI definition and
+channel testing.
+
+Every channel receives two parallel label systems. The modality winner is a
+strict two-class audio/video label from the larger true-AV-minus-dummy mean
+effect. The four-class label is audio-only/video-only/both/neither from paired
+one-sided tests with BH-FDR q<.05. CCA-A/CCA-P channels have analogous winner
+and four-class labels. Tables retain effects, correlations, synchronized
+block-bootstrap CIs, raw p-values, and BH q-values. FWER/max-T and BY gates are
+not used to define exploratory channel labels. The separate cortical RSA layer
+reports uncorrected, BH-FDR, and max-T FWER results from one run-aware temporal
+permutation null.
+
+The executable [channel_cca_preference.ipynb](channel_cca_preference.ipynb)
+is the only visualization/report surface. It prints the main results, exposes
+filterable channel tables, shows every plot inline, and saves one tree:
+
+```text
+outputs/cf_modeling/channel_cca_preference/results/
+├── analyses/                 # source numerical analyses by model and own mask
+├── rsa/                      # three-model, four-class RSA CIFTI and metadata
+├── tables/channel_level/     # one row per channel and measure
+├── tables/inference/         # counts, CIs, p/q values, and agreement summaries
+├── tables/rsa/               # category-RSA metadata tables
+├── figures/<model>/<mask>/<representation>/
+└── figure_inventory.csv
+```
+
+Each representation has canonical winner and four-class histogram/scatter
+panels; redundant per-pair histograms are not emitted. The category-restricted
+whole-cortex RSA is implemented under `rsa/` but saves one combined CIFTI and
+metadata bundle in `results/rsa/`. RSA is restricted to the four significance
+classes (no winner-take-all RSA maps) for the three full embeddings. Each class
+stores rho, empirical raw p, BH q, max-T FWER p, signed sigmaps, and explicit
+p/q<.05 masks. The synchronized null uses independent nonzero circular shifts
+inside each movie run.
+
 ## Configuration reference (`analysis.sh`)
 
 | Variable | Default | Description |
@@ -315,7 +496,7 @@ both transparent below 0, for a Figure 3a-style dual-colour display.
 | `VICSOMPY_REPO` | `/path/to/Vicarious_somatotopy` | vicsompy source repo (direct import) |
 | `CX_SUB` | `hcp_999999_draw_NH` | pycortex subject |
 | `SURF_TYPE` | `fiducial` | pycortex surface type (midthickness) |
-| `N_LBOE` | `200` | Max LBOEs per ROI (auto-capped for small ROIs) |
+| `N_LBOE` | `100` | Max LBOEs per ROI (auto-capped for small ROIs) |
 | `STREAM` | `false` | Streaming mode (preprocess raw CIFTIs on-the-fly) |
 | `SG_FILTER` | `true` | Savitzky-Golay high-pass filter |
 | `PSC` | `true` | Percent signal change (pre-SG mean used for normalisation) |

@@ -198,12 +198,12 @@ K=100
 # ── Model registry ─────────────────────────────────────────────────────────
 MODELS=(
     "pe-av-small-16-frame:av"
-    "pe-av-small-16-frame_avscramble:av"
+    "cav-mae-sync:av"
+    # "pe-av-small-16-frame_avscramble:av"
     # "wavlm-pecore:av"
     # "audiomae-videomaev2:av"
     # "imagebind:av"
     # "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
-    # "cav-mae-sync:av"
     # "imagebind:a,v,av"
     # "audiomae:a"
     # "videomaev2-large:v"
@@ -215,8 +215,8 @@ MODELS=(
 # omni3b / topoomni layer sweep — add a layer index here to wire it into every
 # analysis.sh run; no need to hand-write new MODELS entries per layer.
 LAYERS=(35 34 27 18 9 1)
-OMNI3B_MODALITIES="av,a,v"
-TOPOOMNI_MODALITIES="av"     # av only for now — switch to "av,a,v" once ready
+OMNI3B_MODALITIES="av"
+TOPOOMNI_MODALITIES="av"
 
 if [ "${SKIP_LAYER_SWEEP:-false}" != "true" ]; then
     for L in "${LAYERS[@]}"; do
@@ -227,30 +227,34 @@ if [ "${SKIP_LAYER_SWEEP:-false}" != "true" ]; then
         # family's 0-indexed convention, not the penultimate) and keep their
         # bare pre-existing name.
         case "$L" in
-            9|18|27|34) SUFFIX="_mp" ;;
-            *)          SUFFIX="" ;;
+            9|18|27|34) SUFFIXES=("_mp" "_lt") ;;
+            *)          SUFFIXES=("") ;;
         esac
-        MODELS+=("omni3b_layer${L}${SUFFIX}:${OMNI3B_MODALITIES}")
-        MODELS+=("topoomni_layer${L}${SUFFIX}:${TOPOOMNI_MODALITIES}")
-        MODELS+=("topoomni_layer${L}_sheet${SUFFIX}:${TOPOOMNI_MODALITIES}")
+        for SUFFIX in "${SUFFIXES[@]}"; do
+            MODELS+=("omni3b_layer${L}${SUFFIX}:${OMNI3B_MODALITIES}")
+            MODELS+=("topoomni_layer${L}${SUFFIX}:${TOPOOMNI_MODALITIES}")
+            MODELS+=("topoomni_layer${L}_sheet${SUFFIX}:${TOPOOMNI_MODALITIES}")
+        done
     done
 
     # nemotron (omni-embed-nemotron-3b): no bare layer1/2/4/35-style probes
     # exist on disk (unlike omni3b/topoomni) -- only the 9/18/27/36 depth-sweep
     # plus 35 (penultimate of 36, its own 1-indexed hidden_states convention
-    # already matches "layer35" directly), all "_mp"-suffixed, and no "_lt"
-    # variant is needed (its native "_av" readout is already genuinely joint
-    # from the start; see model_registry.py).
-    NEMOTRON_MODALITIES="av,a,v"
+    # already matches "layer35" directly). Both mean-pool and last-token
+    # readouts are retained as separate AV targets.
+    NEMOTRON_MODALITIES="av"
     for L in 9 18 27 35 36; do
         MODELS+=("nemotron_layer${L}_mp:${NEMOTRON_MODALITIES}")
+        MODELS+=("nemotron_layer${L}_lt:${NEMOTRON_MODALITIES}")
     done
 
     # Own-encoder (audio_tower/visual, pre-thinker-fusion) penultimate-layer
     # probes -- no "av" readout (see model_registry.py).
-    MODELS+=("omni3b_encoder_penultimate:a,v")
-    MODELS+=("topoomni_encoder_penultimate:a,v")
-    MODELS+=("nemotron_encoder_penultimate:a,v")
+    # Own-encoder A/V RSA dependencies are launched automatically by an AV run
+    # when its derived maps are absent; keep them out of the main AV-only list.
+    # MODELS+=("omni3b_encoder_penultimate:a,v")
+    # MODELS+=("topoomni_encoder_penultimate:a,v")
+    # MODELS+=("nemotron_encoder_penultimate:a,v")
 fi
 
 # Diff-study override: run_diff_study.sh sets this to a ';'-joined
@@ -286,7 +290,7 @@ CROSSNOBIS_SKIP_SEC=5.0
 # ── GPU acceleration ─────────────────────────────────────────────────────
 # GPU is attempted automatically when CUDA is available; OOM falls back to CPU.
 # Reduce GPU_BATCH_SIZE if GPU runs out of memory.
-GPU_BATCH_SIZE=512   # vertices per GPU batch (default 512)
+GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-512}"   # vertices per GPU batch
 
 # ── Parallelisation ─────────────────────────────────────────────────────────
 CONDA_ENV="movie"
@@ -420,6 +424,30 @@ _run_avg_one_model() {
 
         local NORM_LBL; NORM_LBL=$(_norm_label)
         local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}${NORM_LBL}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_maps.dscalar.nii"
+        local RHO_FILENAME="rsa_59k_${FMRI_SUFFIX}${NORM_LBL}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_searchlight.npy"
+
+        # Natural joint-AV maps use three matched A/V reference pairs. Compute
+        # missing group-average dependency maps before the target AV map.
+        local AV_DERIVED_DEPENDENCIES=""
+        local AV_DERIVED_MISSING=false
+        if [ "$MOD" = "av" ] && { [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; }; then
+            AV_DERIVED_DEPENDENCIES=$(run_python "${SCRIPT_DIR}/av_derived_maps.py" \
+                --target-model "$MODEL_NAME" --combined-output "$COMBINED_OUT" \
+                --list-dependencies)
+            if [ -n "$AV_DERIVED_DEPENDENCIES" ]; then
+                while read -r DEP_MODEL DEP_MOD; do
+                    [ -z "$DEP_MODEL" ] && continue
+                    local DEP_RHO="${OUTPUT_DIR}/group_average/${DEP_MODEL}_${DEP_MOD}/${SL_CONFIG}/${RHO_FILENAME}"
+                    if ! _emb_exists "$DEP_MODEL" "$DEP_MOD"; then
+                        log "  cannot build AV derived maps for ${MODEL_NAME}: missing embedding ${DEP_MODEL}/${DEP_MOD}"
+                        AV_DERIVED_MISSING=true
+                    elif [ ! -f "$DEP_RHO" ]; then
+                        log "  AV dependency missing; running ${DEP_MODEL}/${DEP_MOD} first"
+                        _run_avg_one_model "$DEP_MODEL" "$DEP_MOD"
+                    fi
+                done <<< "$AV_DERIVED_DEPENDENCIES"
+            fi
+        fi
 
         if [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; then
             run_python "${SCRIPT_DIR}/searchlight.py" \
@@ -494,6 +522,19 @@ _run_avg_one_model() {
                 --glasser-dlabel   "$GLASSER_DLABEL" \
                 --combined-output  "$COMBINED_OUT" \
                 $(_hrf_flag)
+        fi
+
+        # Append absent derived maps to the normal AV combined CIFTI.
+        if [ -n "$AV_DERIVED_DEPENDENCIES" ] && [ "$AV_DERIVED_MISSING" = "false" ]; then
+            run_python "${SCRIPT_DIR}/av_derived_maps.py" \
+                --target-model    "$MODEL_NAME" \
+                --rsa-root        "${OUTPUT_DIR}/group_average" \
+                --config          "$SL_CONFIG" \
+                --rho-filename    "$RHO_FILENAME" \
+                --combined-output "$COMBINED_OUT" \
+                --template-cifti  "$TEMPLATE_CIFTI"
+        elif [ -n "$AV_DERIVED_DEPENDENCIES" ]; then
+            log "  skipped AV derived maps for ${MODEL_NAME}: one or more baseline embeddings are unavailable"
         fi
 
     done

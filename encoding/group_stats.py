@@ -415,7 +415,8 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Collect per-subject r maps ────────────────────────────────────────────
-    fname = f"encoding_r_{args.modality}.dscalar.nii"
+    modality_name = {"a": "audio", "v": "visual", "av": "audiovisual"}[args.modality]
+    fname = f"encoding_pearson_r_{modality_name}.dscalar.nii"
 
     subject_r_files = sorted(
         f for f in Path(args.output_dir).glob(

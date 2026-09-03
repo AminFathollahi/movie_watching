@@ -62,8 +62,10 @@ DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_
 EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
-BIN_SEC, SKIP_SEC = 5.0, 5.0
-TARGET_LAYERS   = [9, 18, 27]
+BIN_SEC = float(os.environ.get("BIN_SEC", "5.0"))
+SKIP_SEC = float(os.environ.get("SKIP_SEC", str(BIN_SEC)))
+TARGET_LAYERS   = [1, 9, 18, 27, 34, 35]
+MP_TAGGED_LAYERS = {9, 18, 27, 34}
 MODEL_TAG       = "omni3b"
 AUDIO_SR        = 16000
 
@@ -144,9 +146,8 @@ def main():
         audio_array = _load_audio(audio_path, AUDIO_SR)
         return text, frames, audio_array
 
-    def extract_lasttoken(video_path, target_layers=TARGET_LAYERS):
-        """Joint AV forward pass; return the LAST-TOKEN hidden state per layer
-        (a genuinely emergent joint summary, not a fixed function of a/v pools)."""
+    def extract_joint(video_path, target_layers=TARGET_LAYERS):
+        """Joint AV pass; return AV-token mean-pool and last-token readouts."""
         text, frames, audio_array = _build_joint_inputs(video_path)
         inputs = processor(text=[text], videos=frames, audio=audio_array,
                            sampling_rate=AUDIO_SR, return_tensors="pt").to(_MODEL_DEVICE)
@@ -167,10 +168,21 @@ def main():
         finally:
             for h in handles:
                 h.remove()
+        ids = inputs["input_ids"].squeeze(0).cpu()
+        av_mask = (ids == AUDIO_TOKEN_ID) | (ids == VIDEO_TOKEN_ID)
         del inputs
         torch.cuda.empty_cache()
 
-        return {idx: captured[idx][0, -1, :].float().numpy() for idx in target_layers}
+        pooled_av = {}
+        lasttoken = {}
+        for idx in target_layers:
+            hs = captured[idx]
+            pooled_av[idx] = (
+                hs[0, av_mask, :].mean(dim=0).float().numpy()
+                if av_mask.any() else np.zeros(hs.shape[-1], dtype=np.float32)
+            )
+            lasttoken[idx] = hs[0, -1, :].float().numpy()
+        return pooled_av, lasttoken
 
     def _build_unimodal_inputs(video_path, modality):
         """modality: 'audio' or 'video'. Builds a message containing ONLY that
@@ -244,6 +256,9 @@ def main():
     dur_int, skip_int = int(BIN_SEC), int(SKIP_SEC)
     chunk_suffix = f"_av_chunks_{dur_int}s" if skip_int == dur_int else f"_av_chunks_{dur_int}s_skip{skip_int}s"
     all_segs = natsorted(list(DATA_BASE.rglob(f"*{chunk_suffix}/*.mp4")), key=lambda p: p.name)
+    if not all_segs:
+        fallback_suffix = f"_chunks_{dur_int}s" if skip_int == dur_int else f"_chunks_{dur_int}s_skip{skip_int}s"
+        all_segs = natsorted(list(DATA_BASE.rglob(f"*{fallback_suffix}/*.mp4")), key=lambda p: p.name)
     assert len(all_segs) > 0, f"No {BIN_SEC}s segments found under {DATA_BASE}"
     print(f"Found {len(all_segs)} segments.")
 
@@ -254,6 +269,7 @@ def main():
 
     results_a  = {idx: [] for idx in TARGET_LAYERS}
     results_v  = {idx: [] for idx in TARGET_LAYERS}
+    results_av = {idx: [] for idx in TARGET_LAYERS}
     results_lt = {idx: [] for idx in TARGET_LAYERS}
     failed = []
 
@@ -261,16 +277,18 @@ def main():
         try:
             pooled_a = extract_unimodal(vp, "audio")
             pooled_v = extract_unimodal(vp, "video")
-            pooled_lt = extract_lasttoken(vp)
+            pooled_av, pooled_lt = extract_joint(vp)
             for idx in TARGET_LAYERS:
                 results_a[idx].append(pooled_a[idx])
                 results_v[idx].append(pooled_v[idx])
+                results_av[idx].append(pooled_av[idx])
                 results_lt[idx].append(pooled_lt[idx])
         except Exception as e:
             failed.append((vp.name, repr(e)))
             for idx in TARGET_LAYERS:
                 results_a[idx].append(np.zeros(2048, dtype=np.float32))
                 results_v[idx].append(np.zeros(2048, dtype=np.float32))
+                results_av[idx].append(np.zeros(2048, dtype=np.float32))
                 results_lt[idx].append(np.zeros(2048, dtype=np.float32))
 
     if failed:
@@ -279,21 +297,25 @@ def main():
             print(f"  {name}: {err}")
 
     for idx in TARGET_LAYERS:
-        model_name = f"{MODEL_TAG}_layer{idx}_mp"
+        suffix = "_mp" if idx in MP_TAGGED_LAYERS else ""
+        model_name = f"{MODEL_TAG}_layer{idx}{suffix}"
         out_dir = EMBEDDINGS_BASE / model_name / f"bin{dur_int}s_skip{skip_int}s"
         out_dir.mkdir(parents=True, exist_ok=True)
         arr_a = np.array(results_a[idx], dtype=np.float32)
         arr_v = np.array(results_v[idx], dtype=np.float32)
+        arr_av = np.array(results_av[idx], dtype=np.float32)
         np.save(out_dir / f"{model_name}_a.npy", arr_a)
         np.save(out_dir / f"{model_name}_v.npy", arr_v)
-        print(f"[{model_name}] saved unimodal _a={arr_a.shape} _v={arr_v.shape} -> {out_dir}")
+        np.save(out_dir / f"{model_name}_av.npy", arr_av)
+        print(f"[{model_name}] saved a={arr_a.shape} v={arr_v.shape} av={arr_av.shape} -> {out_dir}")
 
-        lt_model_name = f"{MODEL_TAG}_layer{idx}_lt"
-        lt_out_dir = EMBEDDINGS_BASE / lt_model_name / f"bin{dur_int}s_skip{skip_int}s"
-        lt_out_dir.mkdir(parents=True, exist_ok=True)
-        arr_lt = np.array(results_lt[idx], dtype=np.float32)
-        np.save(lt_out_dir / f"{lt_model_name}_av.npy", arr_lt)
-        print(f"[{lt_model_name}] saved lasttoken _av={arr_lt.shape} -> {lt_out_dir}")
+        if idx in MP_TAGGED_LAYERS:
+            lt_model_name = f"{MODEL_TAG}_layer{idx}_lt"
+            lt_out_dir = EMBEDDINGS_BASE / lt_model_name / f"bin{dur_int}s_skip{skip_int}s"
+            lt_out_dir.mkdir(parents=True, exist_ok=True)
+            arr_lt = np.array(results_lt[idx], dtype=np.float32)
+            np.save(lt_out_dir / f"{lt_model_name}_av.npy", arr_lt)
+            print(f"[{lt_model_name}] saved lasttoken _av={arr_lt.shape} -> {lt_out_dir}")
 
     print(f"Done. {len(failed)} / {len(all_segs)} segments failed.")
 

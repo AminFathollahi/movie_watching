@@ -7,8 +7,8 @@
 # model list and runner instead of encoding/analysis.sh's general MODELS sweep.
 #
 # Hypothesis under test (AV-integration claim, encoding-currency version): in
-# true integration regions, BOTH plain predictive alignment (encoding_r2_av)
-# AND unique-fusion variance (encoding_r2_unique_av, from variance_partition.py)
+# true integration regions, BOTH plain predictive alignment (encoding_r2_audiovisual)
+# AND residual AV-band variance (variance_partition_r2_av_residual_band)
 # should be high for the native/intact condition and WEAKEN under scramble
 # and dummy.
 #
@@ -138,7 +138,7 @@ run_diff_study_avresid() {
         # diff_maps.py's binding/modality_presence_diff); cheap to re-check,
         # variance_partition.py has no internal skip-if-exists so only run if
         # the output is actually missing.
-        INTACT_OUT="${OUTPUT_DIR}/group_average/${BASE}/delay5s_norm_bin5s_skip5s/encoding_r2_unique_av.dscalar.nii"
+        INTACT_OUT="${OUTPUT_DIR}/group_average/${BASE}/delay5s_norm_bin5s_skip5s/variance_partition_r2_av_residual_band.dscalar.nii"
         if [ ! -f "$INTACT_OUT" ]; then
             log "  ${BASE} (intact)"
             run_python "${SCRIPT_DIR}/variance_partition.py" \

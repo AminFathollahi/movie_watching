@@ -52,51 +52,6 @@ Outputs (all saved to a single cka_decomp_{target}.dscalar.nii)
     {output_dir}/parcel_cka_{target}.csv      — per-parcel table (glasser only)
     {output_dir}/interaction_score_{target}.json — global scores + summary
 
-Model Recommendations for Future Runs
---------------------------------------
-  pe-av-large-16-frame  — Tests whether the multimodal interaction residual
-                          scales with model capacity.  Larger PE-AV should
-                          capture richer cross-modal structure if the integration
-                          is capacity-limited.
-
-  cav-mae-sync          — Alternative AV architecture (contrastive vs. generative).
-                          If K_interaction correlates with brain regardless of
-                          architecture, the effect is in the INFORMATION content
-                          of the training data, not the specific objective.
-
-  imagebind             — Aligns audio, video, AND text in a shared space.
-                          If the brain's "integration regions" (high SI) correlate
-                          strongly with imagebind but NOT with AV-only models,
-                          the integration is semantic/linguistic rather than
-                          purely perceptual.
-
-Usage
------
-  # Both Glasser parcels and searchlight (default):
-python rsa/multimodal_decomposition.py \
-    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
-    --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \
-    --fmri-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
-    --run-trs /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy \
-    --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
-    --output-dir /home/amin/Research/Representation/Movie/outputs/multimodal_decomp \
-    --method both \
-    --glasser-dlabel /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii \
-    --left-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
-    --right-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
-    --workbench /opt/workbench/bin_linux64/wb_command \
-    --geodesic-cache-dir /home/amin/Research/Representation/Movie/outputs/rsa/_geodesic_cache \
-    --target-model pe-av-small-16-frame \
-    --target-modality av \
-    --unimodal-models "audiomae:a" "videomaev2-large:v" \
-    --bin-sec 5.0 --delay-sec 5.0 --tr 1.0
-
-  # Glasser parcels only (no surface/workbench/cache args needed):
-  python rsa/multimodal_decomposition.py ... --method glasser
-
-  # Searchlight only (no --glasser-dlabel needed):
-  python rsa/multimodal_decomposition.py ... --method searchlight
-
 References
 ----------
 Kornblith S et al. (2019). Similarity of neural network representations

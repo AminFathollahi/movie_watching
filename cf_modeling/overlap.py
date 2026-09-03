@@ -16,9 +16,9 @@ per_subject mode — Group statistics:
 
 Run
 ---
-    python summary.py --mode group_average --roi_a A1 --roi_b V1 \\
+    python overlap.py --mode group_average --roi_a A1 --roi_b V1 \\
         --rsa_base /path/to/searchlight_rsa_output
-    python summary.py --mode per_subject   --roi_a A5 --roi_b FFC \\
+    python overlap.py --mode per_subject   --roi_a A5 --roi_b FFC \\
         --min_subjects 5
 """
 

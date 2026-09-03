@@ -266,11 +266,14 @@ def split_embedding_array(embeddings: np.ndarray, timing_df: pd.DataFrame,
     embeddings = np.asarray(embeddings, dtype=np.float64)
     hrf_kernel = spm_hrf(bin_sec) if hrf else None
 
-    train_segs   = []
-    test_segs    = []
-    seg_idx      = 0
-    current_run  = None
-    train_run_segs: list[list] = [[]]
+    seg_idx = 0
+    # Keep train and test clips together by run.  The test clip from a run must
+    # receive the mean/std estimated from that run's training clips, exactly as
+    # _bin_and_split_fmri does for the response data.  The previous
+    # implementation transformed only X_train and left X_test in raw feature
+    # space, making held-out predictions depend on arbitrary between-run feature
+    # offsets/scales.
+    run_segments: dict[object, dict[str, list[np.ndarray]]] = {}
 
     for _, row in timing_df.iterrows():
         vid_id = str(row["video_id"])
@@ -288,31 +291,47 @@ def split_embedding_array(embeddings: np.ndarray, timing_df: pd.DataFrame,
         if hrf and hrf_kernel is not None:
             seg = apply_hrf_to_segment(seg, hrf_kernel)
 
-        if vid_id in test_video_ids:
-            test_segs.append(seg)
-        else:
-            if run_id != current_run:
-                if current_run is not None:
-                    train_run_segs.append([])
-                current_run = run_id
-            train_run_segs[-1].append(seg)
+        split = "test" if vid_id in test_video_ids else "train"
+        run_segments.setdefault(run_id, {"train": [], "test": []})[split].append(seg)
 
-    all_train = []
-    for run_segs in train_run_segs:
-        if not run_segs:
+    if seg_idx != embeddings.shape[0]:
+        raise ValueError(
+            f"Embedding row count mismatch: timing describes {seg_idx} windows "
+            f"but array contains {embeddings.shape[0]} rows"
+        )
+
+    all_train: list[np.ndarray] = []
+    all_test: list[np.ndarray] = []
+    for run_id, split_segments in run_segments.items():
+        if not split_segments["train"]:
+            if split_segments["test"]:
+                raise ValueError(
+                    f"Run {run_id!r} has held-out embeddings but no training "
+                    "embeddings from which to estimate preprocessing statistics"
+                )
             continue
-        run_data = np.vstack(run_segs)
-        mu = run_data.mean(axis=0, keepdims=True)
+
+        run_train = np.vstack(split_segments["train"])
+        mu = run_train.mean(axis=0, keepdims=True)
         if normalize:
-            sd = run_data.std(axis=0, keepdims=True)
+            sd = run_train.std(axis=0, keepdims=True)
             sd[sd == 0] = 1.0
-            run_data = (run_data - mu) / sd
+            run_train = (run_train - mu) / sd
         else:
-            run_data = run_data - mu   # demean per run, no variance normalization
-        all_train.append(run_data)
+            sd = None
+            run_train = run_train - mu
+        all_train.append(run_train)
+
+        if split_segments["test"]:
+            run_test = np.vstack(split_segments["test"])
+            run_test = ((run_test - mu) / sd if normalize else run_test - mu)
+            all_test.append(run_test)
 
     X_train = np.vstack(all_train).astype(np.float32)
-    X_test  = np.vstack(test_segs).astype(np.float32)
+    if not all_test:
+        X_test = np.empty((0, embeddings.shape[1]), dtype=np.float32)
+    else:
+        X_test = np.vstack(all_test).astype(np.float32)
     return X_train, X_test
 
 

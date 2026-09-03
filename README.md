@@ -12,11 +12,13 @@ movie_watching/
 ├── rsa/                        # Representational Similarity Analysis (primary engine)
 ├── encoding/                   # Ridge encoding models (himalaya) + banded-ridge variance partition
 ├── cf_modeling/                # Audiovisual cortical field modeling (Hedger et al. 2025)
+├── cluster/                    # Temporal-state/network and voxel-timeseries clustering analyses
 ├── connectivity/               # Seed-based whole-cortex functional connectivity from an RSA-derived ROI
 ├── viz/                        # Standalone cortex-map plotting (nilearn, no wb_view dependency)
 └── notebooks/
     ├── visualization/          # RSA significance maps, surface plots, pycortex flatmaps
-    └── feature_extraction/     # Model embedding extraction (avtransformer / topo_omni / cav-mae-sync envs)
+    ├── feature_extraction/     # Model embedding extraction (avtransformer / topo_omni / cav-mae-sync envs)
+    └── RidgeEncodingForSpeechEnvMusic_BrainModel/  # early exploratory ridge-encoding work predating the PE-AV pipeline
 ```
 
 ## Analysis Pillars
@@ -28,6 +30,7 @@ movie_watching/
 | `rsa/` | Searchlight + Glasser parcel RSA, plus validation (noise ceiling, crossnobis, 2-factor bootstrap, permutation/spin tests) and the multimodal-integration analyses (partial RSA, temporal-scramble binding, cross-architecture convergence, Topo-Omni stimulus-clustering localizer) | `analysis.sh` | `movie` |
 | `encoding/` | Ridge encoding (himalaya RidgeCV) + banded-ridge unique-AV-variance partition (`variance_partition.py`) | `analysis.sh` | `movie` |
 | `cf_modeling/` | Banded ridge connective field modeling (Hedger 2025) | `analysis.sh` | `movie` |
+| `cluster/` | Temporal-state/network clustering plus voxel-timeseries reduction × clustering maps | `cluster.sh` / `run_voxel_timeseries_clustering.sh` | `movie` |
 | `connectivity/` | Seed-based whole-cortex functional connectivity from an RSA top-5% ROI, 3 time windows (full/rest/stim) | `seed_connectivity.py` | `movie` |
 
 ## Quick Start
@@ -186,6 +189,21 @@ conda activate movie
 bash cf_modeling/analysis.sh all           # group-average + per-subject
 bash cf_modeling/analysis.sh persubject    # per-subject only
 ```
+
+### 7. Visualize a result map
+
+```bash
+conda activate movie
+python viz/plot_cortex_map.py \
+    --map-file <path.npy | path.dscalar.nii> \
+    --template-cifti <path used to build the map, for BrainModelAxis> \
+    --out-png <path.png>
+```
+
+`viz/` renders any grayordinate-space map directly with nilearn (no
+Workbench/wb_view dependency). It also holds one-off Lorax-map conversion/
+derivation scripts (`convert_lorax_to_fslr59k.py`, `add_canon_lorax_derived_maps.py`)
+and `prepare_wb_view_cortical.py` for setting up a wb_view scene.
 
 ## Data Conventions
 

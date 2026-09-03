@@ -53,29 +53,14 @@ Skip logic
 If R2_{roi_a}_nc.npy and R2_{roi_b}_nc.npy both exist in the output directory,
 the run is skipped (safe for GNU parallel reruns).
 
-Usage
+Usage (see README for the full mode/input-mode matrix)
 -----
-  # Group average (disk mode)
   python cf_modeling/02_fit_cf_model.py \\
       --mode group_average --roi-a 3b --roi-b V1 \\
       --preprocessed-dir /path/to/preprocessed/average_sub/sg_psc \\
       --fmri-suffix sg_psc \\
       --output-base /path/to/outputs/cf_modeling \\
       --template-cifti /path/to/.../group_average_sg_psc_cortex_59k.dtseries.nii
-
-  # Per-subject (disk mode)
-  python cf_modeling/02_fit_cf_model.py \\
-      --mode per_subject --roi-a A5 --roi-b FFC --subject 100610 \\
-      --preprocessed-dir /path/to/preprocessed/sg_psc \\
-      --fmri-suffix sg_psc \\
-      --output-base /path/to/outputs/cf_modeling
-
-  # Streaming (per_subject only)
-  python cf_modeling/02_fit_cf_model.py \\
-      --mode per_subject --roi-a A5 --roi-b FFC --subject 100610 \\
-      --raw-dir /path/to/raw_ciftis \\
-      --output-base /path/to/outputs/cf_modeling \\
-      [--sg-filter] [--psc] [--no-gsr]
 """
 
 import argparse

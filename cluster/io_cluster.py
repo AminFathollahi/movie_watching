@@ -106,6 +106,34 @@ def get_segment_metadata(timing_df, run_trs: np.ndarray, bin_sec: float, tr: flo
     return pd.DataFrame(rows)
 
 
+def _get_distinct_colormap(n_colors: int):
+    """Return a list of n_colors distinct RGBA tuples.
+    
+    Uses a combination of matplotlib's qualitative colormaps (tab20, tab20b, tab20c)
+    for up to 60 colors, then falls back to a golden-angle HSV sequence for more.
+    """
+    import colorsys
+    import matplotlib
+    
+    colors = []
+    qualitative_cmaps = ["tab20", "tab20b", "tab20c"]
+    
+    for cmap_name in qualitative_cmaps:
+        cmap = matplotlib.colormaps[cmap_name]
+        for i in range(cmap.N):
+            if len(colors) >= n_colors:
+                return colors
+            r, g, b, _ = cmap(i / cmap.N)
+            colors.append((r, g, b, 1.0))
+    
+    for i in range(n_colors - len(colors)):
+        hue = (i * 0.618033988749895) % 1.0
+        r, g, b = colorsys.hsv_to_rgb(hue, 0.7, 0.9)
+        colors.append((r, g, b, 1.0))
+    
+    return colors
+
+
 def write_dlabel(labels_1d: np.ndarray, template_path: str, out_path: str,
                  network_rgba: dict = None, label_names: dict = None,
                  map_name: str = "cluster_labels") -> np.ndarray:
@@ -114,7 +142,8 @@ def write_dlabel(labels_1d: np.ndarray, template_path: str, out_path: str,
     Noise / unassigned vertices (label == -1) are remapped to key 0
     ("unassigned", fully transparent). Every other unique label value is
     remapped to consecutive keys 1..G in sorted order and given a distinct
-    color (matplotlib tab20, cycling via HSV beyond 20 networks).
+    color from a combined qualitative colormap (tab20+tab20b+tab20c for up to
+    60 networks, then golden-angle HSV sequence).
 
     Parameters
     ----------
@@ -129,35 +158,110 @@ def write_dlabel(labels_1d: np.ndarray, template_path: str, out_path: str,
     -------
     remapped : (V,) int32 — the label vector actually written (0 = unassigned)
     """
+    import colorsys
     import matplotlib
 
-    labels_1d = np.asarray(labels_1d).astype(int)
+    labels_1d = np.asarray(labels_1d)
+    if labels_1d.ndim != 1:
+        raise ValueError(f"labels_1d must be one-dimensional, got shape {labels_1d.shape}")
+    if not np.isfinite(labels_1d).all():
+        raise ValueError("labels_1d contains NaN or infinite values")
+    if not np.equal(labels_1d, np.floor(labels_1d)).all():
+        raise ValueError("labels_1d must contain integer-valued cluster labels")
+    labels_1d = labels_1d.astype(int)
     uniq = sorted(int(u) for u in np.unique(labels_1d) if u != -1)
     key_map = {-1: 0}
     key_map.update({orig: i + 1 for i, orig in enumerate(uniq)})
     remapped = np.array([key_map[v] for v in labels_1d], dtype=np.int32)
 
+    max_key = max(key_map.values())
+    distinct_colors = _get_distinct_colormap(max_key)
+    
     label_table = {0: ((label_names or {}).get(0, "unassigned"), (0.0, 0.0, 0.0, 0.0))}
-    cmap = matplotlib.colormaps["tab20"]
     for orig, key in key_map.items():
         if key == 0:
             continue
         if network_rgba is not None and key in network_rgba:
             rgba = network_rgba[key]
         else:
-            r, g, b, a = cmap((key - 1) % 20 / 20.0)
-            rgba = (r, g, b, 1.0)
+            rgba = distinct_colors[key - 1]
         name = (label_names or {}).get(key, f"network_{key}")
         label_table[key] = (name, rgba)
 
-    bm_axis = get_bm_axis(template_path)
-    label_axis = nib.cifti2.LabelAxis([map_name], label_table)
+    template = nib.load(str(template_path))
+    bm_axis = template.header.get_axis(1)
+    if len(bm_axis) != remapped.size:
+        raise ValueError(
+            f"Label vector has {remapped.size} entries but template BrainModelAxis "
+            f"has {len(bm_axis)}"
+        )
+    label_axis = nib.cifti2.LabelAxis([map_name], [label_table])
     header = nib.cifti2.Cifti2Header.from_axes((label_axis, bm_axis))
     arr = remapped.reshape(1, -1)
-    img = nib.Cifti2Image(arr, header=header)
-    nib.save(img, out_path)
+    img = nib.Cifti2Image(arr, header=header, nifti_header=template.nifti_header)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    nib.save(img, str(out_path))
 
     log.info(f"write_dlabel: V={remapped.shape[0]}  keys={sorted(label_table.keys())}  "
+             f"key_map(-1->0, orig->key)={key_map}")
+    return remapped
+
+
+def write_channel_labels_csv(labels_1d: np.ndarray, channel_ids: list[str], out_path: str,
+                             label_names: dict = None, map_name: str = "cluster_labels") -> np.ndarray:
+    """Write a 1-D integer label vector as a per-channel CSV.
+
+    Channel analogue of :func:`write_dlabel`: same noise/unassigned (-1 -> 0)
+    and consecutive 1..G remapping, but channels have no CIFTI BrainModelAxis
+    to attach labels to, so this writes a plain table instead.
+
+    Parameters
+    ----------
+    labels_1d    : (C,) int — raw cluster labels, noise/unassigned = -1
+    channel_ids  : (C,) str — one identifier per channel, same order as labels_1d
+    out_path     : destination .csv path
+    label_names  : optional {remapped_key: name} override (default "cluster_{key}")
+    map_name     : recorded in a constant column for provenance when concatenating files
+
+    Returns
+    -------
+    remapped : (C,) int32 — the label vector actually written (0 = unassigned)
+    """
+    import pandas as pd
+
+    labels_1d = np.asarray(labels_1d)
+    if labels_1d.ndim != 1:
+        raise ValueError(f"labels_1d must be one-dimensional, got shape {labels_1d.shape}")
+    if len(channel_ids) != labels_1d.shape[0]:
+        raise ValueError(
+            f"channel_ids has {len(channel_ids)} entries but labels_1d has {labels_1d.shape[0]}"
+        )
+    if not np.isfinite(labels_1d).all():
+        raise ValueError("labels_1d contains NaN or infinite values")
+    if not np.equal(labels_1d, np.floor(labels_1d)).all():
+        raise ValueError("labels_1d must contain integer-valued cluster labels")
+    labels_1d = labels_1d.astype(int)
+    uniq = sorted(int(u) for u in np.unique(labels_1d) if u != -1)
+    key_map = {-1: 0}
+    key_map.update({orig: i + 1 for i, orig in enumerate(uniq)})
+    remapped = np.array([key_map[v] for v in labels_1d], dtype=np.int32)
+    names = {0: (label_names or {}).get(0, "unassigned")}
+    names.update({key: (label_names or {}).get(key, f"cluster_{key}") for key in range(1, max(key_map.values()) + 1)})
+
+    df = pd.DataFrame({
+        "channel_index": np.arange(labels_1d.size),
+        "channel_id": channel_ids,
+        "raw_label": labels_1d,
+        "cluster_key": remapped,
+        "cluster_name": [names[key] for key in remapped],
+        "map_name": map_name,
+    })
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False)
+
+    log.info(f"write_channel_labels_csv: C={remapped.shape[0]}  keys={sorted(names.keys())}  "
              f"key_map(-1->0, orig->key)={key_map}")
     return remapped
 

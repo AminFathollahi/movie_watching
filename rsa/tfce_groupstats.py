@@ -1,5 +1,5 @@
 """
-rsa/group_stats.py
+rsa/tfce_groupstats.py
 ======================
 Aggregate per-subject searchlight RSA maps into group-level statistics.
 
@@ -60,22 +60,7 @@ Also writes summary.json to the same directory.
 Runtime note: TFCE on ~59k vertices with 5000 permutations typically takes
 1–4 hours. Use --n-jobs -1 to parallelise across all available CPU cores.
 
-Usage:
-  python group_stats.py \\
-    --output-dir  /path/to/rsa/sg_psc_gsr \\
-    --model       pe-av-small-16-frame \\
-    --modality    av \\
-    --k           150 \\
-    --bin-sec     2.0 \\
-    --delay-sec   5.0 \\
-    --method      spearman \\
-    --fmri-tag    sg_psc_gsr \\
-    --template-cifti /path/to/group_average_sg_psc_cortex_59k.dtseries.nii \\
-    --left-surface   /path/to/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \\
-    --right-surface  /path/to/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \\
-    --workbench      /opt/workbench/bin_linux64/wb_command \\
-    --n-permutations 5000 \\
-    --n-jobs -1
+Usage: see run_peav_partial_analysis.sh.
 """
 
 import argparse

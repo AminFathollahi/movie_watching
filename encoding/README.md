@@ -44,7 +44,7 @@ All parameters are set in `analysis.sh`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `BIN_SEC` | 5.0 | Temporal bin size (seconds) |
+| `BIN_SECS` | 2.0 | Space-separated temporal bin sizes to sweep (seconds) |
 | `SKIP_SEC` | `$BIN_SEC` | Window stride in seconds (default = BIN_SEC, no overlap) |
 | `DELAY_SEC` | 5.0 | Hemodynamic delay applied at analysis time |
 | `HRF` | `false` | Convolve embeddings with SPM HRF instead of boxcar delay |
@@ -101,9 +101,27 @@ When `HRF=true`: set `--delay-sec 0` (no boxcar shift); embeddings are convolved
 
 ```
 {OUTPUT_DIR}/{subject}/{model}/{config_label}/
-    encoding_r_v.dscalar.nii     # Pearson r map — visual modality
-    encoding_r_a.dscalar.nii     # Pearson r map — auditory modality
-    encoding_r_av.dscalar.nii    # Pearson r map — audiovisual modality
+    encoding_pearson_r_visual.dscalar.nii       # Pearson r — visual
+    encoding_pearson_r_audio.dscalar.nii        # Pearson r — auditory
+    encoding_pearson_r_audiovisual.dscalar.nii  # AV r + derived maps below
+    encoding_pearson_r_audiovisual_conjunction.mask.nii
 ```
+
+For native AV models with matched `a`, `v`, and `av` representations, the
+group-average `encoding_pearson_r_audiovisual.dscalar.nii` contains six named maps:
+
+- `encoding_pearson_r_audiovisual`: held-out Pearson r for the joint AV representation.
+- `av_superadditivity`: `AV - (A + V)`.
+- `av_conjunction`: AV values inside `(AV > 0) & (AV > A) & (AV > V)`, zero elsewhere.
+- `stim_r`: `encoding_pearson_r_audiovisual` retained only where the 5-second-delay normalized
+  stimulus-regressor correlation map is positive.
+- `stim_superadditivity`: `av_superadditivity` under the same binary mask.
+- `stim_conjunction`: `av_conjunction` under the same binary mask.
+
+The stimulus regressor is binarized (`stimulus > 0`) before multiplication, so
+surviving values are unchanged rather than weighted by regressor magnitude.
+The standalone `.mask.nii` contains the binary `av_conjunction_mask`. Training
+embeddings are z-scored per run and the same training mean/standard deviation
+are applied to that run's held-out prediction embeddings (no test-data fitting).
 
 `config_label` encodes parameters: `delay{D}s_norm_bin{B}s_skip{S}s` or `hrf_norm_bin{B}s_skip{S}s`.

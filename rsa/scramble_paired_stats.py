@@ -240,6 +240,15 @@ def main():
                                              fname_pattern, args.n_blocks)
     if intact_block is not None and scrambled_block is not None \
             and intact_block.shape[0] == n_subs and scrambled_block.shape[0] == n_subs:
+        # Difference BEFORE bootstrapping, deliberately: intact/scrambled share the
+        # same subject's same-block brain data (only the model-side AV pairing
+        # differs), so subject- and block-level noise must cancel in the diff.
+        # Passing this single pre-differenced array to corrected_2factor_bootstrap
+        # makes every subject/block draw apply identically to both conditions
+        # (joint resampling). Bootstrapping intact and scrambled separately and
+        # summing their variances would double-count that shared noise instead of
+        # cancelling it, inflating the null and silently destroying power -- see
+        # tests/test_paired_bootstrap_resampling.py for a synthetic demonstration.
         diff_block = intact_block - scrambled_block
         have_blocks = True
         log.info(f"Block files found ({args.n_blocks} blocks) -- running corrected "

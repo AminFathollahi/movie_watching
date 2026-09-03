@@ -149,6 +149,20 @@ MODELS: dict[str, dict] = {
         "description": "Topo-Omni cortical sheet, layer 18, last-token joint-AV readout"},
     "topoomni_layer27_sheet_lt": {"modalities": ["av"], "joint": True,
         "description": "Topo-Omni cortical sheet, layer 27, last-token joint-AV readout"},
+    # Legacy bare probes retained by the natural-AV group-average sweep. Their
+    # A/V/AV embeddings share the thinker or sheet space.
+    "omni3b_layer1": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker hidden state, legacy bare layer-1 probe"},
+    "omni3b_layer35": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Qwen2.5-Omni-3B thinker hidden state, legacy bare layer-35 probe"},
+    "topoomni_layer1": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, legacy bare layer-1 probe"},
+    "topoomni_layer35": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni thinker hidden state, legacy bare layer-35 probe"},
+    "topoomni_layer1_sheet": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni cortical sheet, legacy bare layer-1 probe"},
+    "topoomni_layer35_sheet": {"modalities": ["av", "a", "v"], "joint": True,
+        "description": "Topo-Omni cortical sheet, legacy bare layer-35 probe"},
     # ── nvidia/omni-embed-nemotron-3b ("NV-QwenOmni-Embed-3B-v1") -- a third
     # member of the Qwen2.5-Omni-3B-Thinker lineage (same base as omni3b/
     # topoomni above), but purpose-built as a contrastively-trained retrieval
@@ -169,6 +183,14 @@ MODELS: dict[str, dict] = {
         "description": "Omni-Embed-Nemotron-3B, layer 27 — late AV fusion (depth-sweep probe)"},
     "nemotron_layer36_mp": {"modalities": ["av", "a", "v"], "joint": True,
         "description": "Omni-Embed-Nemotron-3B, layer 36 (true final layer) — native contrastively-trained AV retrieval embedding"},
+    "nemotron_layer9_lt": {"modalities": ["av"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 9, last-token joint-AV readout"},
+    "nemotron_layer18_lt": {"modalities": ["av"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 18, last-token joint-AV readout"},
+    "nemotron_layer27_lt": {"modalities": ["av"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 27, last-token joint-AV readout"},
+    "nemotron_layer36_lt": {"modalities": ["av"], "joint": True,
+        "description": "Omni-Embed-Nemotron-3B, layer 36, last-token joint-AV readout"},
     # ── Penultimate-layer additions (thinker layer 35 of 36, second-to-last).
     # omni3b/topoomni use their own 0-indexed decoder_layers/cortical_adaptors
     # convention (layer{i}=index i directly), so penultimate is index 34,
@@ -305,14 +327,97 @@ def _is_native_av(model: str) -> bool:
 
 NATIVE_AV_MODELS: list[str] = [m for m in MODELS if _is_native_av(m)]
 
+
+LEGACY_BARE_AV_MODELS: list[str] = [
+    "omni3b_layer1",
+    "omni3b_layer35",
+    "topoomni_layer1",
+    "topoomni_layer35",
+    "topoomni_layer1_sheet",
+    "topoomni_layer35_sheet",
+]
+
+
+# Models with all inputs needed by the partial-correlation, linear-residual,
+# and projection-residual analyses. ImageBind is excluded because it lacks a
+# dimension-compatible own A/V pair for projection.
+RESIDUALIZED_AV_MODELS: list[str] = [
+    "pe-av-small-16-frame",
+    "cav-mae-sync",
+    *LEGACY_BARE_AV_MODELS,
+    *(
+        f"{family}_layer{layer}{sheet}_{readout}"
+        for family, layers, sheets in (
+            ("omni3b", (9, 18, 27, 34), ("",)),
+            ("topoomni", (9, 18, 27, 34), ("", "_sheet")),
+            ("nemotron", (9, 18, 27, 35, 36), ("",)),
+        )
+        for layer in layers
+        for sheet in sheets
+        for readout in ("mp", "lt")
+    ),
+]
+
+
+# ── Descriptive AV comparison baselines ──────────────────────────────────────
+# Group-average AV searchlight maps use three audio/video reference pairs:
+#
+#   own          PE-AV/CAV-MAE cls-a + cls-v; for the Omni families, the
+#                pre-fusion audio/visual encoder probes (not thinker a/v).
+#   unimodal     AudioMAE + VideoMAEv2.
+#   text_aligned WavLM + PE-Core (the project's language/semantic-aligned
+#                specialist pair).
+#
+# Shared by dependency scheduling and derived-map construction.
+AV_DERIVED_COMMON_BASELINES: dict[str, tuple[tuple[str, str], tuple[str, str]]] = {
+    "unimodal": (("audiomae", "a"), ("videomaev2-large", "v")),
+    "text_aligned": (("wavlm-large", "a"), ("pe-core-l14", "v")),
+}
+
+
+def av_derived_baselines(
+    model: str,
+) -> dict[str, tuple[tuple[str, str], tuple[str, str]]] | None:
+    """Return the three A/V reference pairs for a natural joint-AV model.
+
+    ``None`` means that *model* is not one of the natural AV targets covered by
+    the descriptive maps. In particular, scramble, dummy-modality, and
+    residual pseudo-models are intentionally excluded.
+    """
+    excluded = (
+        "_avscramble",
+        "_clsav_from_",
+        "_linear_resid",
+        "_projection_resid",
+    )
+    if any(marker in model for marker in excluded):
+        return None
+
+    if model in {"pe-av-small-16-frame", "cav-mae-sync"}:
+        own_model = model
+    else:
+        family = next(
+            (name for name in ("omni3b", "topoomni", "nemotron")
+             if model.startswith(f"{name}_layer")),
+            None,
+        )
+        if family is None:
+            return None
+        own_model = f"{family}_encoder_penultimate"
+
+    return {
+        "own": ((own_model, "a"), (own_model, "v")),
+        **AV_DERIVED_COMMON_BASELINES,
+    }
+
 # ── Auto-derived residual pseudo-models ───────────────────────────────────────
 # _linear_resid pseudo-models are generated on disk by
-# notebooks/feature_extraction/compute_linear_residual_embeddings.py for every
-# NATIVE_AV_MODELS entry (ridge residual after regressing out AudioMAE(a) +
-# VideoMAEv2-Large(v)). Registered here purely for documentation/discoverability
+# notebooks/feature_extraction/compute_linear_residual_embeddings.py for the
+# supported residual-analysis roster (ridge residual after regressing out
+# AudioMAE(a) + VideoMAEv2-Large(v)). Registered here for discoverability
 # -- rsa/searchlight.py, rsa/partial_rsa.py, and encoding/encoding.py only need
 # the .npy file to exist at the standard emb_path() location, not a MODELS entry.
-for _m in list(NATIVE_AV_MODELS):
+for _m in dict.fromkeys([*NATIVE_AV_MODELS, *RESIDUALIZED_AV_MODELS]):
     MODELS[f"{_m}_av_linear_resid"] = {
         "modalities": ["av"], "joint": True,
         "description": (
@@ -545,6 +650,33 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
             "specialist baseline."
         ),
     ),
+    # ── Single-nuisance decomposition of partial_corr_pe-av-small-16-frame
+    # (which regresses out AudioMAE + VideoMAEv2 TOGETHER). These two runs
+    # regress out each specialist RDM ALONE, so the three partial maps
+    # together show whether the joint (both-together) partial correlation is
+    # just the intersection of the two single-nuisance partials or removes
+    # additional shared variance.
+    "partial_corr_pe-av-small-16-frame_audiomae_only": PartialRSARun(
+        target   = ("pe-av-small-16-frame", "av"),
+        nuisance = [("audiomae", "a")],
+        label    = "pe-av-small-16-frame_av_partial_corr_audiomae_only",
+        description = (
+            "PE-AV (small 16-frame) AV joint embedding, controlling for AudioMAE "
+            "(audio) alone — isolates unique variance beyond a unimodal-audio "
+            "specialist RDM without also regressing out video structure."
+        ),
+    ),
+    "partial_corr_pe-av-small-16-frame_videomae_only": PartialRSARun(
+        target   = ("pe-av-small-16-frame", "av"),
+        nuisance = [("videomaev2-large", "v")],
+        label    = "pe-av-small-16-frame_av_partial_corr_videomae_only",
+        description = (
+            "PE-AV (small 16-frame) AV joint embedding, controlling for "
+            "VideoMAEv2-Large (video) alone — isolates unique variance beyond a "
+            "unimodal-video specialist RDM without also regressing out audio "
+            "structure."
+        ),
+    ),
     # ── Best-additive integration contrast, generalized across every
     # native-AV model that has separable _a/_v/_av embeddings at bin5s_skip5s.
     # (imagebind is 2s-only — no _a/_v at 5s — so it is intentionally excluded here.)
@@ -666,11 +798,11 @@ PARTIAL_RSA_RUNS: dict[str, PartialRSARun] = {
     "integration_topoomni_layer27_sheet_lasttoken_clsav_from_v": _lasttoken_dummy_integration_run("topoomni_layer27_sheet", "v"),
 }
 
-# ── Cross-baseline partial correlation, one entry per native AV model.
+# ── Cross-baseline partial correlation, one entry per supported AV model.
 # name tag: _partial_corr.
 PARTIAL_RSA_RUNS.update({
     f"partial_corr_{m}": _cross_baseline_partial_corr_run(m)
-    for m in NATIVE_AV_MODELS
+    for m in dict.fromkeys([*NATIVE_AV_MODELS, *RESIDUALIZED_AV_MODELS])
 })
 
 

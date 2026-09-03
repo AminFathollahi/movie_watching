@@ -1,13 +1,12 @@
-"""
-rsa/delta_rho.py
-================
-Post-hoc Δρ analysis: measures how much a target RSA model exceeds its
-best-performing baseline at every cortical vertex.
+"""Maximum-unimodal RSA contrast.
 
-  Δρ(v) = ρ_target(v) − max(ρ_baseline_1(v), ρ_baseline_2(v), ...)
+Measures how much a joint AV RSA model exceeds its best-performing
+audio-only or video-only reference at every cortical vertex.
+
+  max_uni(v) = ρ_AV(v) − max(ρ_A(v), ρ_V(v))
 
 Per-subject rho maps are loaded for every model/modality, aligned to the
-common subject set, and Δρ is computed per subject before group inference
+common subject set, and the contrast is computed per subject before group inference
 (one-sample t-test + BH-FDR). This gives proper statistics on the advantage
 rather than just subtracting group means.
 
@@ -21,13 +20,13 @@ Cross-architecture unimodal:
   --target pe-av-small-16-frame av
   --baselines audiomae a  videomaev2-large v
 
-Bimodal-with-text baseline:
+Text-aligned unimodal references:
   --target pe-av-small-16-frame av
-  --baselines pe-av-small-16-frame avt
+  --baselines wavlm-large a pe-core-l14 v
 
 Usage
 -----
-python rsa/delta_rho.py \\
+python rsa/max_uni.py \\
     --output-dir /path/to/searchlight_rsa_output \\
     --target pe-av-small-16-frame av \\
     --baselines pe-av-small-16-frame a pe-av-small-16-frame v \\
@@ -38,12 +37,12 @@ python rsa/delta_rho.py \\
 
 Output CIFTI maps
 -----------------
-  delta_rho     — group mean Δρ
+  max_uni       — group mean AV-minus-maximum-unimodal contrast
   rho_target    — group mean ρ for the target model
-  rho_max_base  — vertex-wise maximum over baseline group mean ρ maps
-  t_stat        — one-sample t on per-subject Δρ
-  sigmap_uncorr — sign(Δρ) × −log10(p_uncorr)
-  sigmap_fdr    — sign(Δρ) × −log10(p_fdr)   [BH-FDR]
+  rho_max_uni   — vertex-wise maximum over unimodal group mean ρ maps
+  t_stat        — one-sample t on the per-subject contrast
+  sigmap_uncorr — sign(max_uni) × −log10(p_uncorr)
+  sigmap_fdr    — sign(max_uni) × −log10(p_fdr)   [BH-FDR]
 
 A binary fdr_mask is saved as a companion dscalar.
 """
@@ -55,6 +54,7 @@ import re
 import sys
 from pathlib import Path
 
+import nibabel as nib
 import numpy as np
 from scipy import stats
 
@@ -79,10 +79,9 @@ log = logging.getLogger(__name__)
 # =============================================================================
 
 # Each entry: target (model, modality) and baselines [(model, modality), ...]
-# Mirrors the philosophy of PARTIAL_RSA_RUNS in model_registry.py but operates
-# on already-computed per-subject rho maps (no searchlight re-run needed).
+# These comparisons operate on existing per-subject RSA maps.
 
-DELTA_RHO_RUNS: dict[str, dict] = {
+MAX_UNI_RUNS: dict[str, dict] = {
     # Within-architecture: does the joint embedding exceed the better of its
     # own audio-only or video-only decoder?
     "within_architecture_unimodal": {
@@ -122,19 +121,19 @@ DELTA_RHO_RUNS: dict[str, dict] = {
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Δρ = ρ_target − max(ρ_baselines): post-hoc advantage map.",
+        description="AV RSA minus the maximum audio-only or video-only RSA.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=(
             "Predefined runs (--run): "
-            + "  ".join(f"{k}: {v['description']}" for k, v in DELTA_RHO_RUNS.items())
+            + "  ".join(f"{k}: {v['description']}" for k, v in MAX_UNI_RUNS.items())
         ),
     )
     p.add_argument("--output-dir",    required=True,
                    help="Root RSA output directory containing per-subject subdirs.")
     # Either use a predefined run OR specify target/baselines manually
     grp = p.add_mutually_exclusive_group(required=True)
-    grp.add_argument("--run",         choices=list(DELTA_RHO_RUNS.keys()),
-                     help="Predefined run key (see DELTA_RHO_RUNS above).")
+    grp.add_argument("--run",         choices=list(MAX_UNI_RUNS.keys()),
+                     help="Predefined maximum-unimodal comparison.")
     grp.add_argument("--target",      nargs=2, metavar=("MODEL", "MODALITY"),
                      help="Target model and modality.")
     p.add_argument("--baselines",     nargs="+", metavar="TOKEN",
@@ -159,7 +158,7 @@ def parse_args():
 
     # Resolve predefined run into target/baselines
     if args.run is not None:
-        cfg = DELTA_RHO_RUNS[args.run]
+        cfg = MAX_UNI_RUNS[args.run]
         args.target    = list(cfg["target"])
         args.baselines = [tok for pair in cfg["baselines"] for tok in pair]
         log.info(f"Run {args.run}: {cfg['description']}")
@@ -352,6 +351,73 @@ def _fdr_sigmap(p_uncorr, sign_vec, alpha):
     return sigmap_fdr, fdr_mask, int(fdr_mask.sum())
 
 
+LEGACY_MAP_NAMES = {
+    "delta_rho": "max_uni",
+    "rho_max_base": "rho_max_uni",
+    "t_c2f_delta": "t_c2f_max_uni",
+    "sigmap_c2f_delta": "sigmap_c2f_max_uni",
+    "fdr_c2f_delta_mask": "fdr_c2f_max_uni_mask",
+}
+LEGACY_SUMMARY_KEYS = {
+    "delta_rho_range": "max_uni_range",
+    "n_sig_c2f_delta": "n_sig_c2f_max_uni",
+    "rho_max_base_range": "rho_max_uni_range",
+}
+
+
+def _rename_cifti_maps(path: Path) -> None:
+    """Replace legacy scalar labels in one CIFTI without changing its data."""
+    image = nib.load(str(path))
+    scalar_axis = image.header.get_axis(0)
+    names = list(scalar_axis.name)
+    renamed = [LEGACY_MAP_NAMES.get(name, name) for name in names]
+    if renamed == names:
+        return
+    data = np.asanyarray(image.dataobj).copy()
+    new_axis = nib.cifti2.ScalarAxis(renamed, list(scalar_axis.meta))
+    header = nib.cifti2.Cifti2Header.from_axes(
+        (new_axis, image.header.get_axis(1))
+    )
+    migrated = nib.Cifti2Image(
+        data,
+        header=header,
+        nifti_header=image.nifti_header,
+    )
+    nib.save(migrated, str(path))
+
+
+def migrate_legacy_artifacts(
+    out_dir: Path,
+    legacy_stem: str,
+    current_stem: str,
+    n_subs: int,
+) -> list[Path]:
+    """Rename legacy maximum-unimodal files, scalar labels, and JSON keys."""
+    suffixes = (
+        ".dscalar.nii",
+        "_fdr_mask.dscalar.nii",
+        "_fdr_c2f_mask.dscalar.nii",
+        "_summary.json",
+    )
+    migrated: list[Path] = []
+    for suffix in suffixes:
+        old_path = out_dir / f"{legacy_stem}_{n_subs}subs{suffix}"
+        new_path = out_dir / f"{current_stem}_{n_subs}subs{suffix}"
+        if not old_path.exists() or new_path.exists():
+            continue
+        old_path.replace(new_path)
+        if new_path.name.endswith(".dscalar.nii"):
+            _rename_cifti_maps(new_path)
+        else:
+            summary = json.loads(new_path.read_text())
+            for old_key, new_key in LEGACY_SUMMARY_KEYS.items():
+                if old_key in summary:
+                    summary[new_key] = summary.pop(old_key)
+            new_path.write_text(json.dumps(summary, indent=2))
+        migrated.append(new_path)
+    return migrated
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -367,7 +433,7 @@ def main():
     target_label    = f"{args.target[0]}/{args.target[1]}"
 
     log.info("=" * 70)
-    log.info(f"Δρ analysis")
+    log.info("Maximum-unimodal RSA contrast")
     log.info(f"  target   : {target_label}")
     log.info(f"  baselines: {baseline_labels}")
     log.info(f"  k={args.k}  bin={args.bin_sec}s  skip={args.skip_sec}s  "
@@ -386,7 +452,8 @@ def main():
     config    = f"k{args.k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{args.method}"
 
     # Placeholder n_subs name — resolved once stacks loaded
-    out_stem  = f"delta_rho_{tgt_slug}_vs_{base_slug}_{config}"
+    out_stem = f"max_uni_{tgt_slug}_vs_{base_slug}_{config}"
+    legacy_out_stem = f"delta_rho_{tgt_slug}_vs_{base_slug}_{config}"
 
     # ── Load rho stacks ───────────────────────────────────────────────────────
     log.info("Loading target rho maps ...")
@@ -416,6 +483,12 @@ def main():
     )
 
     n_subs, n_verts = target_stack.shape
+
+    migrated = migrate_legacy_artifacts(
+        out_dir, legacy_out_stem, out_stem, n_subs
+    )
+    for path in migrated:
+        log.info("Migrated legacy artifact: %s", path.name)
 
     # ── Try to load block stacks for 2-factor bootstrap ───────────────────────
     have_blocks = False
@@ -461,32 +534,35 @@ def main():
         log.info(f"Already computed: {out_path.name} — skipping.")
         return
 
-    # ── Per-subject Δρ ────────────────────────────────────────────────────────
+    # Per-subject contrast
     # max_baseline shape: (n_subs, n_verts)
     max_baseline = baseline_stacks[0].copy()
     for bs in baseline_stacks[1:]:
         np.maximum(max_baseline, bs, out=max_baseline)
 
-    delta_stack = target_stack - max_baseline      # (n_subs, n_verts), float32
+    max_uni_stack = target_stack - max_baseline
 
-    # ── Per-subject per-block Δρ (for 2-factor bootstrap) ────────────────────
-    delta_block_stack = None
+    # Per-subject block contrasts
+    max_uni_block_stack = None
     if have_blocks:
         max_base_block = baseline_block_stacks[0].copy()
         for bs_blk in baseline_block_stacks[1:]:
             np.maximum(max_base_block, bs_blk, out=max_base_block)
-        delta_block_stack = target_block_stack - max_base_block  # (n_subs, n_blocks, n_verts)
+        max_uni_block_stack = target_block_stack - max_base_block
 
     log.info(f"n_subjects = {n_subs}  n_verts = {n_verts:,}")
-    log.info(f"mean Δρ across subjects & vertices: {delta_stack.mean():.4f}")
+    log.info(
+        "Mean maximum-unimodal contrast across subjects and vertices: %.4f",
+        max_uni_stack.mean(),
+    )
 
     # ── Group means ───────────────────────────────────────────────────────────
-    mean_delta     = delta_stack.mean(axis=0).astype(np.float32)
+    mean_max_uni   = max_uni_stack.mean(axis=0).astype(np.float32)
     mean_target    = target_stack.mean(axis=0).astype(np.float32)
     mean_max_base  = max_baseline.mean(axis=0).astype(np.float32)
 
-    # ── One-sample t-test on Δρ (H₀: mean Δρ = 0) ────────────────────────────
-    D = delta_stack.astype(np.float64)
+    # One-sample test (H₀: mean contrast = 0)
+    D = max_uni_stack.astype(np.float64)
     t_vals, p_two = stats.ttest_1samp(D, popmean=0.0, axis=0)
     t_vals = t_vals.astype(np.float32)
 
@@ -495,55 +571,65 @@ def main():
                         1.0 - p_two / 2.0).astype(np.float32)
 
     eps = np.finfo(np.float32).tiny
-    sign_delta    = np.sign(mean_delta).astype(np.float32)
-    sigmap_uncorr = (sign_delta *
+    sign_max_uni  = np.sign(mean_max_uni).astype(np.float32)
+    sigmap_uncorr = (sign_max_uni *
                      (-np.log10(np.maximum(p_uncorr, eps)))).astype(np.float32)
 
-    sigmap_fdr, fdr_mask, n_sig_fdr = _fdr_sigmap(p_uncorr, sign_delta, args.alpha)
+    sigmap_fdr, fdr_mask, n_sig_fdr = _fdr_sigmap(
+        p_uncorr, sign_max_uni, args.alpha
+    )
 
-    log.info(f"Δρ range: [{mean_delta.min():.4f}, {mean_delta.max():.4f}]")
-    log.info(f"Verts with Δρ > 0: {(mean_delta > 0).sum():,} / {n_verts:,}")
+    log.info(
+        "Maximum-unimodal range: [%.4f, %.4f]",
+        mean_max_uni.min(), mean_max_uni.max(),
+    )
+    log.info(
+        "Vertices with maximum-unimodal contrast > 0: %s / %s",
+        f"{(mean_max_uni > 0).sum():,}", f"{n_verts:,}",
+    )
     log.info(f"Uncorrected p<{args.alpha}: {(p_uncorr < args.alpha).sum():,} / {n_verts:,}")
     log.info(f"BH-FDR p<{args.alpha}: {n_sig_fdr:,} / {n_verts:,}")
 
-    # ── Corrected 2-factor bootstrap on Δρ (Schütt et al. 2023, Eq. 5) ──────
-    n_sig_c2f_delta = 0
-    fdr_c2f_delta_mask = None
-    if have_blocks and delta_block_stack is not None:
+    # Corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)
+    n_sig_c2f_max_uni = 0
+    fdr_c2f_max_uni_mask = None
+    if have_blocks and max_uni_block_stack is not None:
         log.info(
-            f"Running corrected 2-factor bootstrap on Δρ "
+            "Running corrected 2-factor bootstrap on the maximum-unimodal contrast "
             f"(n_boot={args.n_bootstrap}, n_blocks={args.n_blocks}) ..."
         )
         var_c2f, var_subj_boot, var_block_boot = corrected_2factor_bootstrap(
-            delta_stack, delta_block_stack, n_boot=args.n_bootstrap
+            max_uni_stack, max_uni_block_stack, n_boot=args.n_bootstrap
         )
         se_c2f = np.sqrt(np.maximum(var_c2f, 0.0)).astype(np.float64)
         # df = min(N_s-1, N_c-1) per Schütt et al. 2023 §5.1.4 (conservative choice)
         df_c2f = max(min(n_subs - 1, args.n_blocks - 1), 1)
-        mean_delta_f64 = mean_delta.astype(np.float64)
+        mean_max_uni_f64 = mean_max_uni.astype(np.float64)
         safe_se = np.where(se_c2f > 0, se_c2f, 1.0)  # avoid divide-by-zero; masked below
-        t_c2f_delta = np.where(
-            se_c2f > 0, mean_delta_f64 / safe_se, 0.0
+        t_c2f_max_uni = np.where(
+            se_c2f > 0, mean_max_uni_f64 / safe_se, 0.0
         ).astype(np.float32)
-        p_two_c2f = stats.t.sf(np.abs(t_c2f_delta.astype(np.float64)), df=df_c2f) * 2.0
+        p_two_c2f = stats.t.sf(
+            np.abs(t_c2f_max_uni.astype(np.float64)), df=df_c2f
+        ) * 2.0
         p_c2f = np.where(
-            t_c2f_delta > 0, p_two_c2f / 2.0, 1.0 - p_two_c2f / 2.0
+            t_c2f_max_uni > 0, p_two_c2f / 2.0, 1.0 - p_two_c2f / 2.0
         ).astype(np.float32)
-        sigmap_c2f_delta, fdr_c2f_delta_mask, n_sig_c2f_delta = _fdr_sigmap(
-            p_c2f, np.sign(mean_delta).astype(np.float32), args.alpha
+        sigmap_c2f_max_uni, fdr_c2f_max_uni_mask, n_sig_c2f_max_uni = _fdr_sigmap(
+            p_c2f, np.sign(mean_max_uni).astype(np.float32), args.alpha
         )
         log.info(
-            f"2-factor Δρ bootstrap: df={df_c2f}, "
-            f"FDR sig verts = {n_sig_c2f_delta:,} / {n_verts:,}"
+            f"2-factor maximum-unimodal bootstrap: df={df_c2f}, "
+            f"FDR sig verts = {n_sig_c2f_max_uni:,} / {n_verts:,}"
         )
 
     # ── Save CIFTI ────────────────────────────────────────────────────────────
-    maps_list = [mean_delta, mean_target, mean_max_base, t_vals, sigmap_uncorr, sigmap_fdr]
-    map_names = ["delta_rho", "rho_target", "rho_max_base", "t_stat", "sigmap_uncorr", "sigmap_fdr"]
+    maps_list = [mean_max_uni, mean_target, mean_max_base, t_vals, sigmap_uncorr, sigmap_fdr]
+    map_names = ["max_uni", "rho_target", "rho_max_uni", "t_stat", "sigmap_uncorr", "sigmap_fdr"]
 
-    if have_blocks and delta_block_stack is not None:
-        maps_list += [t_c2f_delta, sigmap_c2f_delta]
-        map_names += ["t_c2f_delta", "sigmap_c2f_delta"]
+    if have_blocks and max_uni_block_stack is not None:
+        maps_list += [t_c2f_max_uni, sigmap_c2f_max_uni]
+        map_names += ["t_c2f_max_uni", "sigmap_c2f_max_uni"]
 
     save_cifti_multimap(np.stack(maps_list, axis=0), map_names, args.template_cifti, str(out_path))
     log.info(f"Saved: {out_path.name}")
@@ -551,12 +637,15 @@ def main():
     save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
     log.info(f"Saved FDR mask: {fdr_mask_path.name}")
 
-    if have_blocks and fdr_c2f_delta_mask is not None:
-        fdr_c2f_delta_path = out_dir / f"{out_stem}_{n_subs}subs_fdr_c2f_mask.dscalar.nii"
+    if have_blocks and fdr_c2f_max_uni_mask is not None:
+        fdr_c2f_max_uni_path = out_dir / f"{out_stem}_{n_subs}subs_fdr_c2f_mask.dscalar.nii"
         save_cifti_map(
-            fdr_c2f_delta_mask, args.template_cifti, str(fdr_c2f_delta_path), "fdr_c2f_delta_mask"
+            fdr_c2f_max_uni_mask,
+            args.template_cifti,
+            str(fdr_c2f_max_uni_path),
+            "fdr_c2f_max_uni_mask",
         )
-        log.info(f"Saved 2-factor FDR mask: {fdr_c2f_delta_path.name}")
+        log.info(f"Saved 2-factor FDR mask: {fdr_c2f_max_uni_path.name}")
 
     # ── Summary JSON ──────────────────────────────────────────────────────────
     summary = {
@@ -567,8 +656,8 @@ def main():
         "n_subjects":          n_subs,
         "n_grayordinates":     n_verts,
         "alpha":               args.alpha,
-        "delta_rho_range":     [float(mean_delta.min()), float(mean_delta.max())],
-        "frac_positive":       float((mean_delta > 0).mean()),
+        "max_uni_range":       [float(mean_max_uni.min()), float(mean_max_uni.max())],
+        "frac_positive":       float((mean_max_uni > 0).mean()),
         "max_t_stat":          float(t_vals.max()),
         "max_sigmap_uncorr":   float(sigmap_uncorr.max()),
         "max_sigmap_fdr":      float(sigmap_fdr.max()),
@@ -577,9 +666,9 @@ def main():
         "have_blocks":         have_blocks,
         "n_blocks":            args.n_blocks,
         "n_bootstrap":         args.n_bootstrap,
-        "n_sig_c2f_delta":     n_sig_c2f_delta,
+        "n_sig_c2f_max_uni":   n_sig_c2f_max_uni,
         "rho_target_range":    [float(mean_target.min()), float(mean_target.max())],
-        "rho_max_base_range":  [float(mean_max_base.min()), float(mean_max_base.max())],
+        "rho_max_uni_range":   [float(mean_max_base.min()), float(mean_max_base.max())],
         "subjects":            common_subs,
     }
 
@@ -587,7 +676,7 @@ def main():
     summary_path.write_text(json.dumps(summary, indent=2))
     log.info(f"Summary: {summary_path.name}")
     log.info(
-        f"Done. Δρ_mean={mean_delta.mean():.4f}  "
+        f"Done. max_uni_mean={mean_max_uni.mean():.4f}  "
         f"FDR sig={n_sig_fdr:,}/{n_verts:,}"
     )
 

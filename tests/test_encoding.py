@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "encoding", "shared"))
 
 import encoding_utils
-from encoding_utils import generate_leave_one_run_out
+from encoding_utils import generate_leave_one_run_out, split_embedding_array
 
 
 # =============================================================================
@@ -180,3 +180,48 @@ def test_encoding_loro_covers_all_samples():
     for _, val in generate_leave_one_run_out(n_samples, run_onsets):
         all_val |= set(val.tolist())
     assert all_val == set(range(n_samples))
+
+
+# =============================================================================
+# split_embedding_array
+# =============================================================================
+
+def test_embedding_test_data_uses_each_runs_training_normalization():
+    """Held-out clips must be transformed with their run's training stats."""
+    timing = _make_timing_df(n_videos=4, run_size=2, duration_sec=4.0)
+    embeddings = np.array(
+        [[1.0], [3.0], [4.0], [6.0], [10.0], [14.0], [16.0], [20.0]],
+        dtype=np.float32,
+    )
+
+    x_train, x_test = split_embedding_array(
+        embeddings,
+        timing,
+        test_video_ids=["2", "4"],
+        bin_sec=2.0,
+        hrf=False,
+        normalize=True,
+    )
+
+    np.testing.assert_allclose(x_train[:, 0], [-1.0, 1.0, -1.0, 1.0])
+    np.testing.assert_allclose(x_test[:, 0], [2.0, 4.0, 2.0, 4.0])
+
+
+def test_embedding_test_data_uses_each_runs_training_mean_when_demeaning():
+    timing = _make_timing_df(n_videos=4, run_size=2, duration_sec=4.0)
+    embeddings = np.array(
+        [[1.0], [3.0], [4.0], [6.0], [10.0], [14.0], [16.0], [20.0]],
+        dtype=np.float32,
+    )
+
+    x_train, x_test = split_embedding_array(
+        embeddings,
+        timing,
+        test_video_ids=["2", "4"],
+        bin_sec=2.0,
+        hrf=False,
+        normalize=False,
+    )
+
+    np.testing.assert_allclose(x_train[:, 0], [-1.0, 1.0, -2.0, 2.0])
+    np.testing.assert_allclose(x_test[:, 0], [2.0, 4.0, 4.0, 8.0])

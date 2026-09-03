@@ -74,8 +74,7 @@ from encoding.shared.encoding_utils import (
 )
 from cifti_io import (
     get_bm_axis, get_cortex_vertex_indices,
-    get_combined_map_names, merge_into_combined,
-    save_cifti_map,
+    load_named_map, save_cifti_map,
 )
 
 logging.basicConfig(
@@ -83,6 +82,13 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 log = logging.getLogger(__name__)
+
+MODALITY_LABELS = {"a": "audio", "v": "visual", "av": "audiovisual"}
+
+
+def _metric_stem(metric: str, mod: str) -> str:
+    """Return an explicit, case-independent encoding output stem."""
+    return f"encoding_{metric}_{MODALITY_LABELS[mod]}"
 
 
 # =============================================================================
@@ -144,15 +150,16 @@ def _save_group_avg_significance(r_vals, n_test, template_cifti,
     sigmap_fdr, fdr_mask, n_sig = _fdr_sigmap(p_uncorr, r_vals)
     log.info(f"  [{mod}] n_test={n_test}  FDR significant (p<0.05): {n_sig:,} / {r_vals.shape[0]:,}")
 
+    r_stem = _metric_stem("pearson_r", mod)
     save_cifti_map(sigmap_uncorr, template_cifti,
-                   str(out_root / f"encoding_r_{mod}_sigmap_uncorr.dscalar.nii"),
-                   f"encoding_r_{mod}_sigmap_uncorr")
+                   str(out_root / f"{r_stem}_sigmap_uncorr.dscalar.nii"),
+                   f"{r_stem}_sigmap_uncorr")
     save_cifti_map(sigmap_fdr,    template_cifti,
-                   str(out_root / f"encoding_r_{mod}_sigmap_fdr.dscalar.nii"),
-                   f"encoding_r_{mod}_sigmap_fdr")
+                   str(out_root / f"{r_stem}_sigmap_fdr.dscalar.nii"),
+                   f"{r_stem}_sigmap_fdr")
 
-    fdr_mask_path = out_root / f"encoding_r_{mod}_fdr_mask.dscalar.nii"
-    save_cifti_map(fdr_mask, template_cifti, str(fdr_mask_path), f"encoding_r_{mod}_fdr_mask")
+    fdr_mask_path = out_root / f"{r_stem}_fdr_mask.dscalar.nii"
+    save_cifti_map(fdr_mask, template_cifti, str(fdr_mask_path), f"{r_stem}_fdr_mask")
     log.info(f"  [{mod}] Saved sigmap_uncorr, sigmap_fdr, fdr_mask")
 
     workbench  = getattr(args, "workbench", None)
@@ -172,9 +179,9 @@ def _save_group_avg_significance(r_vals, n_test, template_cifti,
             n_verts_lh = nib.load(left_surf).darrays[0].data.shape[0]
             n_verts_rh = nib.load(right_surf).darrays[0].data.shape[0]
             _write_border_file(fdr_mask[:n_left], lh_idx, n_verts_lh, left_surf,
-                               str(out_root / f"encoding_r_{mod}_fdr_lh.border"), workbench)
+                               str(out_root / f"{r_stem}_fdr_lh.border"), workbench)
             _write_border_file(fdr_mask[n_left:], rh_idx, n_verts_rh, right_surf,
-                               str(out_root / f"encoding_r_{mod}_fdr_rh.border"), workbench)
+                               str(out_root / f"{r_stem}_fdr_rh.border"), workbench)
             log.info(f"  [{mod}] FDR border files saved.")
 
 
@@ -207,15 +214,16 @@ def _run_sigmap_fastpath(out_paths: dict, out_root: Path,
         log.info(f"  Saved n_test={n_test} → {n_test_path.name}")
 
     for mod, r_path in out_paths.items():
+        r_stem = _metric_stem("pearson_r", mod)
         sigmap_paths = [
-            out_root / f"encoding_r_{mod}_sigmap_uncorr.dscalar.nii",
-            out_root / f"encoding_r_{mod}_sigmap_fdr.dscalar.nii",
-            out_root / f"encoding_r_{mod}_fdr_mask.dscalar.nii",
+            out_root / f"{r_stem}_sigmap_uncorr.dscalar.nii",
+            out_root / f"{r_stem}_sigmap_fdr.dscalar.nii",
+            out_root / f"{r_stem}_fdr_mask.dscalar.nii",
         ]
         if all(p.exists() for p in sigmap_paths):
             log.info(f"  [{mod}] Significance maps already up to date — skipping")
             continue
-        r_vals = nib.load(str(r_path)).get_fdata(dtype=np.float32).squeeze()
+        r_vals = load_named_map(r_path, r_stem)
         log.info(f"  [{mod}] Fast-path: computing significance maps (n_test={n_test})")
         _save_group_avg_significance(r_vals, n_test, args.template_cifti, out_root, mod, args)
 
@@ -280,6 +288,12 @@ def parse_args():
                         "torch_cuda uses GPU if available, falls back to torch automatically.")
     p.add_argument("--test-video-ids", required=True,
                    help="Comma-separated test video IDs.")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Recompute and overwrite requested r/r2/significance outputs even "
+             "when they already exist.",
+    )
 
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
     prep.add_argument("--sg-filter", default=False, action="store_true")
@@ -324,16 +338,18 @@ def _run_modalities(args, timing_df, test_ids, alphas, config,
     """Fit encoding model for each modality; save one CIFTI per modality."""
     prefix = f"[{subject_tag}] " if subject_tag else ""
     for mod in modalities:
-        out_path = out_root / f"encoding_r_{mod}.dscalar.nii"
-        r2_path  = out_root / f"encoding_r2_{mod}.dscalar.nii"
-        if out_path.exists() and r2_path.exists():
+        r_stem = _metric_stem("pearson_r", mod)
+        r2_stem = _metric_stem("r2", mod)
+        out_path = out_root / f"{r_stem}.dscalar.nii"
+        r2_path  = out_root / f"{r2_stem}.dscalar.nii"
+        if not args.force and out_path.exists() and r2_path.exists():
             log.info(f"{prefix}Skipping {mod} — output exists")
             continue
-        if out_path.exists() and not r2_path.exists():
-            r_vals = nib.load(str(out_path)).get_fdata(dtype=np.float32).squeeze()
+        if not args.force and out_path.exists() and not r2_path.exists():
+            r_vals = load_named_map(out_path, r_stem)
             r2_vals = (r_vals * np.abs(r_vals)).astype(np.float32)
             save_cifti(r2_vals, args.template_cifti, str(r2_path),
-                       map_name=f"encoding_r2_{mod}")
+                       map_name=r2_stem)
             log.info(f"{prefix}[{mod}] Saved r2 from existing r: {r2_path.name}")
             continue
 
@@ -355,11 +371,11 @@ def _run_modalities(args, timing_df, test_ids, alphas, config,
             backend=args.backend,
         )
         save_cifti(r_vals, args.template_cifti, str(out_path),
-                   map_name=f"encoding_r_{mod}")
+                   map_name=r_stem)
         r2_vals = (r_vals * np.abs(r_vals)).astype(np.float32)
-        r2_path = out_root / f"encoding_r2_{mod}.dscalar.nii"
+        r2_path = out_root / f"{r2_stem}.dscalar.nii"
         save_cifti(r2_vals, args.template_cifti, str(r2_path),
-                   map_name=f"encoding_r2_{mod}")
+                   map_name=r2_stem)
         log.info(f"{prefix}[{mod}] Saved: {out_path.name}  "
                  f"(mean r={r_vals.mean():.4f}, max r={r_vals.max():.4f})")
 
@@ -384,19 +400,19 @@ def _run_disk(args):
     modalities = ["v", "a", "av"] if args.modality == "all" else [args.modality]
 
     out_root  = Path(args.output_dir) / args.subject / args.model / config
-    out_paths = {mod: out_root / f"encoding_r_{mod}.dscalar.nii" for mod in modalities}
-    r2_paths  = {mod: out_root / f"encoding_r2_{mod}.dscalar.nii" for mod in modalities}
-    if all(p.exists() for p in out_paths.values()):
+    out_paths = {mod: out_root / f"{_metric_stem('pearson_r', mod)}.dscalar.nii" for mod in modalities}
+    r2_paths  = {mod: out_root / f"{_metric_stem('r2', mod)}.dscalar.nii" for mod in modalities}
+    if not args.force and all(p.exists() for p in out_paths.values()):
         if args.subject == "group_average":
             _run_sigmap_fastpath(out_paths, out_root, args, timing_df, test_ids)
         # Generate missing r2 files from existing r files without re-running the model
         for mod, r_path in out_paths.items():
             r2_path = r2_paths[mod]
             if r_path.exists() and not r2_path.exists():
-                r_vals = nib.load(str(r_path)).get_fdata(dtype=np.float32).squeeze()
+                r_vals = load_named_map(r_path, _metric_stem("pearson_r", mod))
                 r2_vals = (r_vals * np.abs(r_vals)).astype(np.float32)
                 save_cifti(r2_vals, args.template_cifti, str(r2_path),
-                           map_name=f"encoding_r2_{mod}")
+                           map_name=_metric_stem("r2", mod))
                 log.info(f"[{mod}] Saved r2 from existing r: {r2_path.name}")
         if all(r2_paths[m].exists() for m in modalities):
             return
@@ -443,8 +459,8 @@ def _run_streaming(args):
     raw_dir    = Path(args.raw_dir)
 
     out_root  = Path(args.output_dir) / sub / args.model / config
-    out_paths = {mod: out_root / f"encoding_r_{mod}.dscalar.nii" for mod in modalities}
-    if all(p.exists() for p in out_paths.values()):
+    out_paths = {mod: out_root / f"{_metric_stem('pearson_r', mod)}.dscalar.nii" for mod in modalities}
+    if not args.force and all(p.exists() for p in out_paths.values()):
         if args.subject == "group_average":
             _run_sigmap_fastpath(out_paths, out_root, args, timing_df, test_ids)
         else:

@@ -84,8 +84,9 @@ DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_
 EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
-BIN_SEC, SKIP_SEC = 2.0, 2.0
-TARGET_LAYERS   = [9, 18, 27, 36]
+BIN_SEC = float(os.environ.get("BIN_SEC", "2.0"))
+SKIP_SEC = float(os.environ.get("SKIP_SEC", str(BIN_SEC)))
+TARGET_LAYERS   = [9, 18, 27, 35, 36]
 MODEL_TAG       = "nemotron"
 AUDIO_SR        = 16000
 DOC_PREFIX      = "passage: "
@@ -182,6 +183,9 @@ def main():
     dur_int, skip_int = int(BIN_SEC), int(SKIP_SEC)
     chunk_suffix = f"_av_chunks_{dur_int}s" if skip_int == dur_int else f"_av_chunks_{dur_int}s_skip{skip_int}s"
     all_segs = natsorted(list(DATA_BASE.rglob(f"*{chunk_suffix}/*.mp4")), key=lambda p: p.name)
+    if not all_segs:
+        fallback_suffix = f"_chunks_{dur_int}s" if skip_int == dur_int else f"_chunks_{dur_int}s_skip{skip_int}s"
+        all_segs = natsorted(list(DATA_BASE.rglob(f"*{fallback_suffix}/*.mp4")), key=lambda p: p.name)
     assert len(all_segs) > 0, f"No {BIN_SEC}s segments found under {DATA_BASE}"
     print(f"Found {len(all_segs)} segments.")
 

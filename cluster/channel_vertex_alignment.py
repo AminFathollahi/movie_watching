@@ -30,9 +30,10 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(CLUSTER_DIR))
 
 from io_cluster import load_group_average, GROUP_AVG_CIFTI, GROUP_AVG_TRS  # noqa: E402
-from voxel_timeseries_clustering import zscore_timeseries_inplace  # noqa: E402
+from vertex_clustering import zscore_timeseries_inplace  # noqa: E402
 from channel_timeseries_clustering import (  # noqa: E402
-    FAMILIES, OUTPUT_DIR, EMBEDDINGS_DIR, TIMING_CSV, RUN_TRS, load_channel_timeseries,
+    FAMILIES, OUTPUT_DIR, EMBEDDINGS_DIR, TIMING_CSV, RUN_TRS,
+    channel_model_selection_dir, load_channel_timeseries,
 )
 from rsa.shared.rsa_utils import preprocess_fmri, align_and_assert_bins  # noqa: E402
 
@@ -58,9 +59,10 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--delay-sec", type=float, default=5.0)
     parser.add_argument("--tr", type=float, default=1.0)
     parser.add_argument("--vertex-model-selection-dir", default=None,
-                        help="Defaults to outputs/cluster/group_average/_voxel_timeseries_model_selection/norm-zscore_prepca50")
+                        help="Defaults to outputs/cluster/group_average/_vertex/norm-zscore_raw")
     parser.add_argument("--channel-model-selection-dir", default=None,
-                        help="Defaults to outputs/cluster/<family>/_channel_timeseries_model_selection/norm-zscore_prepca50")
+                        help="Defaults to outputs/cluster/<family>/_channel_timeseries_model_selection"
+                             "/norm-zscore_prepca50")
     parser.add_argument("--vertex-role", default="latent_best")
     parser.add_argument("--channel-role", default="latent_best")
     parser.add_argument("--vertex-reducer-tag", default=None,
@@ -104,21 +106,41 @@ def labels_path(model_selection_dir: Path, row: pd.Series, filename: str) -> Pat
             / f"{reducer_tag}_{cluster_tag}" / filename)
 
 
-def cluster_profiles(units_by_bins: np.ndarray,
-                     labels: np.ndarray) -> tuple[np.ndarray, list[int], dict[int, int], int]:
-    """Z-scored mean time series per non-noise cluster (label -1 excluded)."""
+def cluster_profiles(units_by_bins: np.ndarray, labels: np.ndarray,
+                     exclude: tuple[int, ...] = (-1,)
+                     ) -> tuple[np.ndarray, list[int], dict[int, int], int]:
+    """Z-scored mean time series per cluster, excluding ``exclude`` label values.
+
+    Channel labels use the sklearn convention (-1 = noise); vertex labels use
+    ``vertex_clustering.expand_masked_labels``'s convention (0 = outside the
+    stimulus mask, plus a reserved noise key) — pass ``exclude`` accordingly,
+    see :func:`vertex_exclude_labels`.
+    """
     if units_by_bins.shape[0] != labels.shape[0]:
         raise ValueError("labels length does not match unit rows")
-    n_noise = int((labels == -1).sum())
-    cluster_ids = sorted(int(c) for c in np.unique(labels) if c != -1)
+    n_excluded = int(np.isin(labels, exclude).sum())
+    cluster_ids = sorted(int(c) for c in np.unique(labels) if c not in exclude)
     if not cluster_ids:
-        raise ValueError("No non-noise clusters found")
+        raise ValueError("No clusters found")
     profiles = np.stack(
         [units_by_bins[labels == cid].mean(axis=0) for cid in cluster_ids]
     ).astype(np.float32)
     counts = {cid: int((labels == cid).sum()) for cid in cluster_ids}
     zscore_timeseries_inplace(profiles)
-    return profiles, cluster_ids, counts, n_noise
+    return profiles, cluster_ids, counts, n_excluded
+
+
+def vertex_exclude_labels(labels_file: Path) -> tuple[int, ...]:
+    """Vertex label values to exclude from clustering: 0 (outside the
+    stimulus mask) plus the reserved HDBSCAN noise key recorded in the
+    sibling ``spatial_report.json``, if any."""
+    exclude = [0]
+    report_file = labels_file.parent / "spatial_report.json"
+    if report_file.exists():
+        noise_label = json.loads(report_file.read_text()).get("noise_label")
+        if noise_label is not None:
+            exclude.append(int(noise_label))
+    return tuple(exclude)
 
 
 def _zscore_1d(v: np.ndarray) -> np.ndarray:
@@ -246,12 +268,10 @@ def _config_summary(row: pd.Series, ms_dir: Path, labels_file: Path,
 
 def run(args: argparse.Namespace) -> Path:
     vertex_ms_dir = Path(args.vertex_model_selection_dir) if args.vertex_model_selection_dir else (
-        Path(args.output_dir) / "group_average" / "_voxel_timeseries_model_selection"
-        / "norm-zscore_prepca50"
+        Path(args.output_dir) / "group_average" / "_vertex" / "norm-zscore_raw"
     )
     channel_ms_dir = Path(args.channel_model_selection_dir) if args.channel_model_selection_dir else (
-        Path(args.output_dir) / args.family / "_channel_timeseries_model_selection"
-        / "norm-zscore_prepca50"
+        channel_model_selection_dir(args.output_dir, args.family)
     )
 
     vertex_row = select_config(vertex_ms_dir / "selected_clusterings.csv", args.vertex_role,
@@ -292,7 +312,7 @@ def run(args: argparse.Namespace) -> Path:
         raise AssertionError(f"Expected {EXPECTED_N_BINS} movie bins, got {n_bins}")
 
     vertex_profiles, vertex_ids, vertex_counts, vertex_noise = cluster_profiles(
-        fmri_binned.T, vertex_labels
+        fmri_binned.T, vertex_labels, exclude=vertex_exclude_labels(vertex_labels_file)
     )
     channel_profiles, channel_ids, channel_counts, channel_noise = cluster_profiles(
         channel_timeseries, channel_labels

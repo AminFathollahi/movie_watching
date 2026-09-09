@@ -1,127 +1,53 @@
-# Encoding — Ridge Encoding Models
+# Encoding — Ridge Regression Models
 
-Fits ridge regression models (himalaya RidgeCV, SVD solver) predicting cortical fMRI responses from model embeddings. Alpha is selected independently per vertex via leave-one-run-out cross-validation on the training set.
+Ridge regression models predict cortical fMRI responses from embeddings of video, audio, and audiovisual transformer models. Alpha is selected per vertex via leave-one-run-out cross-validation on training data (videos 1–14), evaluated on held-out test videos (5, 9, 14, 18).
 
-## GPU Acceleration
+## Scripts
 
-The encoding model uses himalaya `RidgeCV` with `torch_cuda` backend by default.
-On an RTX 5070Ti (or any CUDA-capable GPU), the banded ridge fitting is offloaded
-to GPU; the large Y matrix (59412 vertices × T_train) stays in CPU RAM via
-`Y_in_cpu=True` to avoid GPU OOM.
+| Script | Purpose | Output Directory |
+|--------|---------|------------------|
+| `encoding.py` | Per-subject/group-average ridge regression for video, audio, audiovisual | `outputs/encoding/{subject}/{model}/{config}` |
+| `incremental_av.py` | Run-wise comparison of A+V+J (joint) vs. A+V; compression-efficiency variants (PCA, random projection, clustering) | `outputs/encoding/incremental_av/{subject}/{model}/{config}` |
+| `pairing_control.py` | Audiovisual pairing-advantage control: compares intact pairings against fold-confined mismatched A/V pairings (3 seeds), with block-level inference over 14 unique movie blocks | `outputs/encoding/pairing_control/group_average/{model}/inference/` |
+| `compression_summary.py` | Aggregates compression-efficiency R² and fitted parameters across subjects | `outputs/encoding/incremental_av` |
+| `roi_av_profile.py` | Per-ROI audiovisual encoding profiles (unimodal and interactive effects) | `outputs/encoding/roi_av_profile` |
+| `av_derived_maps.py` | Group-average audiovisual conjunction, superadditivity, max-unimodal contrast maps | `outputs/encoding/group_average` |
+| `diff_maps.py` | Differential encoding maps (A, V, AV contrasts) from group-average results | `outputs/encoding/group_average` |
+| `variance_partition.py` | Partitions encoding R² into baseline, extended, and delta (A, V, AV) components | `outputs/encoding/group_average` |
+| `group_stats.py` | Aggregates per-subject encoding R² maps to group mean, Cohen's d, significance | `outputs/encoding/group_average` |
+| `migrate_encoding_output_names.py` | Rename legacy output files to match current naming convention | utility/migration |
 
-Pearson r evaluation uses a fully vectorized numpy computation (no per-vertex loop),
-replacing the previous O(n_vertices) scipy.stats.pearsonr calls.
+## Runners
 
-Control via CLI: `--backend torch_cuda | torch | numpy`.
-Control via analysis.sh: `BACKEND="torch_cuda"`.
+`analysis.sh` modes:
+- `bash analysis.sh` — Group-average encoding, all models
+- `bash analysis.sh persubject [N_JOBS] [RESUME_SUBJECT]` — Per-subject ridge regression (GNU parallel)
+- `bash analysis.sh incremental_av` — Run-wise A+V+J vs. A+V and compression analyses
+- `bash analysis.sh pairing_control` — Fold-confined mismatch controls (seed configurable via `PAIRING_SEEDS`)
+- `bash analysis.sh factorial_interaction` — Crossed-pair AV interaction representation (seed configurable)
 
-## Structure
+`run_diff_study.sh`:
+- `bash run_diff_study.sh plain` — Plain encoding for native AV, scrambled AV, and dummy-modality conditions
+- `bash run_diff_study.sh incremental` — Incremental variance (A+V+J − A+V) for all conditions
+- `bash run_diff_study.sh all` — Both plain and incremental
 
-```
-encoding/
-├── analysis.sh          # master runner — all config lives here
-├── environment.yml          # conda env: movie
-├── encoding.py          # per-model/modality encoding script
-└── shared/
-    └── encoding_utils.py    # fMRI + embedding array builders, CV helpers, model runner
-```
+`run_extended_analyses.sh`:
+- `bash run_extended_analyses.sh` — Group-average encoding on residualized embeddings (linear/projection residual variants)
 
-## Usage
+`run_native_av_group_average.sh`:
+- `bash run_native_av_group_average.sh` — Canonical 5-second group-average encoding for all native AV models
 
-```bash
-conda activate movie
-cd movie_watching   # run from repo root
-
-bash encoding/analysis.sh                       # group-average, all models
-bash encoding/analysis.sh persubject            # per-subject (GNU parallel)
-bash encoding/analysis.sh persubject 4          # 4 parallel jobs
-bash encoding/analysis.sh persubject 8 100610   # resume from subject 100610
-```
+`run_roi_av_profile.sh`:
+- `bash run_roi_av_profile.sh av` — ROI-level audio/video variance decomposition (CCA and auditory/visual anchors)
+- `bash run_roi_av_profile.sh text` — ROI-level transcript/caption variance decomposition
+- `bash run_roi_av_profile.sh all` — Both av and text
 
 ## Configuration
 
-All parameters are set in `analysis.sh`:
-
-| Variable | Default | Description |
-|---|---|---|
-| `BIN_SECS` | 2.0 | Space-separated temporal bin sizes to sweep (seconds) |
-| `SKIP_SEC` | `$BIN_SEC` | Window stride in seconds (default = BIN_SEC, no overlap) |
-| `DELAY_SEC` | 5.0 | Hemodynamic delay applied at analysis time |
-| `HRF` | `false` | Convolve embeddings with SPM HRF instead of boxcar delay |
-| `NORMALIZE` | `true` | Per-run z-score normalization of embeddings |
-| `BACKEND` | `torch_cuda` | himalaya backend: `torch_cuda` \| `torch` \| `numpy` |
-| `ALPHA_MIN` | -2 | Log10 of minimum ridge alpha |
-| `ALPHA_MAX` | 9 | Log10 of maximum ridge alpha |
-| `N_ALPHAS` | 23 | Number of alpha values on log scale |
-| `TEST_VIDEO_IDS` | `video5,video9,video14,video18` | Held-out test videos |
-| `MODELS` | (array) | Model registry |
-
-## Train / Test Split
-
-- **Test**: `video5`, `video9`, `video14`, `video18` (last video of each run, 82 TRs each)
-- **Train**: remaining 14 videos
-- **Z-scoring**: per run on training time bins; same mean/std applied to test bins from the same run to prevent data leakage
-- **Alpha selection**: leave-one-run-out CV on training data (himalaya `PredefinedSplit`)
-- **Metric**: Pearson r on held-out test set per vertex
-
-## Input Modes
-
-### Disk mode (default, `--preprocessed-dir`)
-
-Reads pre-saved full-run CIFTIs produced by `preprocess_individual.py`:
-
-```bash
-python preprocess_individual.py \
-    --raw-dir /path/to/raw_ciftis \
-    --out-dir /path/to/preprocessed \
-    --subjects-list subjects.txt \
-    --sg-filter --psc --gsr \
-    --save-individual
-```
-
-Output per subject:
-- `{sub}_raw_cortex_59k.dtseries.nii` — concatenated full-run CIFTI (4 runs, no preprocessing)
-- `{sub}_raw_run_trs.npy` — TRs per run (needed for timing alignment)
-
-Set `FMRI_SUFFIX="raw"` in `analysis.sh` to match (default). Use `"sg_psc_gsr"` etc. if preprocessing was applied.
-
-### Streaming mode (`--raw-dir`)
-
-Preprocesses raw 7T CIFTIs on-the-fly via `preprocess_individual.preprocess_subject()`. No CIFTI is saved to disk.
-
-## fMRI Preprocessing Convention
-
-`preprocess_individual.py` optionally applies per-run signal cleaning (SG→PSC→GSR) and concatenates all 4 runs into a single continuous CIFTI. **Default is raw (no preprocessing). No timing filtering happens at preprocessing time.**
-
-At analysis time, `encoding.py` loads `movie_timing.csv`, computes within-run onset TRs from global `onset_sec`, applies hemodynamic delay (`--delay-sec`), bins to `BIN_SEC` resolution, z-scores per run, and splits into train/test by video ID.
-
-When `HRF=true`: set `--delay-sec 0` (no boxcar shift); embeddings are convolved with the SPM HRF inside `encoding.py`.
-
-## Outputs
-
-```
-{OUTPUT_DIR}/{subject}/{model}/{config_label}/
-    encoding_pearson_r_visual.dscalar.nii       # Pearson r — visual
-    encoding_pearson_r_audio.dscalar.nii        # Pearson r — auditory
-    encoding_pearson_r_audiovisual.dscalar.nii  # AV r + derived maps below
-    encoding_pearson_r_audiovisual_conjunction.mask.nii
-```
-
-For native AV models with matched `a`, `v`, and `av` representations, the
-group-average `encoding_pearson_r_audiovisual.dscalar.nii` contains six named maps:
-
-- `encoding_pearson_r_audiovisual`: held-out Pearson r for the joint AV representation.
-- `av_superadditivity`: `AV - (A + V)`.
-- `av_conjunction`: AV values inside `(AV > 0) & (AV > A) & (AV > V)`, zero elsewhere.
-- `stim_r`: `encoding_pearson_r_audiovisual` retained only where the 5-second-delay normalized
-  stimulus-regressor correlation map is positive.
-- `stim_superadditivity`: `av_superadditivity` under the same binary mask.
-- `stim_conjunction`: `av_conjunction` under the same binary mask.
-
-The stimulus regressor is binarized (`stimulus > 0`) before multiplication, so
-surviving values are unchanged rather than weighted by regressor magnitude.
-The standalone `.mask.nii` contains the binary `av_conjunction_mask`. Training
-embeddings are z-scored per run and the same training mean/standard deviation
-are applied to that run's held-out prediction embeddings (no test-data fitting).
-
-`config_label` encodes parameters: `delay{D}s_norm_bin{B}s_skip{S}s` or `hrf_norm_bin{B}s_skip{S}s`.
+All parameters in `analysis.sh`:
+- `BIN_SECS`: temporal binning (default 2.0 seconds)
+- `SKIP_SEC`: window stride (default equals BIN_SEC)
+- `DELAY_SEC`: hemodynamic delay (default 5.0 seconds)
+- `HRF`: if true, convolve embeddings with SPM HRF (default false)
+- `BACKEND`: himalaya solver (`torch_cuda` / `torch` / `numpy`)
+- `MODELS`: array of model names from shared registry

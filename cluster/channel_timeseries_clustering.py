@@ -1,12 +1,12 @@
 """Cluster embedding channels from low-dimensional embeddings of their movie-bin time series.
 
-Channel analogue of ``voxel_timeseries_clustering.py``: instead of one row
+Channel analogue of ``vertex_clustering.py``: instead of one row
 per cortical grayordinate and one column per fMRI TR, each row here is one
 embedding channel (1,024 for PE-AV; 2,048 for each Omni-family layer-18
 mean-pooled model) and each column is one of the 626 aligned 5-second movie
 bins used throughout ``cf_modeling/channel_cca_analysis.py``. All
 reduction/clustering math (PCA, MDS, Isomap, t-SNE, FastICA, UMAP,
-k-means/HDBSCAN/BIRCH) is imported unchanged from ``voxel_timeseries_clustering.py``.
+k-means/HDBSCAN/BIRCH) is imported unchanged from ``vertex_clustering.py``.
 The only differences are the input load (channel embeddings, not a CIFTI
 dtseries) and the label-write step (channels have no grayordinate axis, so
 cluster labels are written to CSV instead of ``.dlabel.nii``).
@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cf_modeling.channel_cca_analysis import MODEL_CONFIGS, _model_files  # noqa: E402
 from rsa.shared.rsa_utils import process_model_embeddings  # noqa: E402
 from io_cluster import write_channel_labels_csv  # noqa: E402
-from voxel_timeseries_clustering import (  # noqa: E402
+from vertex_clustering import (  # noqa: E402
     REDUCTIONS, CLUSTERERS, analysis_tag, reduction_tag, clustering_tag,
     zscore_timeseries_inplace, fit_preliminary_pca, reduce_grayordinates,
     cluster_embedding, _label_names,
@@ -49,6 +49,17 @@ RUN_TRS = (
     "/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/"
     "hedger_sg_psc/group_average_hedger_sg_psc_run_trs.npy"
 )
+
+
+def channel_model_selection_dir(output_dir, family: str, *, prepca_components: int = 50,
+                                regress_global: bool = False) -> Path:
+    """Root of the channel reducer/cluster hyperparameter sweep for one family
+    (written by ``channel_timeseries_model_selection.py``; read by it and by
+    ``channel_vertex_alignment.py`` / ``screen_temporal_differentiation.py``)."""
+    tag = f"norm-zscore_prepca{prepca_components}"
+    if regress_global:
+        tag += "_globalregressed"
+    return Path(output_dir) / family / "_channel_timeseries_model_selection" / tag
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:

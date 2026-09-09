@@ -6,31 +6,31 @@ Encoding-currency analogue of rsa/scramble_diff_maps.py + rsa/dummy_diff_maps.py
 For each native-AV model, consolidates the intact-vs-scramble and
 intact-vs-dummy diffs on BOTH signals encoding produces:
   - plain     : encoding_r2_audiovisual (encoding.py) -- raw predictive alignment.
-  - AVresid   : variance_partition_r2_av_residual_band (variance_partition.py)
-                -- the encoding-currency counterpart of RSA's "integration".
+  - incremental: incremental_av_delta_r2 (variance_partition.py), the direct
+                 held-out gain from adding J to the additive A+V baseline.
 
-Naming mirrors the RSA side exactly (same words, same meaning, so a reader
-never has to ask whether "binding" means something different here):
-  - "binding"               = AVresid_intact - AVresid_scrambled. Tests
+Contrasts are named for the tested comparison:
+  - "pairing_specific_delta" = incremental_intact - incremental_scrambled. Tests
                               whether the unique-fusion signal needs correct
                               TEMPORAL pairing.
-  - "modality_presence_diff" = AVresid_intact - max(AVresid_dummy_from_a,
-                              AVresid_dummy_from_v). Tests whether the
-                              unique-fusion signal needs BOTH real
+  - "modality_presence_diff" = incremental_intact - max(incremental_dummy_from_a,
+                              incremental_dummy_from_v). Tests whether the
+                              incremental joint signal needs BOTH real
                               modalities present (not a binding/pairing
                               question, so never called "binding").
 
 Inputs (all pre-computed; see encoding/run_diff_study.sh):
   {OUTPUT_DIR}/group_average/{model}/{config}/encoding_r2_audiovisual.dscalar.nii
-  {OUTPUT_DIR}/group_average/{model}/{config}/variance_partition_r2_av_residual_band.dscalar.nii
+  {OUTPUT_DIR}/group_average/{model}/{config}/incremental_av_delta_r2.dscalar.nii
   {OUTPUT_DIR}/group_average/{model}_avscramble/{config}/... (same two files)
   {OUTPUT_DIR}/group_average/{model}_clsav_from_{a,v}/{config}/... (same two files)
 
 Per-condition output:
   {OUTPUT_DIR}/group_average/{model}_avscramble/{config}/scramble_consolidated_maps.dscalar.nii
-    maps: plain_r2_scrambled, avresid_r2_scrambled, diff_plain, binding
+    maps: plain_r2_scrambled, incremental_r2_scrambled, diff_plain,
+          pairing_specific_delta
   {OUTPUT_DIR}/group_average/{model}_clsav_from_{a,v}/{config}/dummy_consolidated_maps.dscalar.nii
-    maps: plain_r2_dummy, avresid_r2_dummy, diff_plain
+    maps: plain_r2_dummy, incremental_r2_dummy, diff_plain
 
 Per-MODEL output (dummy only, combining both conditions via max()):
   {OUTPUT_DIR}/group_average/{model}/{config}/dummy_partial_diff_maps.dscalar.nii
@@ -84,7 +84,10 @@ def main():
     for model in BASE_MODELS:
         intact_dir = _model_dir(model)
         plain_intact = _load(intact_dir / CONFIG / "encoding_r2_audiovisual.dscalar.nii", "encoding_r2_audiovisual")
-        avresid_intact = _load(intact_dir / CONFIG / "variance_partition_r2_av_residual_band.dscalar.nii", "variance_partition_r2_av_residual_band")
+        incremental_intact = _load(
+            intact_dir / CONFIG / "incremental_av_delta_r2.dscalar.nii",
+            "incremental_av_delta_r2",
+        )
         if plain_intact is None:
             log.info(f"[{model}] SKIP — missing intact encoding_r2_audiovisual")
             skipped.append(model)
@@ -100,21 +103,28 @@ def main():
             merge_into_combined(plain_scr, "plain_r2_scrambled", out_path, template)
             merge_into_combined(diff_plain, "diff_plain", out_path, template)
 
-            avresid_scr = _load(scr_dir / CONFIG / "variance_partition_r2_av_residual_band.dscalar.nii", "variance_partition_r2_av_residual_band")
-            if avresid_intact is not None and avresid_scr is not None:
-                binding = avresid_intact - avresid_scr
-                merge_into_combined(avresid_scr, "avresid_r2_scrambled", out_path, template)
-                merge_into_combined(binding, "binding", out_path, template)
+            incremental_scr = _load(
+                scr_dir / CONFIG / "incremental_av_delta_r2.dscalar.nii",
+                "incremental_av_delta_r2",
+            )
+            if incremental_intact is not None and incremental_scr is not None:
+                pairing_delta = incremental_intact - incremental_scr
+                merge_into_combined(
+                    incremental_scr, "incremental_r2_scrambled", out_path, template
+                )
+                merge_into_combined(
+                    pairing_delta, "pairing_specific_delta", out_path, template
+                )
                 log.info(f"[{model}] scramble DONE — mean diff_plain={diff_plain.mean():.4f}  "
-                         f"mean binding={binding.mean():.4f}")
+                         f"mean pairing_specific_delta={pairing_delta.mean():.4f}")
             else:
-                log.info(f"[{model}] scramble plain diff done; binding SKIP (missing AVresid)")
+                log.info(f"[{model}] scramble plain diff done; incremental comparison missing")
             scramble_done.append(model)
         else:
             log.info(f"[{model}] scramble SKIP — missing encoding_r2_audiovisual")
 
         # ── Dummy (both conditions; also feeds the per-model max() combo) ──
-        avresid_dummy_by_cond = {}
+        incremental_dummy_by_cond = {}
         for cond in DUMMY_CONDITIONS:
             cond_dir = _model_dir(model, cond)
             plain_dummy = _load(cond_dir / CONFIG / "encoding_r2_audiovisual.dscalar.nii", "encoding_r2_audiovisual")
@@ -127,25 +137,30 @@ def main():
             merge_into_combined(plain_dummy, "plain_r2_dummy", out_path, template)
             merge_into_combined(diff_plain, "diff_plain", out_path, template)
 
-            avresid_dummy = _load(cond_dir / CONFIG / "variance_partition_r2_av_residual_band.dscalar.nii", "variance_partition_r2_av_residual_band")
-            if avresid_dummy is not None:
-                merge_into_combined(avresid_dummy, "avresid_r2_dummy", out_path, template)
-                avresid_dummy_by_cond[cond] = avresid_dummy
+            incremental_dummy = _load(
+                cond_dir / CONFIG / "incremental_av_delta_r2.dscalar.nii",
+                "incremental_av_delta_r2",
+            )
+            if incremental_dummy is not None:
+                merge_into_combined(
+                    incremental_dummy, "incremental_r2_dummy", out_path, template
+                )
+                incremental_dummy_by_cond[cond] = incremental_dummy
             log.info(f"[{model}/{cond}] dummy DONE — mean diff_plain={diff_plain.mean():.4f}")
             dummy_done.append(f"{model}/{cond}")
 
-        if avresid_intact is None:
-            log.info(f"[{model}] modality_presence_diff SKIP — missing intact AVresid")
+        if incremental_intact is None:
+            log.info(f"[{model}] modality_presence_diff SKIP — missing intact incremental map")
             continue
-        if not avresid_dummy_by_cond:
-            log.info(f"[{model}] modality_presence_diff SKIP — no dummy AVresid available")
+        if not incremental_dummy_by_cond:
+            log.info(f"[{model}] modality_presence_diff SKIP — no dummy incremental maps")
             continue
-        max_dummy = np.maximum.reduce(list(avresid_dummy_by_cond.values()))
-        modality_presence_diff = avresid_intact - max_dummy
+        max_dummy = np.maximum.reduce(list(incremental_dummy_by_cond.values()))
+        modality_presence_diff = incremental_intact - max_dummy
         mp_out_path = intact_dir / CONFIG / "dummy_partial_diff_maps.dscalar.nii"
         merge_into_combined(modality_presence_diff, "modality_presence_diff", mp_out_path,
-                             str(intact_dir / CONFIG / "variance_partition_r2_av_residual_band.dscalar.nii"))
-        log.info(f"[{model}] modality_presence_diff DONE (max over {list(avresid_dummy_by_cond)}) — "
+                             str(intact_dir / CONFIG / "incremental_av_delta_r2.dscalar.nii"))
+        log.info(f"[{model}] modality_presence_diff DONE (max over {list(incremental_dummy_by_cond)}) — "
                  f"mean={modality_presence_diff.mean():.4f}")
         modpres_done.append(model)
 

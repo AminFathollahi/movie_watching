@@ -52,34 +52,27 @@ Subcortical BOLD SNR is lower than cortex, and IC/SC are tiny nuclei.
 not compared directly to cortical rho. A structure whose ceiling is at noise
 is flagged, not over-interpreted.
 
-## Files
+## Scripts
 
-- `subcortical_io.py` — extraction, `struct_slices`, `build_neighbors`,
-  `build_cerebellum_surface_neighbors`, `build_nucleus_masks`,
-  `make_subcortical_template`, group-average accumulator. Self-check:
-  `python subcortical_io.py`.
-- `precompute_neighbors.py` — one-time neighbor cache build (all structures).
-- `subcortical_rsa.py` — searchlight + nuclei ROI-RSA driver. Supports
-  `--subject group_average` (primary pass) and `--subject <ID>` (per-subject,
-  gated on the group-average result).
-- `subcortical_noise_ceiling.py` — streaming-mode inter-subject noise
-  ceiling on a subject subset (reuses `rsa/noise_ceiling.py`'s GPU/CPU
-  kernels verbatim).
-- `subcortical_visualization.py` — the only module that writes into
-  `workbench_visualization/`. Owns mesh generation (boundary meshes, SUIT
-  cerebellar surfaces, atlas staging) and metric export end to end, and
-  exports every current group result into independent Workbench files: one
-  cerebellum, one brain stem, and one bilateral file for each paired
-  subcortical structure. Every exported filename fully encodes the analysis
-  that produced it —
-  `<category>__<model_modality>__<config>__<result>__<STRUCTURE>.func.gii` —
-  so files can be told apart and loaded by hand without opening them. Its
-  spec deliberately excludes all-subcortical CIFTIs and whole-hemisphere
-  meshes. After writing each overlay it reloads it and asserts the vertex
-  count matches its carrier mesh, so a mismatch fails loudly at build time
-  instead of silently in wb_view.
-- `analysis.sh` — `neighbors | groupavg | noiseceiling | persubject |
-  groupstats | visualize` modes.
+| Script | Purpose | Output Directory |
+|--------|---------|------------------|
+| `subcortical_io.py` | Extraction, struct slices, neighbor building, nucleus mask construction, template generation, group-average accumulation | `outputs/rsa/group_average` |
+| `precompute_neighbors.py` | One-time geodesic and surface-distance neighbor cache build for all structures | `outputs/rsa/_neighbor_cache` |
+| `subcortical_rsa.py` | Searchlight and parcel-level (nuclei) RSA driver for subcortical structures; supports group-average and per-subject modes | `outputs/rsa/{prep}/group_average` or `per_subject` |
+| `subcortical_noise_ceiling.py` | Inter-subject noise ceiling (NC_upper, NC_lower) for subcortical searchlight RSA | `outputs/rsa/noise_ceiling` |
+| `subcortical_partial_rsa.py` | Partial correlation RSA controlling for individual subcortical structures | `outputs/rsa/{prep}/partial` |
+| `diff_maps.py` | Differential subcortical RSA maps (e.g., AV-V, AV-A contrasts) | `outputs/rsa/{prep}/group_average` |
+| `subcortical_visualization.py` | Mesh generation and Workbench overlay export; generates .func.gii files for each subcortical structure | `outputs/rsa/workbench_visualization` |
+
+## Runners
+
+`analysis.sh` modes:
+- `bash analysis.sh neighbors` — One-time neighbor cache build
+- `bash analysis.sh groupavg` — Group-average subcortical searchlight RSA
+- `bash analysis.sh noiseceiling` — Inter-subject noise ceiling
+- `bash analysis.sh persubject [N_JOBS] [RESUME_SUBJECT]` — Per-subject RSA (optional)
+- `bash analysis.sh groupstats` — Group statistics on per-subject maps (optional)
+- `bash analysis.sh visualize` — Generate Workbench visualization spec
 
 ## Run
 

@@ -2,8 +2,8 @@
 # encoding/run_extended_analyses.sh
 # ====================================
 # Encoding-currency analogue of rsa/run_extended_analyses.sh: group-average
-# encoding (encoding.py, modality=av) for every _av_linear_resid /
-# _av_projection_resid / _av_linear_resid_encoder pseudo-model already
+# encoding (encoding.py, modality=av) for every _av_linear_resid_unimodal /
+# _av_projection_resid_own / _av_linear_resid_encoder pseudo-model already
 # generated on disk (run "bash rsa/run_extended_analyses.sh embed" first).
 # Group-average only, per explicit instruction -- no per-subject sweep.
 #
@@ -21,7 +21,7 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 _discover_models_str() {
     local MODELS_STR="" d name
-    for d in "$EMBEDDINGS_DIR"/*_av_linear_resid "$EMBEDDINGS_DIR"/*_av_projection_resid "$EMBEDDINGS_DIR"/*_av_linear_resid_encoder; do
+    for d in "$EMBEDDINGS_DIR"/*_av_linear_resid_unimodal "$EMBEDDINGS_DIR"/*_av_projection_resid_own "$EMBEDDINGS_DIR"/*_av_linear_resid_encoder; do
         [ -d "$d" ] || continue
         name=$(basename "$d")
         MODELS_STR="${MODELS_STR}${name}:av;"

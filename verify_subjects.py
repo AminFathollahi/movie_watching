@@ -3,7 +3,7 @@ from pathlib import Path
 
 # Paths based on your terminal outputs
 subjects_file = Path("/home/amin/Research/Representation/Movie/data/subjects.txt")
-cifti_dir = Path("/media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI")
+cifti_dir = Path("/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/individual-59k")
 mid_dir = Path("/home/amin/Research/Representation/Movie/data/midthickness_1.6")
 
 # 1. Load subjects (ignoring empty lines and comments)

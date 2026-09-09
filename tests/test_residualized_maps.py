@@ -45,8 +45,9 @@ def test_append_residualized_maps_consolidates_and_resumes_per_scalar(tmp_path):
     sources = source_paths(rsa_root, model, config, normal_filename)
     values = {
         "partial_correlation": np.full(4, 0.1, dtype=np.float32),
-        "linear_resid": np.full(4, 0.2, dtype=np.float32),
-        "projection_resid": np.full(4, 0.3, dtype=np.float32),
+        "linear_resid_unimodal": np.full(4, 0.2, dtype=np.float32),
+        "projection_resid_own": np.full(4, 0.3, dtype=np.float32),
+        "linear_resid_own": np.full(4, 0.4, dtype=np.float32),
     }
     for name, source in sources.items():
         source.parent.mkdir(parents=True, exist_ok=True)
@@ -71,12 +72,13 @@ def test_append_residualized_maps_consolidates_and_resumes_per_scalar(tmp_path):
         template_cifti=template,
     )
 
-    assert added == ["linear_resid", "projection_resid"]
+    assert added == ["linear_resid_unimodal", "projection_resid_own", "linear_resid_own"]
     assert get_combined_map_names(destination) == list(MAP_ORDER)
     data = nib.load(destination).get_fdata(dtype=np.float32)
     np.testing.assert_array_equal(data[0], preserved)
-    np.testing.assert_array_equal(data[1], values["linear_resid"])
-    np.testing.assert_array_equal(data[2], values["projection_resid"])
+    np.testing.assert_array_equal(data[1], values["linear_resid_unimodal"])
+    np.testing.assert_array_equal(data[2], values["projection_resid_own"])
+    np.testing.assert_array_equal(data[3], values["linear_resid_own"])
 
     assert append_residualized_maps(
         model=model,

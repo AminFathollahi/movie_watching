@@ -254,8 +254,8 @@ def split_embedding_array(embeddings: np.ndarray, timing_df: pd.DataFrame,
     """Same segment/run splitting as build_embedding_arrays(), but takes an
     already-in-memory (n_total_bins, n_features) array instead of a .npy path.
 
-    Used by encoding/variance_partition.py to split a derived band (e.g. the
-    AV-joint residual computed in memory) the same way raw embeddings are split.
+    Used by fixed-clip encoding comparisons to split in-memory embeddings the
+    same way as the response data.
 
     Returns:
         X_train: (n_train_bins, n_features) float32

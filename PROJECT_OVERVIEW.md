@@ -225,9 +225,9 @@ bins.
 
 ### 2.7 Clustering: the k=2 bias, and how it was screened out
 
-The clustering selection score shared by `cluster/voxel_timeseries_model_selection.py` and
+The clustering selection score shared by `cluster/vertex_model_selection.py` and
 `cluster/channel_timeseries_model_selection.py`
-(`voxel_timeseries_model_selection.py:556-558`, verified) is:
+(`vertex_model_selection.py:642-644`, verified) is:
 
 ```
 0.35·silhouette_unit + 0.20·(1/(1+davies_bouldin)) + 0.15·calinski_harabasz_unit
@@ -235,7 +235,7 @@ The clustering selection score shared by `cluster/voxel_timeseries_model_selecti
 ```
 
 Silhouette dominates (35%) and silhouette rewards few, well-separated clusters, so the
-score is structurally biased toward k=2. On the **vertex/voxel side**, k=2 wins every
+score is structurally biased toward k=2. On the **vertex side**, k=2 wins every
 selection role (display_2d 0.933, display_3d 0.922, latent_best 0.861 — all confirmed on
 disk), and its two cluster-mean time series correlate at r≈0.97 — near-total temporal
 redundancy, i.e. one shared stimulus-locked global signal split in two, not two
@@ -255,8 +255,8 @@ differentiated clustering (`outputs/cluster/_channel_vertex_alignment_screen.csv
 rows). **The top-`selection_score` row must never be taken as "the" clustering for a
 downstream analysis without this screen.**
 
-Visualized in `cluster/voxel_timeseries_cluster_scatterplots.ipynb` (vertex side) and
-`cluster/channel_timeseries_cluster_scatterplots.ipynb` (channel side, same six
+Visualized in `cluster/vertex_cluster_scatterplots.ipynb` (vertex side) and
+`cluster/channel_cluster_scatterplots.ipynb` (channel side, same six
 reducers/three clusterers, run per family).
 
 ### 2.8 Channel-vertex functional alignment
@@ -308,7 +308,13 @@ sanity check, not wired into any `analysis.sh` or module).
 ### 2.11 Full-sheet RSA — the whole Topo-Omni sheet, not one layer
 
 Every previous Topo-Omni result in this project used `topoomni_layer18_sheet_mp` — one
-decoder layer, 4 of 304 rows of the sheet. This analysis covers all 304×512 = 155,648 units.
+thinker-stack layer, 4 of 304 rows of the sheet. This analysis covers all 304×512 = 155,648
+units, and is now a single consolidated script (`rsa/full_sheet_rsa.py`) rather than three
+overlapping ones: it replaces a layer-18-only raster-lattice driver (`cca_seed_sheet_rsa.py`,
+2,048 units = 1.3% of the sheet, plotted at the fallback lattice the checkpoint was not
+trained under) and a hand-picked-6-layer true-coordinate driver (`cca_seed_sheet_rsa_
+truecoords.py`); both are retired. Shared geometry/plotting/`characterize()` now live in
+`rsa/shared/sheet_rsa.py`.
 
 **Sheet geometry.** The model loaded is `Qwen2_5OmniThinkerForConditionalGeneration` — the
 Thinker only; the Talker (speech generation) is never instantiated, so **the whole sheet is
@@ -316,34 +322,50 @@ the Thinker**. Three sub-modules inside it each carry their own `CorticalAdaptor
 vision encoder (`vision_config.depth=32`) at rows 0–159/cols 0–255 (40,960 units), audio
 encoder (`audio_config.encoder_layers=32`) at rows 0–159/cols 256–511 (40,960 units), and the
 Thinker text model (`text_config.num_hidden_layers=36`) at rows 160–303/all 512 cols (73,728
-units, 47.4% of the sheet — larger than both perceptual towers combined). That third block is
-what the extraction script calls the "decoder" and what upstream `Model
-Repos/topo-omni/src/models/qwen2_5_omni.py` calls `multimodal_cortical_sheet` (line 197;
-adaptor list at line 597): the autoregressive language backbone consuming fused audio+video
-tokens, **not** a Whisper-style audio decoder and **not** the Talker. The old layer-18
-reference is rows 232–235 of this block — 4 of 304 rows.
+units, 47.4% of the sheet — larger than both perceptual towers combined). This third tower is
+called **thinker** throughout, never "decoder": the extraction script's variable naming and
+upstream `Model Repos/topo-omni/src/models/qwen2_5_omni.py`'s `multimodal_cortical_sheet`
+(line 197; adaptor list at line 597) both refer to the same object — the autoregressive
+language backbone consuming fused audio+video tokens, **not** a Whisper-style audio decoder
+and **not** the Talker. The old layer-18 reference is rows 232–235 of this tower — 4 of 304
+rows.
 
 **Scripts:** `notebooks/feature_extraction/topo_omni_extract_full_sheet.py` (extraction,
 intact joint-AV pass only), `rsa/full_sheet_rsa.py` + `rsa/run_full_sheet_rsa.sh` (searchlight
-RSA). Full parameter and artifact listing: `rsa/README.md`, "Full-sheet RSA".
+RSA, plus the topography control below, folded into the same script). Full parameter and
+artifact listing: `rsa/README.md`, "Full-sheet RSA".
 
 **Validation that this sheet is the same object as the earlier layer-18 embeddings:** the
-extraction script's gate correlates all 36 decoder layers against the pre-existing
+extraction script's gate correlates all 36 thinker-stack layers against the pre-existing
 `topoomni_layer18_sheet_mp_av.npy` and asserts layer 18 is the unique argmax. Passed: layer 18
 = 0.7089, runner-up layer 19 = 0.3041, margin 0.4049.
 
 **The result.** 155,648 units × 626 bins, k=100, n_perm=1000, spearman, seed 42, 5 s bins / 5 s
-skip / 5 s delay, true coordinates (`permute_coordinates`, seed 42). cca_a (anterior seed) rho
-range [0.00535, 0.46769], mean 0.1157, 154,044/155,648 FDR-significant. cca_p (posterior)
-range [0.00875, 0.23909], mean 0.0953, 155,648/155,648 FDR-significant. Per-block mean rho —
-vision: cca_a 0.0395 / cca_p 0.0506; audio: 0.2732 / 0.1439; decoder: 0.0706 / 0.0931.
+skip / 5 s delay, true coordinates (`permute_coordinates`, seed 42 — a seeded permutation of
+the raster lattice within each architectural block, not a rotation). cca_a (anterior seed) rho
+range [0.00535, 0.46769], mean 0.1157, 154,044/155,648 (98.97%) FDR-significant. cca_p
+(posterior) range [0.00875, 0.23909], mean 0.0953, 155,648/155,648 (100%) FDR-significant —
+both at ceiling; this is a manipulation check (every sheet unit's k-NN patch tracks the movie
+at all), not a localization finding. Per-tower mean rho — vision: cca_a 0.0395 / cca_p 0.0506;
+audio: 0.2732 / 0.1439; thinker: 0.0706 / 0.0931.
 
-**The finding.** The anterior>posterior contrast is entirely an audio-encoder-tower effect: in
-the vision tower and in the language backbone, posterior edges anterior instead. Both seeds
-peak in audio (cca_a highest = audio layer 29, 0.3110; cca_p highest = audio layer 28, 0.1686)
-and both trough at vision layer 0 (0.0115, 0.0176). diff (a minus p) mean +0.0205, sd 0.0710,
+**The finding.** The anterior>posterior contrast is entirely an audio-tower effect: in the
+vision tower and the thinker stack, posterior edges anterior instead (per-tower diff_mean
+−0.0111 vision, −0.0225 thinker, vs. +0.1293 audio). diff (a minus p) mean +0.0205, sd 0.0710,
 positive in only 31.16% of units — the audio tower is 26.3% of the sheet, which is what
-reconciles a positive mean with a minority of positive units.
+reconciles a positive mean with a minority of positive units. Hotspots (top decile by rho) are
+almost entirely audio: cca_a 15,480/15,565 (99.5%), cca_p 15,255/15,565 (98.0%).
+
+**Topography control — does not pass.** True k=100 spatial neighbourhood vs. k=100 random
+units drawn uniformly from the same tower (coordinates ignored), 3 draws, folded into
+`rsa/full_sheet_rsa.py` rather than a separate follow-up script. Across all 8 combinations
+checked (2 seeds × {overall, vision, audio, thinker}), the true neighbourhood did **not**
+outperform the random same-tower sample — `true_beats_random=false` throughout, e.g. cca_a
+overall true mean 0.1157 vs. random mean 0.1697; cca_a audio tower true 0.2732 vs. random
+0.3966. Report this plainly: nothing here supports a claim that the k=100 searchlight is
+using genuine 2-D spatial topography within a tower, as opposed to sampling an arbitrary
+same-tower subset. The per-tower magnitude comparisons above do not depend on this control and
+are unaffected by it.
 
 **Caveats — limits, not findings:**
 
@@ -357,11 +379,8 @@ reconciles a positive mean with a minority of positive units.
   topographic training objective, so clustering is true by construction. This is a second
   instance of the same failure mode already recorded for the spin test (§2.2) — a test that is
   null-by-construction on the map it is applied to.
-- The `significance_caveat` string inside the delivered `metadata.json` is wrong: an
-  over-strict 0.999 "at ceiling" gate fired on cca_a's 98.97%, so it reads "meaningfully below
-  ceiling" for a map where only 1,604 of 155,648 units missed. The gate is now fixed at 0.98 in
-  `rsa/full_sheet_rsa.py` and both branches interpolate the actual minimum fraction, but the
-  delivered `metadata.json` predates the fix and was deliberately not retroactively edited.
+- No unimodal a/v passes were extracted for the full sheet, so no per-unit stimulus-modality-
+  preference analysis (unlike the retired layer-18/truecoords scripts) is possible here.
 
 **Artifacts:** `outputs/rsa/cca_seed_sheet_rsa/fullsheet_k100_truecoords/` — two `_rho.npy`,
 two `.csv`, three PNG sheet maps (`cca_a_av_rho_sheet_map.png`, `cca_p_av_rho_sheet_map.png`,
@@ -386,7 +405,7 @@ flowchart TD
     EMB --> TL
 
     TL --> RSA["rsa/\nsearchlight + Glasser RSA\nPRIMARY ENGINE"]
-    TL --> ENC["encoding/\nhimalaya ridge encoding\nbanded-ridge variance partition"]
+    TL --> ENC["encoding/\nhimalaya ridge encoding\nnested incremental AV + compression"]
     TL --> CF["cf_modeling/\nconnective-field modeling\n(Hedger et al. 2025)"]
     TL --> CLU["cluster/\ntemporal-state / vertex / channel\nclustering"]
 
@@ -481,32 +500,33 @@ output location where the script writes.
   quoted throughout §2.7–2.8 above; also flags its own internal cross-check that one
   upstream brief mislabeled channel-side scores as vertex-side (worth knowing if that
   labeling resurfaces elsewhere).
-- `channel_timeseries_clustering.py` — channel analogue of `voxel_timeseries_clustering.py`:
+- `channel_timeseries_clustering.py` — channel analogue of `vertex_clustering.py`:
   reduces/clusters embedding channels (rows) across the 626 movie bins (columns); writes
   CSV labels (no grayordinate axis).
 - `channel_timeseries_model_selection.py` — channel analogue of
-  `voxel_timeseries_model_selection.py`; same sweep/selection-score math, CSV output.
+  `vertex_model_selection.py`; same sweep/selection-score math, CSV output.
 - `channel_vertex_alignment.py` — the channel↔vertex alignment test (§2.8); writes
   `outputs/cluster/{family}/_channel_vertex_alignment/{config pair}/alignment_manifest.json`
   + `alignment_long_globalctrl.csv`.
-- `consolidate_voxel_timeseries_outputs.py` — merges selected voxel-timeseries cluster maps
-  into five authoritative review CIFTIs under `review_ciftis/`; `--delete-duplicates` removes
-  superseded per-run dlabels after round-trip validation.
-- `run_voxel_timeseries_clustering.sh` — driver for the baseline voxel-timeseries
+- `consolidate_vertex_outputs.py` — merges selected vertex-clustering maps
+  into six review CIFTIs under `review_ciftis/`, including the stable
+  `best_vertex_clusterings.dlabel.nii`; `--delete-duplicates` removes superseded per-run
+  dlabels after round-trip validation.
+- `run_vertex_clustering.sh` — driver for the baseline vertex-timeseries
   reduction×clustering sweep.
-- `run_voxel_timeseries_model_selection.sh` — driver for the hyperparameter-selection sweep.
+- `run_vertex_model_selection.sh` — driver for the hyperparameter-selection sweep.
 - `screen_temporal_differentiation.py` — the k=2-bias screen (§2.7); writes
   `outputs/cluster/_channel_vertex_alignment_screen.csv` (216 rows: 54 vertex + 162 channel).
-- `voxel_timeseries_cluster_scatterplots.ipynb` — executed notebook: plain-English summary
-  of what each reducer/clusterer selected and why, plus 2-D/3-D scatterplots (45 figures)
-  under the model-selection output's `figures/`.
-- `voxel_timeseries_clustering.py` — baseline grayordinate reduction (PCA/MDS/Isomap/t-SNE/
+- `vertex_cluster_scatterplots.ipynb` — executed notebook with reducer and clustering
+  sweep diagnostics, unclustered embeddings, selected 2-D/3-D solutions, latent-best
+  projections, and the 54-map `best_vertex_clusterings.dlabel.nii` export.
+- `vertex_clustering.py` — baseline grayordinate reduction (PCA/MDS/Isomap/t-SNE/
   FastICA/UMAP) × clustering (k-means/HDBSCAN/BIRCH) sweep; writes
-  `outputs/cluster/group_average/_voxel_timeseries/`.
-- `voxel_timeseries_model_selection.py` — the two-stage hyperparameter-selection pipeline
+  `outputs/cluster/group_average/_vertex/`.
+- `vertex_model_selection.py` — the two-stage hyperparameter-selection pipeline
   (reducer sweep via trustworthiness/continuity/rank agreement, then clustering sweep via
   the silhouette-weighted score in §2.7); writes
-  `outputs/cluster/group_average/_voxel_timeseries_model_selection/`.
+  `outputs/cluster/group_average/_vertex/`.
 
 ### `rsa/`
 
@@ -521,22 +541,23 @@ output location where the script writes.
 - `max_uni.py` — per-subject AV-minus-max-unimodal RSA contrast with proper group inference
   (per-subject contrast computed first, then one-sample t-test + BH-FDR across subjects).
 - `residualized_maps.py` — consolidates one AV model's `partial_correlation`,
-  `linear_resid`, and `projection_resid` scalars into a single CIFTI, resumable per scalar.
+  `linear_resid_unimodal`, and `projection_resid_own` scalars into a single CIFTI, resumable per scalar.
 - `run_channel_class_rsa.sh` — **DEPRECATED**, hard-exits. Was the driver for the
   12-analysis (3 models × 4 significance classes) channel-class RSA run.
 - `run_spin_permutations.py` — restored verbatim from git history (was renamed/deleted, only
   a stale `.pyc` survived) — see §2.2 for the critical scope caveat on what this test
   actually measures.
 - `full_sheet_rsa.py`, `run_full_sheet_rsa.sh` — the full-Topo-Omni-sheet searchlight RSA
-  (§2.11).
-- `cca_seed_sheet_rsa_truecoords.py`'s `characterize()` was fixed this session: its O(n²)
-  `cdist` nearest-neighbour null did not scale from the 12,288-unit subset sheet to the full
-  155,648-unit sheet (at a 15,565-point top decile, each of 2000 iterations allocated a ~1.94
-  GB distance matrix, twice, once per seed) and was replaced by an exact `cKDTree`
-  equivalent — numerically identical on a 4,000-point check (both 3.208852121618058,
-  difference 0.0), 57.8x faster per iteration (0.534 s → 0.009 s), turning a >22 min hang into
-  51 s. RNG draw order and iteration counts were left untouched, so the permutation results
-  are the ones the original code would have produced had it finished.
+  (§2.11). Consolidates what were three overlapping scripts (a layer-18-only raster-lattice
+  driver, a hand-picked-layer true-coordinate driver, and this full-sheet driver) into one
+  sweep over the whole 155,648-unit sheet; the two superseded drivers are retired.
+  `rsa/shared/sheet_rsa.py` now holds the shared geometry (`tower_id`, `load_true_coords`,
+  `knn_on_sheet`), plotting, and `characterize()`/hotspot machinery. `characterize()`'s
+  nearest-neighbour null was already an exact `cKDTree` implementation (replacing an O(n²)
+  `cdist` version that did not scale past ~12,288 units) and carries over unchanged; it now
+  reports per-tower (vision/audio/thinker) breakdowns instead of per-decoder-layer ones.
+  The topography control (true k-NN neighbourhood vs. random same-tower sample) is folded
+  into the same script rather than living in a separate follow-up file.
 
 ### `encoding/`
 
@@ -577,8 +598,15 @@ and are not separately itemized here.
   and `.../_channel_vertex_alignment/` — §2.7/2.8's per-family channel-side outputs.
 - `outputs/cluster/_channel_vertex_alignment_screen.csv` — the temporal-differentiation
   screen output (§2.7).
-- New partial-RSA maps under `outputs/rsa/raw/group_average/pe-av-small-16-frame_av_partial_corr{,_audiomae_only,_videomae_only}/` — §2.5's three variants, all confirmed present with the
-  quoted mean/peak ρ values.
+- §2.5's three partial-RSA variants are consolidated into three 5-map CIFTIs under
+  `outputs/rsa/raw/group_average/pe-av-small-16-frame_av/`:
+  `rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_partial_corr_from_unimodals.dscalar.nii`
+  (AudioMAE/VideoMAEv2 nuisances), `..._partial_corr_text_aligned_models.dscalar.nii`
+  (WavLM/PE-Core nuisances), and `..._partial_corr_own_unimodal.dscalar.nii` (PE-AV's own
+  audio/video streams) — all confirmed present with the quoted mean/peak ρ values. The old
+  single-nuisance source directories (`..._partial_corr_audiomae_only`,
+  `..._partial_corr_videomae_only`, etc.) have been deleted now that their maps are folded
+  into these consolidated files.
 - `outputs/model_embeddings/topoomni_fullsheet/bin5s_skip5s/topoomni_fullsheet_av.npy` —
   (626, 155648) float32, 389.7 MB, the full-sheet embedding behind §2.11.
 - `outputs/rsa/cca_seed_sheet_rsa/fullsheet_k100_truecoords/` — §2.11's RSA output directory.
@@ -601,12 +629,11 @@ and are not separately itemized here.
   effect, and the hotspot-contiguity control is saturated/uninformative).
 - **`cf_modeling/persubject_cca_channel_1pct.py`** has still never been run under the
   two-axis specification (§2.6).
-- **`rsa/topography_control.py`'s `random_neighbors`** draws its null across the whole unit
-  pool, so it is confounded by per-layer rho differences (0.219 at layer 1 vs. 0.386 at layer
-  18); a within-layer control is the correct version and has not been run.
-- **`rsa/cca_seed_sheet_rsa.py` and `rsa/cca_seed_sheet_rsa_truecoords.py`** are
-  near-duplicates (~875 diff lines) and want consolidating; both are untracked, so any
-  consolidation must copy first and verify with `cmp`.
+- **Sheet-RSA topography control, within-tower version.** Done as part of §2.11's
+  consolidated `rsa/full_sheet_rsa.py` (`random_neighbors_within_tower`, grouped by
+  vision/audio/thinker instead of the old confounded whole-pool draw) — see §2.11 for the
+  result, which did not favour the true k-NN neighbourhood over the random same-tower
+  control for most seed/tower combinations.
 
 ## Discrepancy notes (numbers that did not check out as originally stated, or needed correction)
 

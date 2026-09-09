@@ -1,12 +1,19 @@
 # cluster/ results — 2026-09-02
 
-Covers the clustering-method-selection pipeline (`voxel_timeseries_*` /
+**Vertex-side numbers below are superseded.** They were computed before the
+vertex pipeline dropped its mandatory pre-PCA and added stimulus-driven
+vertex masking (68885/108441 vertices); the vertex sweep, selected
+clusterings, and alignment/screen numbers have since been regenerated under
+`outputs/cluster/group_average/_vertex/norm-zscore_raw/`. Channel-side numbers
+are unaffected (channel clustering was out of scope for that change).
+
+Covers the clustering-method-selection pipeline (`vertex_*` /
 `channel_timeseries_*` / `channel_vertex_alignment.py`), not the separate
 `run_cluster.py` interaction analysis (see "Older pipeline" below).
 
 ## Methodological caveat (read this before the numbers)
 
-The clustering selection score (`cluster/voxel_timeseries_model_selection.py:557-558`,
+The clustering selection score (`cluster/vertex_model_selection.py:557-558`,
 shared by the channel-side script) is:
 
 ```
@@ -15,7 +22,7 @@ shared by the channel-side script) is:
 ```
 
 Silhouette dominates (35%), and silhouette is maximized by few, well-separated
-clusters. Effect on disk: the **vertex/voxel-side** winner (`group_average`,
+clusters. Effect on disk: the **vertex-side** winner (`group_average`,
 shared across all three model families — see "Why this analysis takes this
 form" below) is k=2 at **every** selection role:
 
@@ -25,7 +32,7 @@ form" below) is k=2 at **every** selection role:
 | display_3d | mds(3d) + hdbscan mcs50_ms50 | 2 | 0.9217 | 0.8649 |
 | latent_best | mds(4d) + hdbscan mcs50_ms25 | 2 | 0.8608 | 0.7145 |
 
-Source: `outputs/cluster/group_average/_voxel_timeseries_model_selection/norm-zscore_prepca50/selected_clusterings.csv`.
+Source: `outputs/cluster/group_average/_vertex/norm-zscore_raw/selected_clusterings.csv`.
 
 The **channel-side** `latent_best` winners show the same bias but not
 uniformly: nemotron and topoomni also collapse to k=2, peav does not.

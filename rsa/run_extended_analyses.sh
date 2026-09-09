@@ -94,7 +94,7 @@ for model in RESIDUALIZED_AV_MODELS:
             consolidated_names = list(nib.load(consolidated).header.get_axis(0).name)
         except Exception:
             pass
-    for suffix in ('linear_resid', 'projection_resid'):
+    for suffix in ('linear_resid_unimodal', 'projection_resid_own'):
         scalar_name = suffix
         if scalar_name in consolidated_names:
             continue

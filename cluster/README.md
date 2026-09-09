@@ -13,14 +13,26 @@ This directory holds two independent pipelines that answer different questions:
   scrambled/dummy controls (`av_integration.py`). This is a **complete, frozen
   scientific result** — not deprecated, just not where new work happens.
 
-- **Clustering-method-selection pipeline** — `voxel_timeseries_clustering.py` /
-  `voxel_timeseries_model_selection.py` and their channel-embedding analogues
+- **Clustering-method-selection pipeline** — `vertex_clustering.py` /
+  `vertex_model_selection.py` and their channel-embedding analogues
   `channel_timeseries_clustering.py` / `channel_timeseries_model_selection.py`,
-  plus `consolidate_voxel_timeseries_outputs.py`. This compares
+  plus `consolidate_vertex_outputs.py`. This compares
   dimensionality-reduction and clustering methods directly on raw
   grayordinate or embedding-channel time series, independent of the HMM/
   interaction machinery above. **This is the entry point for new clustering
   work.**
+
+- **Run-generalization analyses** — `channel_stability.py` independently
+  reclusters channels across runs and evaluates frozen memberships on held-out
+  activity. `heldout_roi_alignment.py` selects a channel-cluster match using
+  training runs and evaluates that fixed match in anatomical auditory and
+  posterior-temporal ROIs on the unseen run. Both are invoked through
+  `cluster.sh`.
+
+```bash
+bash cluster/cluster.sh channel_stability
+bash cluster/cluster.sh heldout_roi_alignment
+```
 
 ## Script reference
 
@@ -32,31 +44,38 @@ This directory holds two independent pipelines that answer different questions:
   three controls (avscramble, clsav_from_a, clsav_from_v) in FDR-significant
   cell count, then cross-references surviving networks against the Glasser atlas.
 - `channel_timeseries_clustering.py` — channel analogue of
-  `voxel_timeseries_clustering.py`: reduces and clusters embedding channels
+  `vertex_clustering.py`: reduces and clusters embedding channels
   (rows) across the 626 aligned 5-second movie bins (columns) instead of
   grayordinates across fMRI TRs; reuses the same reduction/clustering code,
-  writes labels to CSV (no grayordinate axis to save as `.dlabel.nii`).
+  writes labels to CSV (no grayordinate axis to save as `.dlabel.nii`). Unlike
+  the vertex side it still fits a shared preliminary PCA before the nonlinear
+  reducers, and there is no stimulus-driven mask (channels aren't spatial).
 - `channel_timeseries_model_selection.py` — channel analogue of
-  `voxel_timeseries_model_selection.py`; same sweep/selection-score math, CSV
+  `vertex_model_selection.py`; same sweep/selection-score math, CSV
   output instead of CIFTI.
-- `consolidate_voxel_timeseries_outputs.py` — merges the selected voxel-timeseries
-  cluster maps into five authoritative review CIFTIs (see the "Hyperparameter
+- `consolidate_vertex_outputs.py` — merges the selected vertex
+  cluster maps into review CIFTIs (see the "Hyperparameter
   selection workflow" section below for details); `--delete-duplicates` removes
   the superseded per-run dlabels after a round-trip validation passes.
+- `screen_temporal_differentiation.py` — screens selected clusterings by temporal distinctness: computes mean/max off-diagonal Pearson correlation among cluster-mean profiles. Solutions with near-redundant profiles (r > 0.9) are flagged as uninformative. Outputs per-solution correlation matrices and visualizations to `outputs/cluster/profile_correlations/`.
+- `vertex_roi_hotspot_enrichment.py` — tests whether vertex clusters over-represent auditory/visual/audiovisual Glasser ROI groups or the top 10% of the full-AV-embedding searchlight RSA map, using hypergeometric enrichment against the stimulus-driven mask population. Outputs to `outputs/cluster/_vertex_roi_hotspot_enrichment/`.
 
-## Voxel-timeseries dimensionality reduction and clustering
+## Vertex dimensionality reduction and clustering
 
 Run the full group-average sweep with:
 
 ```bash
-bash cluster/run_voxel_timeseries_clustering.sh
+bash cluster/run_vertex_clustering.sh
 ```
 
-The script z-scores each grayordinate over time, fits one shared 50-component
-PCA for denoising and computational tractability, and creates three-dimensional
-embeddings with PCA, metric MDS, Isomap, t-SNE, FastICA, and UMAP. Set
-`N_COMPONENTS=2` to use two dimensions instead. Every embedding is clustered
-with k-means (`k=4`), HDBSCAN, and BIRCH with `n_clusters=None`.
+Vertices are first restricted to the stimulus-driven mask (`--mask-cifti`,
+default `outputs/sitmulus_regressor_cifti/HCP_movie_stimulus_correlation_5sdelay_normalized.dscalar.nii`,
+value > `--mask-threshold`, default 0 — 68885/108441 cortical grayordinates show positive stimulus correlation). The script
+z-scores each masked-in grayordinate over time and creates three-dimensional
+embeddings directly from the raw time series with PCA, metric MDS, Isomap,
+t-SNE, FastICA, and UMAP — no preliminary PCA reduction. Set `N_COMPONENTS=2`
+to use two dimensions instead. Every embedding is clustered with k-means
+(`k=4`), HDBSCAN, and BIRCH with `n_clusters=None`.
 
 MDS, t-SNE, and UMAP are fitted to a reproducible landmark sample because exact MDS
 is quadratic in the number of grayordinates and scikit-learn t-SNE has no
@@ -68,8 +87,8 @@ JSON alongside the outputs.
 The default output root is:
 
 ```text
-outputs/cluster/group_average/_voxel_timeseries/
-└── norm-zscore_prepca50_nc3_landmarks2000/
+outputs/cluster/group_average/_vertex/norm-zscore_raw/
+└── fixed_nc3_landmarks2000/
     └── sreduce-pca_snc3/
         ├── spatial_vertex_components.npy
         ├── reduction_report.json
@@ -84,11 +103,14 @@ already used by `run_cluster.py`: `sreduce-{method}_snc{components}` and
 `scluster-{method}_{parameters}`. Method-specific manifold settings are added
 to the reduction tag (for example, `_landmarks2000_nn15` for Isomap), ensuring
 that changed settings never collide with cached results. The internal CIFTI
-LabelAxis map name is the full config tag, label key 0 is transparent
-`unassigned`, and cluster keys are consecutive one-based values named
-`cluster_1`, `cluster_2`, and so on. Raw estimator labels remain available in
-`spatial_vertex_labels.npy`; the JSON report records the raw-to-CIFTI key
-mapping.
+LabelAxis map name is the full config tag; label key 0 is transparent
+`not_stimulus_driven` (every vertex outside the mask), cluster keys are
+consecutive one-based values named `cluster_1`, `cluster_2`, and so on, and
+HDBSCAN noise among masked-in vertices (if any) gets its own reserved key
+(`noise`) one past the last cluster — never 0, never a cluster id. This same
+convention is baked into `spatial_vertex_labels.npy` (via
+`vertex_clustering.expand_masked_labels`), not just the dlabel. Each report
+records `noise_label`, `n_masked_in`, and `n_masked_out`.
 
 All settings are CLI flags. The shell runner also exposes the main settings as
 environment variables, for example:
@@ -96,7 +118,7 @@ environment variables, for example:
 ```bash
 N_COMPONENTS=2 N_LANDMARKS=3000 \
 REDUCTIONS="pca isomap fastica" \
-bash cluster/run_voxel_timeseries_clustering.sh
+bash cluster/run_vertex_clustering.sh
 ```
 
 Because each result is independently cached, rerunning resumes missing
@@ -109,7 +131,7 @@ To tune the reducers before clustering, and then tune the clustering methods
 on each selected 2-D, 3-D, and method-specific latent-best embedding, run:
 
 ```bash
-bash cluster/run_voxel_timeseries_model_selection.sh
+bash cluster/run_vertex_model_selection.sh
 ```
 
 The reducer sweep evaluates geometry preservation on a fixed grayordinate
@@ -140,59 +162,55 @@ fragmented. Both the evaluation and scaled full-fit values are recorded in
 For review, consolidate the selected one-map dlabels with:
 
 ```bash
-python cluster/consolidate_voxel_timeseries_outputs.py --delete-duplicates
+python cluster/consolidate_vertex_outputs.py --delete-duplicates
 ```
 
-This produces five authoritative files under `review_ciftis/`: one 18-map
-CIFTI for each clustering algorithm,
-`selected_clusterings_all-2d_3d_bestdim.dlabel.nii` with all 54 selected maps,
-and `selected_clusterings_all-2d_3d_stimregressor.dlabel.nii` with those same
-maps multiplied by the binary positive stimulus-regressor mask.
+This produces `best_vertex_clusterings.dlabel.nii` with all 54 selected maps,
+plus algorithm-specific and stimulus-masked review CIFTIs. Its map names follow
+`<reducer>_<2d|3d|best>_<clusterer>_best`, for example
+`umap_best_kmeans_best` and `isomap_3d_hdbscan_best`.
 `review_ciftis/combined_maps_manifest.json` and `map_index.csv`
 are the authoritative map indices. `LOOK_HERE.md` identifies the intended
 review files; redundant individual and superseded dlabels are removed only
 after the consolidated files pass a round-trip validation.
 
-The executed notebook `cluster/voxel_timeseries_cluster_scatterplots.ipynb`
-displays, in plain English grounded in the sweep CSVs, which hyperparameter
-each reducer/clusterer selected and why, then plots only the 2-D and 3-D
-embeddings:
+The executed notebooks are `cluster/vertex_cluster_scatterplots.ipynb` and
+`cluster/channel_cluster_scatterplots.ipynb`. Both include:
 
-- **Dimensionality selection plots**: 6 figures, one per reducer, showing its
-  selection criterion against candidate dimensions with the chosen dimension
-  and elbow distance annotated.
-- **Clustering selection plots**: 3 figures, one per clusterer (k-means,
-  HDBSCAN, BIRCH), each with one subplot per reducer showing the selection
-  score across that clusterer's hyperparameter grid, with the 2-D and 3-D
-  winners starred.
-- **Individual scatterplots**: 36 figures (6 reducers × 3 clusterers × 2
-  roles — 2-D and 3-D only), each named
-  `scatterplot_<reducer>_<clusterer>_<2d|3d>.png`.
+- reducer hyperparameter and dimension sweeps showing trustworthiness,
+  continuity, distance-rank correlation, and each method's named criterion;
+- unclustered 2-D and 3-D embeddings containing every channel or vertex;
+- separate 2-D, 3-D, and latent-best sweeps showing silhouette,
+  Davies–Bouldin, Calinski–Harabasz, cluster-size entropy, and assigned fraction;
+- 36 selected display-space cluster plots;
+- 36 latent-best label projections onto 2-D and 3-D spaces;
+- 2 projections of the global latent-best winner;
+- cluster-evidence diagnostics, including independent-run stability for PE-AV.
 
-The method-specific latent-best ("bestdim") embeddings and their selected
-clustering hyperparameters are still computed and their labels are included
-in the consolidated dlabel CIFTIs above, but are not plotted or saved as
-figures. All figures are saved in the model-selection output's `figures/`
-directory with an index at `figures/scatterplot_index.csv`.
+The executed channel and vertex notebooks contain 115 and 114 indexed figures,
+respectively. PE-AV is the channel notebook's default family.
 
 Outputs are written under:
 
 ```text
-outputs/cluster/group_average/_voxel_timeseries_model_selection/
-└── norm-zscore_prepca50/
-    ├── reduction_sweep.csv
-    ├── selected_reducers.csv
-    ├── clustering_sweep.csv
-    ├── selected_clusterings.csv
-    ├── reduction_candidates/
-    ├── review_ciftis/
-    │   ├── selected_clusterings_all-2d_3d_bestdim.dlabel.nii
-    │   ├── selected_clusterings_all-2d_3d_stimregressor.dlabel.nii
-    │   ├── selected_kmeans_clusterings_2d_3d_bestdim.dlabel.nii
-    │   ├── selected_hdbscan_clusterings_2d_3d_bestdim.dlabel.nii
-    │   └── selected_birch_clusterings_2d_3d_bestdim.dlabel.nii
-    └── figures/
+outputs/cluster/group_average/_vertex/norm-zscore_raw/
+├── reduction_sweep.csv
+├── selected_reducers.csv
+├── clustering_sweep.csv
+├── selected_clusterings.csv
+├── reduction_candidates/
+├── review_ciftis/
+│   ├── best_vertex_clusterings.dlabel.nii
+│   ├── selected_clusterings_all-2d_3d_bestdim.dlabel.nii
+│   ├── selected_clusterings_all-2d_3d_stimregressor.dlabel.nii
+│   ├── selected_kmeans_clusterings_2d_3d_bestdim.dlabel.nii
+│   ├── selected_hdbscan_clusterings_2d_3d_bestdim.dlabel.nii
+│   └── selected_birch_clusterings_2d_3d_bestdim.dlabel.nii
+└── figures/
 ```
 
-All grids are configurable from the Python CLI. The workflow is resumable and
-reuses the preliminary PCA generated by the baseline runner.
+The prior sweep trees (computed with a mandatory 50-component pre-PCA and no
+stimulus mask) are retired under
+`outputs/cluster/group_average/_superseded_vertex/`.
+
+All grids are configurable from the Python CLI. The workflow is resumable.

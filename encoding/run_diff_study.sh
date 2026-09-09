@@ -8,7 +8,7 @@
 #
 # Hypothesis under test (AV-integration claim, encoding-currency version): in
 # true integration regions, BOTH plain predictive alignment (encoding_r2_audiovisual)
-# AND residual AV-band variance (variance_partition_r2_av_residual_band)
+# AND direct incremental AV variance (A+V+J minus A+V)
 # should be high for the native/intact condition and WEAKEN under scramble
 # and dummy.
 #
@@ -16,19 +16,19 @@
 #   plain     Group-average plain encoding (encoding.py, modality=av) for
 #             every {base_model}_{condition} in BASE_MODELS x CONDITIONS.
 #             Reuses encoding/analysis.sh via ENCODING_MODELS_OVERRIDE.
-#   avresid   Group-average banded-ridge unique-AV-variance
+#   incremental  Group-average direct incremental AV variance
 #             (encoding/variance_partition.py) for every condition. Scramble
-#             uses the condition's OWN a/v (--nuisance-model defaults to
-#             --model); dummy conditions point --nuisance-model at the
-#             INTACT base model with a single real --nuisance-modalities
+#             uses the intact base model's correct a/v while adding the
+#             mismatched condition's J. Dummy conditions use the intact base
+#             model with a single real --nuisance-modalities
 #             (the placeholder modality can't be a nuisance band).
-#   consolidate  encoding/diff_maps.py (binding + modality_presence_diff).
-#   all       plain + avresid + consolidate.
+#   consolidate  encoding/diff_maps.py pairing and modality-presence contrasts.
+#   all       plain + incremental + consolidate.
 #
 # Usage
 #   bash encoding/run_diff_study.sh [STAGE]
 #
-# Env overrides (this is a LARGE compute job -- each avresid run is a
+# Env overrides (this is a LARGE compute job -- each incremental run is a
 # cross-validated banded-ridge fit, not a cheap correlation):
 #   DIFF_STUDY_MODELS       space-separated subset of BASE_MODELS.
 #   DIFF_STUDY_CONDITIONS   space-separated subset of {avscramble,clsav_from_a,clsav_from_v}.
@@ -86,8 +86,7 @@ STAGE=${1:-plain}
 run_diff_study_plain() {
     # Includes each BASE's own intact run (needed by diff_maps.py's
     # diff_intact_minus_scrambled/dummy_plain_rsa) alongside every
-    # scramble/dummy condition -- mirrors run_diff_study_avresid's
-    # "also ensure the intact base model's own AVresid exists" check.
+    # scramble/dummy condition and the intact base model.
     local MODELS_STR="" BASE COND
     for BASE in "${BASE_MODELS[@]}"; do
         MODELS_STR="${MODELS_STR}${BASE}:av;"
@@ -102,15 +101,16 @@ run_diff_study_plain() {
     log "=== Diff-study plain encoding complete ==="
 }
 
-run_diff_study_avresid() {
+run_diff_study_incremental() {
     local BASE COND MODEL NUISANCE_MODEL NUISANCE_MODS
-    log "=== Diff-study AVresid (group-average) ==="
+    log "=== Diff-study incremental AV (group-average) ==="
     for BASE in "${BASE_MODELS[@]}"; do
         for COND in "${CONDITIONS[@]}"; do
             MODEL="${BASE}_${COND}"
             case "$COND" in
                 avscramble)
-                    NUISANCE_MODEL="$MODEL"; NUISANCE_MODS="a,v" ;;
+                    log "  SKIP ${MODEL}: global scramble embeddings cross train/test boundaries"
+                    continue ;;
                 clsav_from_a)
                     NUISANCE_MODEL="$BASE"; NUISANCE_MODS="a" ;;
                 clsav_from_v)
@@ -134,11 +134,10 @@ run_diff_study_avresid() {
                 --test-video-ids "$TEST_VIDEO_IDS" \
                 || log "  SKIP ${MODEL}: variance_partition.py failed (embeddings missing?)"
         done
-        # Also ensure the intact base model's own AVresid exists (needed by
-        # diff_maps.py's binding/modality_presence_diff); cheap to re-check,
+        # Also ensure the intact base model's incremental map exists; cheap to re-check,
         # variance_partition.py has no internal skip-if-exists so only run if
         # the output is actually missing.
-        INTACT_OUT="${OUTPUT_DIR}/group_average/${BASE}/delay5s_norm_bin5s_skip5s/variance_partition_r2_av_residual_band.dscalar.nii"
+        INTACT_OUT="${OUTPUT_DIR}/group_average/${BASE}/delay5s_norm_bin5s_skip5s/incremental_av_delta_r2.dscalar.nii"
         if [ ! -f "$INTACT_OUT" ]; then
             log "  ${BASE} (intact)"
             run_python "${SCRIPT_DIR}/variance_partition.py" \
@@ -158,14 +157,14 @@ run_diff_study_avresid() {
                 || log "  SKIP ${BASE} (intact): variance_partition.py failed"
         fi
     done
-    log "=== Diff-study AVresid complete ==="
+    log "=== Diff-study incremental AV complete ==="
 }
 
 case "$STAGE" in
     plain)       run_diff_study_plain ;;
-    avresid)     run_diff_study_avresid ;;
+    incremental|avresid) run_diff_study_incremental ;;
     consolidate) run_python "${SCRIPT_DIR}/diff_maps.py" ;;
-    all)         run_diff_study_plain; run_diff_study_avresid; run_python "${SCRIPT_DIR}/diff_maps.py" ;;
-    *) echo "Unknown STAGE: $STAGE (use: plain | avresid | consolidate | all)"; exit 1 ;;
+    all)         run_diff_study_plain; run_diff_study_incremental; run_python "${SCRIPT_DIR}/diff_maps.py" ;;
+    *) echo "Unknown STAGE: $STAGE (use: plain | incremental | consolidate | all)"; exit 1 ;;
 esac
 log "Diff study (${STAGE}) complete."

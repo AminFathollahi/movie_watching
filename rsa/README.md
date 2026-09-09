@@ -222,37 +222,61 @@ parallel --citation
 
 ## Full-sheet RSA
 
+`rsa/full_sheet_rsa.py` is the single consolidated driver: one RSA sweep
+across the ENTIRE 304×512 = 155,648-unit Topo-Omni sheet for each CCA seed
+ROI, under TRUE (trained) coordinates. It replaces three earlier scripts:
+`cca_seed_sheet_rsa.py` (layer 18 only, 2,048 units = 1.3% of the sheet,
+plotted at the RASTER fallback lattice — not the coordinate system the
+checkpoint trained under), `cca_seed_sheet_rsa_truecoords.py` (fixed the
+coordinates but still only 6 hand-picked decoder layers), and
+`topography_control.py` (a separate follow-up script, now folded in as one
+part of the same sweep). Both retired drivers are gone from `rsa/`; the
+geometry, plotting, and `characterize()`/hotspot machinery they and this
+script shared now live in `rsa/shared/sheet_rsa.py`.
+
 - `notebooks/feature_extraction/topo_omni_extract_full_sheet.py` — extracts
   the complete 304×512 = 155,648-unit Topo-Omni cortical sheet, intact joint
-  audiovisual pass only. `main()` ends with a self-validation gate that
-  correlates all 36 decoder layers against the pre-existing
-  `topoomni_layer18_sheet_mp_av.npy` reference and asserts layer 18 is the
-  unique argmax; on the delivered sheet it passed with layer 18 = 0.7089 vs.
-  runner-up layer 19 = 0.3041 (margin 0.4049).
-- `rsa/full_sheet_rsa.py` — the searchlight RSA driver. Imports
-  `_plot_sheet_map`/`_sanity_corr` from `rsa/cca_seed_sheet_rsa.py` and
-  `load_true_coords`/`characterize` from `rsa/cca_seed_sheet_rsa_truecoords.py`.
+  audiovisual pass only. No unimodal a/v passes were extracted for the full
+  sheet, so no per-unit stimulus-modality-preference analysis is possible
+  here. `main()` ends with a self-validation gate that correlates all 36
+  thinker-stack layers against the pre-existing `topoomni_layer18_sheet_mp_
+  av.npy` reference and asserts layer 18 is the unique argmax; on the
+  delivered sheet it passed with layer 18 = 0.7089 vs. runner-up layer 19 =
+  0.3041 (margin 0.4049).
+- `rsa/full_sheet_rsa.py` — the searchlight RSA driver, plus the topography
+  control (folded in, see below).
+- `rsa/shared/sheet_rsa.py` — shared geometry (`tower_id`, `load_true_
+  coords`, `knn_on_sheet`, `random_neighbors_within_tower`), plotting, and
+  `characterize()` (cross-seed contrast, per-tower rho, hotspot composition
+  and overlap).
 - `rsa/run_full_sheet_rsa.sh` — the runner.
 
 **Sheet geometry** (304 rows × 512 cols = 155,648 units, row-major
-flattened):
+flattened) — three architectural towers, from each unit's fixed RASTER
+position (unaffected by the true-coordinate permutation, which only moves
+where a unit is *plotted*):
 
-- Rows 0–159, cols 0–255: VISION encoder tower, 32 layers × 5 rows (40,960
+- Rows 0–159, cols 0–255: VISION encoder, 32 layers × 5 rows (40,960 units).
+- Rows 0–159, cols 256–511: AUDIO encoder, 32 layers × 5 rows (40,960
   units).
-- Rows 0–159, cols 256–511: AUDIO encoder tower, 32 layers × 5 rows (40,960
-  units).
-- Rows 160–303, all 512 cols: DECODER block, the Thinker language-model
-  backbone, 36 layers × 4 rows (73,728 units). Layer L occupies rows
-  `160+4L .. 163+4L`; the layer-18 reference used by every earlier Topo-Omni
-  embedding is rows 232–235.
-- `region_layer_id` scheme: vision layer `l` → `l` (0–31); audio layer `l` →
-  `100+l` (100–131); decoder layer `l` → `200+l` (200–235). 100 layers total.
+- Rows 160–303, all 512 cols: THINKER stack — the autoregressive
+  language-model backbone consuming fused audio+video tokens
+  (`multimodal_cortical_sheet` in `Model Repos/topo-omni/src/models/
+  qwen2_5_omni.py`), 36 layers × 4 rows (73,728 units). Not a Whisper-style
+  audio decoder and not the Talker (never instantiated) — call it "thinker",
+  never "decoder". Layer L occupies rows `160+4L .. 163+4L`; the layer-18
+  reference used by every earlier Topo-Omni embedding is rows 232–235.
+
+**Coordinates:** no trained `coords.npy` ships with the released checkpoint
+or its HF cache. `load_true_coords` is a deterministic regeneration of
+`init_coords.permute_coordinates(seed=42)` — a seeded permutation of the
+raster lattice within each architectural block, not a rotation — validated
+bit-identical across two torch builds. Cached at
+`outputs/rsa/cca_seed_sheet_rsa/topoomni_true_coords_seed42.npy`.
 
 **Run parameters:** 155,648 units × 626 bins, k=100 neighbours, n_perm=1000,
 seed 42, spearman, bin 5s / skip 5s, delay 5s, FDR alpha 0.05, true
-coordinates (`permute_coordinates`, seed 42) cached at
-`outputs/rsa/cca_seed_sheet_rsa/topoomni_true_coords_seed42.npy`. Wall time
-17m03s.
+coordinates as above.
 
 **Artifacts:** `outputs/rsa/cca_seed_sheet_rsa/fullsheet_k100_truecoords/`:
 `cca_a_av.csv`, `cca_a_av_rho.npy`, `cca_a_av_rho_sheet_map.png`,
@@ -262,24 +286,34 @@ coordinates (`permute_coordinates`, seed 42) cached at
 **Results** (all from `metadata.json`):
 
 - cca_a (anterior seed): rho range [0.00535, 0.46769], mean 0.1157,
-  FDR-significant 154,044/155,648.
+  FDR-significant 154,044/155,648 (98.97%).
 - cca_p (posterior seed): rho range [0.00875, 0.23909], mean 0.0953,
-  FDR-significant 155,648/155,648.
-- Per-block mean rho — vision (n=32 layers): cca_a 0.0395 / cca_p 0.0506;
-  audio (n=32): cca_a 0.2732 / cca_p 0.1439; decoder (n=36): cca_a 0.0706 /
-  cca_p 0.0931. The anterior>posterior contrast is entirely an audio-block
-  effect — in the vision and decoder blocks posterior actually edges
-  anterior. Both seeds peak in the audio tower (cca_a highest = audio layer
-  29 at 0.3110; cca_p highest = audio layer 28 at 0.1686) and both trough at
-  vision layer 0 (cca_a 0.0115, cca_p 0.0176).
-- diff (a minus p): mean +0.0205, sd 0.0710, positive in 31.16% of units.
-  The audio tower is 26.3% of the sheet, close to that 31% positive
-  fraction — that reconciles a positive mean difference with only a
-  minority of units being positive.
-- diff_max: unit 48936 = audio layer 19, row 95, col 470, delta +0.2465.
-  diff_min: unit 127804 = decoder layer 22, row 249, col 135, delta −0.0909.
-- Cross-seed spatial Pearson r = 0.8639; top-decile hotspot Jaccard 0.7940
-  (overlap 13,778 of union 17,352, n_top_decile 15,565 per seed).
+  FDR-significant 155,648/155,648 (100%). Both at ceiling — a manipulation
+  check (every sheet unit's k-NN patch tracks the movie at all), not a
+  localization finding.
+- Per-tower mean rho — vision: cca_a 0.0395 / cca_p 0.0506; audio: cca_a
+  0.2732 / cca_p 0.1439; thinker: cca_a 0.0706 / cca_p 0.0931. The
+  anterior>posterior contrast is entirely an audio-tower effect — in the
+  vision and thinker towers posterior actually edges anterior (per-tower
+  diff_mean −0.0111 and −0.0225 respectively, vs. +0.1293 for audio).
+- diff (a minus p) over the whole sheet: mean +0.0205, sd 0.0710, positive
+  in 31.16% of units. The audio tower is 26.3% of the sheet, close to that
+  31% positive fraction — that reconciles a positive mean difference with
+  only a minority of units being positive. diff_max: unit 48936, audio
+  tower, true row 95 col 470, delta +0.2465. diff_min: unit 127804, thinker
+  tower, true row 249 col 135, delta −0.0909.
+- Hotspots (top decile by rho, 15,565 units/seed) are almost entirely audio:
+  cca_a 15,480/15,565 (99.5%) audio, 83 thinker, 2 vision; cca_p 15,255/
+  15,565 (98.0%) audio, 290 thinker, 20 vision.
+- Cross-seed spatial Pearson r = 0.8639; hotspot Jaccard 0.7940 (overlap
+  13,778 of union 17,352).
+- **Topography control** (true k=100 neighbourhood vs. k=100 random units
+  drawn uniformly from the same tower, 3 draws): the true neighbourhood did
+  **not** beat random in any of the 8 seed×scope combinations checked (2
+  seeds × {overall, vision, audio, thinker}) — `true_beats_random=false`
+  throughout. E.g. cca_a overall: true mean 0.1157 vs. random mean 0.1697;
+  cca_a audio tower: true 0.2732 vs. random 0.3966. This does not pass —
+  see caveat 3 below.
 
 **Caveats — limits, not findings:**
 
@@ -287,16 +321,18 @@ coordinates (`permute_coordinates`, seed 42) cached at
    seed maps are largely the same map. The A-P contrast is a residual on
    top of a large shared signal, not two independent topographies.
 2. The hotspot contiguity test is saturated and should not be cited as
-   evidence. `observed_mean_nn_dist` was 1.00232 (cca_a) and 1.00343
-   (cca_p) against an integer-grid floor of exactly 1.0, versus a null of
-   ~1.7059. p = 0.0005 is exactly 1/2001, the smallest value 2000
-   permutations can produce. It also tests spatial clustering on
-   coordinates that were themselves generated by a topographic training
-   objective, so clustering is expected by construction.
-3. The `significance_caveat` field inside the delivered `metadata.json`
-   (written 2026-09-03 11:08) is wrong: it reads "Significance was
-   meaningfully below ceiling for at least one seed" because of the
-   over-strict 0.999 gate in the pre-fix version of `full_sheet_rsa.py`.
-   The true minimum is 98.97% (cca_a). The gate is fixed in
-   `rsa/full_sheet_rsa.py` as of this commit, but the existing
-   `metadata.json` was not retroactively edited — it predates the fix.
+   evidence. `observed_mean_nn_dist` was 1.0023 (cca_a) and 1.0034 (cca_p)
+   against an integer-grid floor of exactly 1.0, versus a null of ~1.7059.
+   p = 0.0005 is exactly 1/2001, the smallest value 2000 permutations can
+   produce. It also tests spatial clustering on coordinates that were
+   themselves generated by a topographic training objective, so clustering
+   is expected by construction.
+3. The topography control (above) did not pass: a random same-tower,
+   same-size unit sample scored *higher* mean rho than the true k=100
+   spatial neighbourhood in every combination checked. That is consistent
+   with the searchlight not using topography at all within a tower — a
+   k=100 patch behaves like an arbitrary sample of the tower, not a
+   spatially localized one. The per-tower magnitude comparisons above
+   (vision/audio/thinker rho, the A-P contrast) do not depend on this
+   control and stand on their own; treat any claim of true 2-D topographic
+   localization on this sheet as unsupported.

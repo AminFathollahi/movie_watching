@@ -10,9 +10,9 @@ movie_watching/
 ├── make_average.sh             # Build group-average CIFTI from per-subject CIFTIs
 ├── official_timing.py          # Reconciles HCP official rest-block timing with movie_timing.csv
 ├── rsa/                        # Representational Similarity Analysis (primary engine)
-├── encoding/                   # Ridge encoding models (himalaya) + banded-ridge variance partition
+├── encoding/                   # Ridge encoding, incremental AV, and compression analyses
 ├── cf_modeling/                # Audiovisual cortical field modeling (Hedger et al. 2025)
-├── cluster/                    # Temporal-state/network and voxel-timeseries clustering analyses
+├── cluster/                    # Temporal-state/network and vertex-timeseries clustering analyses
 ├── connectivity/               # Seed-based whole-cortex functional connectivity from an RSA-derived ROI
 ├── viz/                        # Standalone cortex-map plotting (nilearn, no wb_view dependency)
 └── notebooks/
@@ -28,10 +28,12 @@ movie_watching/
 | Folder | Method | Script | Environment |
 |---|---|---|---|
 | `rsa/` | Searchlight + Glasser parcel RSA, plus validation (noise ceiling, crossnobis, 2-factor bootstrap, permutation/spin tests) and the multimodal-integration analyses (partial RSA, temporal-scramble binding, cross-architecture convergence, Topo-Omni stimulus-clustering localizer) | `analysis.sh` | `movie` |
-| `encoding/` | Ridge encoding (himalaya RidgeCV) + banded-ridge unique-AV-variance partition (`variance_partition.py`) | `analysis.sh` | `movie` |
+| `encoding/` | Ridge encoding plus leakage-safe incremental AV and matched-compression comparisons | `analysis.sh` | `movie` |
 | `cf_modeling/` | Banded ridge connective field modeling (Hedger 2025) | `analysis.sh` | `movie` |
-| `cluster/` | Temporal-state/network clustering plus voxel-timeseries reduction × clustering maps | `cluster.sh` / `run_voxel_timeseries_clustering.sh` | `movie` |
+| `cluster/` | Temporal-state/network clustering plus vertex-timeseries reduction × clustering maps | `cluster.sh` / `run_vertex_clustering.sh` | `movie` |
 | `connectivity/` | Seed-based whole-cortex functional connectivity from an RSA top-5% ROI, 3 time windows (full/rest/stim) | `seed_connectivity.py` | `movie` |
+
+**For detailed script documentation, analysis methods, and output structure, see the README.md in each folder**: [`rsa/README.md`](rsa/README.md), [`encoding/README.md`](encoding/README.md), [`cf_modeling/README.md`](cf_modeling/README.md), [`cluster/README.md`](cluster/README.md), [`connectivity/README.md`](connectivity/README.md).
 
 ## Quick Start
 
@@ -56,7 +58,7 @@ and concatenates all 4 runs into a single full-run CIFTI.
 conda activate movie
 
 python preprocess_individual.py \
-    --raw-dir /media/amin/Samsung_T5/HCP/Data/fMRI_CIFTI \
+    --raw-dir /media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/individual-59k \
     --out-dir /path/to/data/preprocessed \
     --subjects-list /path/to/data/subjects.txt \
     --sg-filter --psc --gsr \
@@ -143,14 +145,14 @@ before RSA/encoding ever see it, run once per model in
 
 ```bash
 conda activate movie
-# "_av_linear_resid" (nuisance = AudioMAE_a + VideoMAEv2_v, same pair as
+# "_av_linear_resid_unimodal" (nuisance = AudioMAE_a + VideoMAEv2_v, same pair as
 #  rsa/partial_rsa.py's partial_corr_* runs) and "_av_linear_resid_encoder"
 #  (omni-family only, nuisance = own encoder-penultimate a/v towers):
 python notebooks/feature_extraction/compute_linear_residual_embeddings.py \
     --embeddings-dir <embeddings_dir> --timing-csv data/movie_timing.csv \
     --run-trs <run_trs.npy> --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0
 
-# "_av_projection_resid" (per-timepoint orthogonal projection vs. the
+# "_av_projection_resid_own" (per-timepoint orthogonal projection vs. the
 #  model's own unimodal a/v streams -- no cross-sample regression):
 python notebooks/feature_extraction/compute_projection_residual_embeddings.py \
     --embeddings-dir <embeddings_dir> --timing-csv data/movie_timing.csv \

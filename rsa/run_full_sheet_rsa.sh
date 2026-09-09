@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # rsa/run_full_sheet_rsa.sh
 # Runs rsa/full_sheet_rsa.py: RSA between the two CCA seed ROIs and
-# Topo-Omni's COMPLETE 304x512 (155,648-unit) cortical sheet (encoder +
-# all 36 decoder layers) under TRUE (permute_coordinates seed=42)
-# coordinates. See that script's module docstring for full methodology.
+# Topo-Omni's COMPLETE 304x512 (155,648-unit) cortical sheet (vision +
+# audio encoders, rows 0-159, plus the full 36-layer thinker stack, rows
+# 160-303) under TRUE (permute_coordinates seed=42) coordinates. See that
+# script's module docstring for full methodology.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
@@ -31,9 +32,9 @@ SEED="${SEED:-42}"
 # 155,648 units is 12.7x the 12,288-unit multilayer truecoords run. Per-batch
 # GPU memory there is dominated by (vertex_batch_size x n_pairs) intermediates
 # -- independent of total unit count -- so this batch size is not shrunk for
-# memory; it is kept at the same conservative value the truecoords run already
-# validated under GPU contention (see rsa/run_cca_seed_sheet_rsa_truecoords.sh),
-# now with the WHOLE card available (CF killed by the calling chain). The
+# memory; it is kept at the same conservative value validated under GPU
+# contention on the earlier hand-picked-layer true-coordinate runs, now with
+# the WHOLE card available (CF killed by the calling chain). The
 # 12.7x unit-count increase instead means ~12.7x more loop iterations (wall
 # time), not more peak memory.
 GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-64}"

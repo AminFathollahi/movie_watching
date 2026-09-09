@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import cf_modeling.persubject_cca_channel_1pct as pcca1pct  # noqa: E402
+from cf_modeling.cf_naming import persubject_output_root  # noqa: E402
 from cf_modeling.run_cca_islands import DEFAULT_TEMPLATE  # noqa: E402
 from cifti_io import save_cifti_map, save_cifti_multimap, get_bm_axis  # noqa: E402
 from connectivity.seed_connectivity import compute_seed_connectivity  # noqa: E402
@@ -63,7 +64,7 @@ DEFAULT_SEARCHLIGHT_ROOT = MOVIE_ROOT / "outputs/rsa/raw/subject_data"
 SEARCHLIGHT_SUBPATH = (
     "pe-av-small-16-frame_av/k100_delay5s_bin5s_skip5s_spearman/"
     "rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy")
-DEFAULT_OUT_DIR = MOVIE_ROOT / "outputs/cf_modeling/persubject_cca_1pct"
+DEFAULT_OUT_DIR = persubject_output_root() / "persubject_cca_1pct"
 DEFAULT_CONTRAST_CSV = DEFAULT_OUT_DIR / "per_subject_contrast.csv"
 DEFAULT_PERSUBJECT_OUT = DEFAULT_OUT_DIR / "persubject"
 N_GRAY = pcca1pct.N_GRAY  # 108441

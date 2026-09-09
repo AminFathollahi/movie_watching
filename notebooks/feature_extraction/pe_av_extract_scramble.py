@@ -1,48 +1,31 @@
-"""
-notebooks/feature_extraction/pe_av_extract_scramble.py
-=========================================================
-Move 3 (temporal-scramble binding control) — headless PE-AV extraction with
-an A-V temporal scrambling option. Minimal, focused re-implementation of
-pe_av_embeddings.ipynb's core extract_embeddings() path (facebook/pe-av-small-16-frame,
-5s segments only, _a/_v/_av modalities only -- captions/transcripts/events are
-out of scope for this control) so it can run headless with a --scramble-av flag.
-
-Intact mode reproduces the notebook's existing pe-av-small-16-frame_{a,v,av}.npy
-byte-for-byte (same pairs, same batch size, same model) -- run it once to verify
-before trusting the scrambled output; if intact-mode files already exist on
-disk this script will not overwrite them unless --force is passed.
-
-Scrambled mode pairs each video segment with a RANDOMLY PERMUTED audio segment
-(default seed 42, same convention as extract_cav_mae_sync.py's --scramble-av) and
-saves to outputs/model_embeddings/pe-av-small-16-frame_avscramble/bin5s_skip5s/.
-
---seed lets this run be repeated with a DIFFERENT random AV pairing, saving to a
-seed-tagged model name (pe-av-small-16-frame_avscramble_seed{N}) instead of the
-canonical seed-42 output, so it doesn't clobber the intact-vs-scrambled control used
-elsewhere (partial_rsa.py, temporal_scramble_binding.py). This is what
-rsa/run_av_scramble_permutations.sh uses to build an empirical null of
-re-inferred (not RDM-reindexed) AV pairings -- see that script's docstring for why
-this can't be done cheaply by permuting an RDM post-hoc (PE-AV's fusion is nonlinear).
-
-Run with:
-    conda run --no-capture-output -n avtransformer \
-        python notebooks/feature_extraction/pe_av_extract_scramble.py --scramble-av [--seed 1]
-"""
+"""Extract PE-AV joint embeddings under controlled audio-video pairings."""
 
 import argparse
 import gc
+import os
 import re
 from pathlib import Path
 
+# Must run before any transformers/huggingface_hub import -- HF_HOME is read
+# at import time, so setting it later has no effect on cache resolution.
+os.environ["HF_HOME"] = "/media/amin/ADATA HD710 PRO/hf_models"
+
 import numpy as np
+import pandas as pd
 import torch
 from natsort import natsorted
 from transformers import AutoModel, AutoProcessor
 
+from av_pairing import factorial_contrast, fold_confined_pairing, fold_reference_pairing
+
 MODEL_ID    = "facebook/pe-av-small-16-frame"
 MODEL_NAME  = "pe-av-small-16-frame"
-DATA_BASE   = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
+DATA_BASE   = Path(os.environ.get(
+    "MOVIE_SEGMENTED_DIR",
+    "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered",
+))
 OUTPUT_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+TIMING_CSV  = Path("/home/amin/Research/Representation/Movie/data/movie_timing.csv")
 SEG_SEC     = 5.0
 BATCH_SIZE  = 8
 SCRAMBLE_SEED = 42
@@ -105,15 +88,25 @@ def extract_embeddings(model, processor, pairs, batch_size, device) -> dict:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--scramble-av", action="store_true", dest="scramble_av")
+    pairing = p.add_mutually_exclusive_group()
+    pairing.add_argument("--scramble-av", action="store_true", dest="scramble_av")
+    pairing.add_argument("--held-out-run", type=int, choices=(1, 2, 3, 4))
+    pairing.add_argument("--factorial-run", type=int, choices=(1, 2, 3, 4))
     p.add_argument("--seed", type=int, default=SCRAMBLE_SEED,
-                   help="AV-pairing permutation seed (only used with --scramble-av). "
+                   help="Pairing seed. "
                         "Seed 42 is the canonical control and keeps the legacy output name; "
                         "any other seed is tagged into the output model name.")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--timing-csv", type=Path, default=TIMING_CSV)
     args = p.parse_args()
 
-    if not args.scramble_av:
+    if args.factorial_run is not None:
+        model_out_name = f"{MODEL_NAME}_interaction_run{args.factorial_run}_seed{args.seed}"
+    elif args.held_out_run is not None:
+        model_out_name = (
+            f"{MODEL_NAME}_avmismatch_run{args.held_out_run}_seed{args.seed}"
+        )
+    elif not args.scramble_av:
         model_out_name = MODEL_NAME
     elif args.seed == SCRAMBLE_SEED:
         model_out_name = f"{MODEL_NAME}_avscramble"
@@ -122,8 +115,13 @@ def main():
     out_dir = OUTPUT_BASE / model_out_name / f"bin{int(SEG_SEC)}s_skip{int(SEG_SEC)}s"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    modalities = ["v", "a", "av"]
-    if not args.force and all((out_dir / f"{model_out_name}_{m}.npy").exists() for m in modalities):
+    controlled = args.held_out_run is not None or args.factorial_run is not None
+    modalities = ["av"] if controlled else ["v", "a", "av"]
+    manifest_path = out_dir / "pairing_manifest.csv"
+    complete = all((out_dir / f"{model_out_name}_{m}.npy").exists() for m in modalities)
+    if args.held_out_run is not None or args.factorial_run is not None:
+        complete = complete and manifest_path.exists()
+    if not args.force and complete:
         print(f"All outputs already exist at {out_dir} -- skipping (use --force to overwrite).")
         return
 
@@ -135,13 +133,43 @@ def main():
 
     pairs = find_chunk_pairs(DATA_BASE, SEG_SEC)
     print(f"{len(pairs)} intact (video, audio) pairs found.")
-    if args.scramble_av:
+    if args.factorial_run is not None:
+        videos = [pair[0] for pair in pairs]
+        audios = [pair[1] for pair in pairs]
+        references, manifest = fold_reference_pairing(
+            videos, pd.read_csv(args.timing_csv), args.factorial_run, args.seed,
+        )
+        first_cross = list(zip(videos, [audios[index] for index in references]))
+        second_cross = list(zip(
+            [videos[index] for index in references], audios,
+        ))
+        first = extract_embeddings(model, processor, first_cross, BATCH_SIZE, DEVICE)["av"]
+        second = extract_embeddings(model, processor, second_cross, BATCH_SIZE, DEVICE)["av"]
+        intact_path = (
+            OUTPUT_BASE / MODEL_NAME / f"bin{int(SEG_SEC)}s_skip{int(SEG_SEC)}s"
+            / f"{MODEL_NAME}_av.npy"
+        )
+        intact = np.load(intact_path)
+        embeds = {"av": factorial_contrast(intact, references, first, second)}
+        manifest["representation_space"] = "post_layer_norm_linear_head"
+        manifest.to_csv(manifest_path, index=False)
+    elif args.held_out_run is not None:
+        videos = [pair[0] for pair in pairs]
+        audios = [pair[1] for pair in pairs]
+        paired_audio, manifest = fold_confined_pairing(
+            videos, audios, pd.read_csv(args.timing_csv), args.held_out_run, args.seed,
+        )
+        pairs = list(zip(videos, paired_audio))
+        manifest.to_csv(manifest_path, index=False)
+    elif args.scramble_av:
         pairs = scramble_audio(pairs, args.seed)
 
-    print(f"Extracting from {len(pairs)} pairs (scramble_av={args.scramble_av}) ...")
-    embeds = extract_embeddings(model, processor, pairs, BATCH_SIZE, DEVICE)
+    if args.factorial_run is None:
+        print(f"Extracting from {len(pairs)} pairs (scramble_av={args.scramble_av}) ...")
+        embeds = extract_embeddings(model, processor, pairs, BATCH_SIZE, DEVICE)
 
-    for mod, arr in embeds.items():
+    for mod in modalities:
+        arr = embeds[mod]
         out_path = out_dir / f"{model_out_name}_{mod}.npy"
         np.save(out_path, arr)
         print(f"  saved {out_path}  shape={arr.shape}")

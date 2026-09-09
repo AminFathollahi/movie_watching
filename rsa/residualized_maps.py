@@ -5,12 +5,16 @@ The output contains one searchlight scalar from each complementary analysis:
 ``partial_correlation``
     Brain/model partial Spearman correlation controlling for AudioMAE and
     VideoMAEv2 RDMs.
-``linear_resid``
+``linear_resid_unimodal``
     RSA of the AV embedding after cross-validated linear residualization
     against AudioMAE and VideoMAEv2 embeddings.
-``projection_resid``
+``projection_resid_own``
     RSA of the AV embedding after removing its per-sample projection onto the
     model's dimension-compatible own A/V embedding span.
+``linear_resid_own``
+    RSA of the AV embedding after cross-validated linear residualization
+    against the model's own audio and video embeddings (ridge counterpart of
+    projection_resid_own; PE-AV only).
 
 Each scalar is appended independently, so interrupted and repeated runs only
 load and add maps that are absent from the destination CIFTI.
@@ -38,7 +42,7 @@ from cifti_io import (  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-MAP_ORDER = ("partial_correlation", "linear_resid", "projection_resid")
+MAP_ORDER = ("partial_correlation", "linear_resid_unimodal", "projection_resid_own", "linear_resid_own")
 SEARCHLIGHT_MAP_NAME = "searchlight_spearman_rho"
 
 
@@ -64,11 +68,14 @@ def source_paths(
             / config
             / "partial_corr_r_searchlight.dscalar.nii"
         ),
-        "linear_resid": (
-            rsa_root / f"{model}_av_linear_resid_av" / normal_maps_filename
+        "linear_resid_unimodal": (
+            rsa_root / f"{model}_av_linear_resid_unimodal_av" / normal_maps_filename
         ),
-        "projection_resid": (
-            rsa_root / f"{model}_av_projection_resid_av" / normal_maps_filename
+        "projection_resid_own": (
+            rsa_root / f"{model}_av_projection_resid_own_av" / normal_maps_filename
+        ),
+        "linear_resid_own": (
+            rsa_root / f"{model}_av_linear_resid_own_av" / normal_maps_filename
         ),
     }
 

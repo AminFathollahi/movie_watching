@@ -1,6 +1,6 @@
 """Tune channel-timeseries embeddings, then tune clustering on the winners.
 
-Channel analogue of ``voxel_timeseries_model_selection.py``: the sweep,
+Channel analogue of ``vertex_model_selection.py``: the sweep,
 selection-score, and elbow-selection math (reducer grid, dimension
 criteria, elbow selection, clustering grid, clustering selection score) are
 all imported unchanged from that module and from
@@ -31,14 +31,14 @@ sys.path.insert(0, str(CLUSTER_DIR))
 from io_cluster import write_channel_labels_csv  # noqa: E402
 from channel_timeseries_clustering import (  # noqa: E402
     FAMILIES, OUTPUT_DIR, EMBEDDINGS_DIR, TIMING_CSV, RUN_TRS, _label_names,
-    load_channel_timeseries,
+    channel_model_selection_dir, load_channel_timeseries,
 )
-from voxel_timeseries_model_selection import (  # noqa: E402
+from vertex_model_selection import (  # noqa: E402
     REDUCTION_METHODS, CLUSTER_METHODS, _save_table, run_reducer_sweep,
     select_reducers, cluster_grid, cluster_tag, _fit_cluster,
     cluster_selection_score,
 )
-from voxel_timeseries_clustering import clustering_report, fit_preliminary_pca  # noqa: E402
+from vertex_clustering import clustering_report, fit_preliminary_pca  # noqa: E402
 from channel_vertex_alignment import regress_out_global, _zscore_1d  # noqa: E402
 
 
@@ -361,11 +361,10 @@ def run(args: argparse.Namespace) -> Path:
     pre_pca = np.load(pre_pca_path)
     if pre_pca.ndim != 2 or pre_pca.shape[0] != len(channel_ids):
         raise ValueError("Preliminary PCA rows do not match cached channel_ids")
-    root_tag = f"norm-zscore_prepca{pre_pca.shape[1]}"
-    if args.regress_global:
-        root_tag += "_globalregressed"
-    root = (Path(args.output_dir) / args.family /
-            "_channel_timeseries_model_selection" / root_tag)
+    root = channel_model_selection_dir(
+        args.output_dir, args.family,
+        prepca_components=pre_pca.shape[1], regress_global=args.regress_global,
+    )
     root.mkdir(parents=True, exist_ok=True)
 
     reduction_table_path = root / "reduction_sweep.csv"

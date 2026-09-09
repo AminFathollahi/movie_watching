@@ -1,11 +1,11 @@
 """
 notebooks/feature_extraction/compute_projection_residual_embeddings.py
 ===========================================================================
-Generates "_projection_resid" pseudo-model embeddings: the per-timepoint
+Generates "_projection_resid_own" pseudo-model embeddings: the per-timepoint
 orthogonal-projection residual of a joint AV embedding after removing its
 component in span{a_t, v_t} (see rsa.shared.residuals.projection_residual --
-distinct from "_linear_resid", which fits one shared linear map ACROSS all
-samples; this is a purely local, per-row geometric decomposition).
+distinct from "_linear_resid_unimodal", which fits one shared linear map
+ACROSS all samples; this is a purely local, per-row geometric decomposition).
 
 Two families of runs:
 
@@ -18,7 +18,7 @@ Two families of runs:
                     [thinker-space nuisance -- "_lt" targets are regressed
                     against the base model's "_mp" real unimodal streams,
                     mirroring model_registry._lasttoken_integration_run]
-   Saved as {target_model}_av_projection_resid.
+   Saved as {target_model}_av_projection_resid_own.
 
 2. Encoder-penultimate variant, omni-family only: intended nuisance is
    {family}_encoder_penultimate (a/v), extracted by
@@ -32,7 +32,7 @@ Two families of runs:
    target and nuisance to share one space) is mathematically undefined here.
    This pairing therefore uses the cross-validated ridge residual
    (rsa.shared.residuals.linear_residual) and is tagged
-   "_linear_resid_encoder" rather than "_projection_resid".
+   "_linear_resid_encoder" rather than "_projection_resid_own".
 
 Usage
 -----
@@ -120,7 +120,7 @@ def _place_own_streams_in_av_space(
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Generate _projection_resid (and, where dims mismatch, _linear_resid_encoder) pseudo-models.",
+        description="Generate _projection_resid_own (and, where dims mismatch, _linear_resid_encoder) pseudo-models.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--embeddings-dir", required=True)
@@ -180,10 +180,10 @@ def main():
     for model in SAME_SPACE_OWN_MODELS:
         if model not in selected:
             continue
-        out_model = f"{model}_av_projection_resid"
+        out_model = f"{model}_av_projection_resid_own"
         out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
         if out_path.is_file() and not args.force:
-            log.info(f"[{model}] SKIP projection_resid -- output exists: {out_path}")
+            log.info(f"[{model}] SKIP projection_resid_own -- output exists: {out_path}")
             continue
         try:
             av = load_emb(model, "av")
@@ -199,7 +199,7 @@ def main():
             log.info(f"[{out_model}] ||R||/||av||={rel_norm:.4f} -> {p}")
             done.append(out_model)
         except FileNotFoundError as e:
-            log.warning(f"[{model}] SKIP projection_resid -- {e}")
+            log.warning(f"[{model}] SKIP projection_resid_own -- {e}")
             skipped.append(model)
 
     # ── 2. omni-family: own-mp-unimodal projection residual (mp and lt targets) ──
@@ -215,26 +215,26 @@ def main():
             v_mp = load_emb(f"{base}_mp", "v")
         except FileNotFoundError as e:
             log.warning(f"[{base}] SKIP (own-unimodal nuisance missing) -- {e}")
-            skipped.append(f"{base}_*_projection_resid")
+            skipped.append(f"{base}_*_projection_resid_own")
             continue
 
         for readout in selected_readouts:
             target_model = f"{base}_{readout}"
-            out_model = f"{target_model}_av_projection_resid"
+            out_model = f"{target_model}_av_projection_resid_own"
             out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
             if out_path.is_file() and not args.force:
-                log.info(f"[{target_model}] SKIP projection_resid -- output exists: {out_path}")
+                log.info(f"[{target_model}] SKIP projection_resid_own -- output exists: {out_path}")
                 continue
             try:
                 target = load_emb(target_model, "av")
             except FileNotFoundError as e:
-                log.warning(f"[{target_model}] SKIP projection_resid -- {e}")
-                skipped.append(f"{target_model}_projection_resid")
+                log.warning(f"[{target_model}] SKIP projection_resid_own -- {e}")
+                skipped.append(f"{target_model}_projection_resid_own")
                 continue
             if target.shape[1] != a_mp.shape[1]:
-                log.warning(f"[{target_model}] SKIP projection_resid -- dim mismatch "
+                log.warning(f"[{target_model}] SKIP projection_resid_own -- dim mismatch "
                             f"target={target.shape[1]} nuisance={a_mp.shape[1]}")
-                skipped.append(f"{target_model}_projection_resid (dim mismatch)")
+                skipped.append(f"{target_model}_projection_resid_own (dim mismatch)")
                 continue
             R = projection_residual(target, a_mp, v_mp)
             p = save(out_model, R)

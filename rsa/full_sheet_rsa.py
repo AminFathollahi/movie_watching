@@ -2,51 +2,24 @@
 """
 rsa/full_sheet_rsa.py
 ======================
-RSA between the two CCA seed ROIs and Topo-Omni's COMPLETE 304x512
-(155,648-unit) cortical sheet -- the full encoder block (rows 0-159: vision
-cols 0-255, audio cols 256-511, all 32+32 layers) plus the full 36-layer
-decoder block (rows 160-303) -- under TRUE (trained, permute_coordinates
-seed=42) coordinates.
+RSA between the two CCA seed ROIs (audio-preferring / video-preferring) and
+Topo-Omni's COMPLETE 304x512 (155,648-unit) cortical sheet, under TRUE
+(trained, permute_coordinates seed=42) coordinates: the full vision + audio
+encoder block (rows 0-159) plus the full 36-layer thinker (language-model)
+stack (rows 160-303). Consolidates the three earlier sheet-RSA scripts
+(layer-18-only raster lattice, hand-picked-layer true coordinates, and this
+full-sheet driver) into one sweep over the whole sheet; geometry, plotting,
+and characterization live in rsa/shared/sheet_rsa.py.
 
-Modeled on rsa/cca_seed_sheet_rsa_truecoords.py (READ FULLY before touching
-that file -- it is untracked and irreplaceable; this script only imports
-reusable pieces from it and from rsa/cca_seed_sheet_rsa.py, never edits
-either).
+Per seed this computes: per-unit rho over all 155,648 units, per-tower
+(vision/audio/thinker) mean rho, the cca_a-cca_p contrast per tower, hotspot
+composition by tower, cross-seed hotspot overlap (Jaccard), and a topography
+control -- true k-NN neighbourhoods vs. random same-tower unit samples,
+reported honestly even when it does not favour the true neighbourhood.
 
-Differences from cca_seed_sheet_rsa_truecoords.py
-----------------------------------------------------
-* Single embedding source: notebooks/feature_extraction/topo_omni_extract_
-  full_sheet.py's topoomni_fullsheet_av.npy (n_bins, 155648). ALL 304 rows
-  are already assembled there (encoder + all 36 decoder layers), not a
-  per-layer stack of a handful of decoder layers picked out of TARGET_LAYERS.
-  So `coords` here is simply the full true-coords LUT itself
-  (topoomni_true_coords_seed42.npy), used index-for-index: the LUT was built
-  as flat_k = i*512+j for i in range(304), j in range(512) (see
-  cca_seed_sheet_rsa_truecoords.load_true_coords), which is EXACTLY this
-  sheet's own flat unit ordering (see the extraction script's module
-  docstring -- index = abs_row*512+col, standard row-major flatten). No
-  `true_sheet_coords()` per-layer indexing indirection is needed or correct
-  here.
-* KNN: cca_seed_sheet_rsa.knn_on_sheet() is an O(n^2) brute-force cdist --
-  fine at 2048-12,288 points, but a 155,648x155,648 distance matrix would
-  need ~180 GB. Replaced here with scipy.spatial.cKDTree (O(n log n)), same
-  semantics: k nearest neighbours by Euclidean distance in (row, col) space,
-  self excluded, nearest-first.
-* Modality: intact AV only. topo_omni_extract_full_sheet.py extracts no
-  unimodal a/v passes (tripling cost was out of scope for the full-sheet
-  deliverable), so there is no modality-preference / hotspot-by-modality
-  section here -- only the A-vs-P contrast + hotspot-contiguity/overlap
-  characterization (cca_seed_sheet_rsa_truecoords.characterize(), reused
-  as-is) is computed.
-* layer_id (for characterize()'s per-layer/per-region breakdown) is a
-  synthetic region id computed from each unit's RASTER position (its fixed
-  index in the saved array -- unaffected by the true-coordinate permutation,
-  since that permutation only changes where a unit is PLOTTED, not which
-  architectural layer produced it): vision layer l -> l (0-31), audio layer
-  l -> 100+l (100-131), decoder layer l -> 200+l (200-235). Unlike the
-  truecoords script's 6-layer subset, every decoder layer is present and
-  contiguous here (200-235), so `characterize()`'s per_layer breakdown is a
-  genuine full decoder-depth profile, not an isolated-band caveat.
+Modality: intact AV only -- topo_omni_extract_full_sheet.py extracts no
+unimodal a/v passes for the full sheet, so no per-unit modality-preference
+analysis is possible here.
 
 Usage
 -----
@@ -66,7 +39,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy import stats
-from scipy.spatial import cKDTree
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -77,69 +49,33 @@ from rsa.shared.rsa_utils import (  # noqa: E402
     preprocess_fmri, process_model_embeddings,
 )
 from cf_modeling.roi_mean_partial_connectivity import _load_mask  # noqa: E402
-from rsa.cca_seed_sheet_rsa import _plot_sheet_map, _sanity_corr  # noqa: E402
-from rsa.cca_seed_sheet_rsa_truecoords import load_true_coords, characterize  # noqa: E402
+from rsa.shared.sheet_rsa import (  # noqa: E402
+    N_UNITS, SHEET_COLS, SHEET_ROWS, TOWER_NAMES, characterize, knn_on_sheet,
+    load_true_coords, plot_sheet_map, random_neighbors_within_tower,
+    sanity_corr, tower_id,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-SHEET_ROWS = 304
-SHEET_COLS = 512
-N_UNITS = SHEET_ROWS * SHEET_COLS  # 155648
-ENCODER_ROWS = 160
-ENCODER_ROWS_PER_LAYER = 5
-DECODER_ROWS_PER_LAYER = 4
 MODEL_NAME = "topoomni_fullsheet"
 
 
-# =============================================================================
-# KNN (cKDTree -- see module docstring for why brute-force cdist is unusable here)
-# =============================================================================
-
-def knn_on_sheet_fast(coords: np.ndarray, k: int) -> np.ndarray:
-    tree = cKDTree(coords.astype(np.float64))
-    _, idx = tree.query(coords.astype(np.float64), k=k + 1, workers=-1)
-    return idx[:, 1:].astype(np.int32)  # drop self (column 0), keep k nearest
-
-
-def region_layer_id() -> np.ndarray:
-    """Synthetic per-unit region id from RASTER position (see module docstring):
-    vision layer 0-31, audio layer 100-131, decoder layer 200-235."""
-    k = np.arange(N_UNITS)
-    row = k // SHEET_COLS
-    col = k % SHEET_COLS
-    layer_id = np.full(N_UNITS, -1, dtype=np.int32)
-    enc = row < ENCODER_ROWS
-    layer_in_block_enc = row[enc] // ENCODER_ROWS_PER_LAYER
-    vision_mask = enc & (col < 256)
-    audio_mask = enc & (col >= 256)
-    layer_id[vision_mask] = (row[vision_mask] // ENCODER_ROWS_PER_LAYER)
-    layer_id[audio_mask] = 100 + (row[audio_mask] // ENCODER_ROWS_PER_LAYER)
-    dec = ~enc
-    layer_id[dec] = 200 + ((row[dec] - ENCODER_ROWS) // DECODER_ROWS_PER_LAYER)
-    assert (layer_id >= 0).all()
-    return layer_id
-
-
 def demo() -> None:
-    """Self-check: KDTree-KNN against brute force on a tiny lattice, and the
-    region_layer_id() geometry (vision/audio/decoder block boundaries)."""
-    coords2 = np.array([(r, c) for r in range(2) for c in range(4)])
-    nn = knn_on_sheet_fast(coords2, k=2)
-    assert set(nn[0].tolist()) == {1, 4}, nn[0]
-
-    lut_cache = Path("/home/amin/Research/Representation/Movie/outputs/rsa/"
-                     "cca_seed_sheet_rsa/topoomni_true_coords_seed42.npy")
-    lut = load_true_coords(lut_cache)
-    assert lut.shape == (N_UNITS, 2)
-
-    lid = region_layer_id()
-    assert lid.shape == (N_UNITS,)
-    assert set(np.unique(lid[:100 * 512]).tolist()) <= set(range(32)) | set(range(100, 132))
-    assert set(lid[ENCODER_ROWS * SHEET_COLS:].tolist()) == set(range(200, 236))
-    # spot-check: unit at raster (row=232, col=0) is decoder layer 18, row-in-layer 0
-    k0 = 232 * SHEET_COLS + 0
-    assert lid[k0] == 218, lid[k0]
+    """Self-check: tower_id() geometry matches the spec (vision rows 0-159/
+    cols 0-255, audio rows 0-159/cols 256-511, thinker rows 160-303)."""
+    tid = tower_id()
+    assert tid.shape == (N_UNITS,)
+    assert (tid == 0).sum() == 160 * 256 == 40960  # vision
+    assert (tid == 1).sum() == 160 * 256 == 40960  # audio
+    assert (tid == 2).sum() == 144 * 512 == 73728  # thinker
+    # spot-checks
+    assert tid[0 * SHEET_COLS + 0] == 0       # row 0, col 0 -> vision
+    assert tid[0 * SHEET_COLS + 511] == 1     # row 0, col 511 -> audio
+    assert tid[159 * SHEET_COLS + 255] == 0   # row 159, col 255 -> vision
+    assert tid[159 * SHEET_COLS + 256] == 1   # row 159, col 256 -> audio
+    assert tid[160 * SHEET_COLS + 0] == 2     # row 160, col 0 -> thinker
+    assert tid[303 * SHEET_COLS + 511] == 2   # row 303, col 511 -> thinker
     print("demo OK")
 
 
@@ -180,6 +116,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-perm", type=int, default=1000)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--fdr-alpha", type=float, default=0.05)
+    p.add_argument("--pref-top-decile", type=float, default=0.1,
+                   help="Fraction of units (by rho) treated as each seed's hotspot.")
+    p.add_argument("--topo-n-draws", type=int, default=3,
+                   help="Random same-tower neighbourhood draws for the topography control.")
+    p.add_argument("--topo-n-perm", type=int, default=50,
+                   help="Small: the topography control compares rho means, not "
+                        "p-values (actual_rho does not depend on n_perm).")
     p.add_argument("--gpu-batch-size", type=int, default=64)
     p.add_argument("--perm-batch-size", type=int, default=20)
     return p.parse_args()
@@ -199,6 +142,48 @@ def _load_seed_embedding(mask_path, fmri_continuous, timing_df, run_trs, args):
     return roi_binned, int(mask.sum())
 
 
+def _topo_summary(true_rho: np.ndarray, rand_rho_draws: np.ndarray) -> dict:
+    pooled = rand_rho_draws.reshape(-1)
+    return dict(
+        true_rho_mean=float(true_rho.mean()), true_rho_std=float(true_rho.std()),
+        random_rho_mean=float(pooled.mean()), random_rho_std=float(pooled.std()),
+        mean_diff_true_minus_random=float(true_rho.mean() - pooled.mean()),
+        true_beats_random=bool(true_rho.mean() > pooled.mean()),
+    )
+
+
+def run_topography_control(sheet_emb, seed_embeddings, results, tid, args,
+                           run_bins, surf_idx, vertex_to_col) -> dict:
+    """True k=100 neighbourhood vs. random same-tower k-unit samples, per
+    seed, overall and broken down by tower. Reported honestly regardless of
+    outcome -- see module docstring."""
+    perm_idx_topo = within_run_shift_pair_indices(run_bins, args.topo_n_perm, args.seed)
+    topo: dict = {}
+    for seed_name, seed_emb in seed_embeddings.items():
+        sheet_aligned, seed_aligned = align_and_assert_bins(sheet_emb, seed_emb)
+        true_rho = results[f"{seed_name}_av"]["rho"]
+        draws = np.empty((args.topo_n_draws, N_UNITS), dtype=np.float32)
+        for d in range(args.topo_n_draws):
+            draw_rng = np.random.default_rng(args.seed + 1000 * (d + 1))
+            rand_neighbors = random_neighbors_within_tower(tid, args.k, draw_rng)
+            rand_rho, _p, _n = _run_hemisphere(
+                sheet_aligned, seed_aligned, rand_neighbors, surf_idx, vertex_to_col,
+                args.method, perm_idx_topo, args.gpu_batch_size, args.perm_batch_size,
+            )
+            draws[d] = rand_rho
+            log.info(f"  topography control {seed_name} draw {d}: "
+                     f"random mean={rand_rho.mean():.4f}")
+        overall = _topo_summary(true_rho, draws)
+        by_tower = {TOWER_NAMES[t]: _topo_summary(true_rho[tid == t], draws[:, tid == t])
+                   for t in sorted(TOWER_NAMES)}
+        topo[seed_name] = dict(k=args.k, n_draws=args.topo_n_draws,
+                               n_perm=args.topo_n_perm, overall=overall, by_tower=by_tower)
+        log.info(f"  topography control {seed_name}: true={overall['true_rho_mean']:.4f} "
+                 f"random={overall['random_rho_mean']:.4f} "
+                 f"true_beats_random={overall['true_beats_random']}")
+    return topo
+
+
 def main() -> None:
     args = parse_args()
     if args.demo:
@@ -210,10 +195,9 @@ def main() -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    true_coords_lut = load_true_coords(Path(args.true_coords_cache))
-    assert true_coords_lut.shape == (N_UNITS, 2), true_coords_lut.shape
-    coords = true_coords_lut  # index-for-index match with this sheet's flat ordering
-    layer_id = region_layer_id()
+    coords = load_true_coords(Path(args.true_coords_cache))
+    assert coords.shape == (N_UNITS, 2), coords.shape
+    tid = tower_id()
 
     timing_df = pd.read_csv(args.timing_csv)
     run_trs = np.load(str(Path(args.preprocessed_dir) /
@@ -253,7 +237,7 @@ def main() -> None:
 
     log.info(f"Building k={args.k} nearest-neighbour searchlights (cKDTree, {N_UNITS} units) ...")
     t0 = time.time()
-    neighbors = knn_on_sheet_fast(coords, args.k)
+    neighbors = knn_on_sheet(coords, args.k)
     log.info(f"  done in {time.time() - t0:.1f}s")
     surf_idx = np.arange(N_UNITS, dtype=np.int32)
     vertex_to_col = np.arange(N_UNITS, dtype=np.int32)
@@ -276,14 +260,14 @@ def main() -> None:
             f"  {seed_name}: rho [{actual_rho.min():.3f}, {actual_rho.max():.3f}] "
             f"mean={actual_rho.mean():.3f}  n_sig_fdr={n_sig}/{N_UNITS}"
         )
-        sanity_corr = _sanity_corr(sheet_aligned, seed_aligned)
+        sanity = sanity_corr(sheet_aligned, seed_aligned)
         key = f"{seed_name}_av"
         results[key] = dict(rho=actual_rho, p_perm=p_perm, p_fdr=p_fdr,
-                            n_sig_fdr=n_sig, sanity_corr=sanity_corr)
+                            n_sig_fdr=n_sig, sanity_corr=sanity)
         np.save(out_dir / f"{key}_rho.npy", actual_rho)
         pd.DataFrame({
             "unit_index": np.arange(N_UNITS),
-            "layer_id": layer_id,
+            "tower": [TOWER_NAMES[t] for t in tid],
             "true_row": coords[:, 0], "true_col": coords[:, 1],
             "raster_row": np.arange(N_UNITS) // SHEET_COLS,
             "raster_col": np.arange(N_UNITS) % SHEET_COLS,
@@ -293,31 +277,28 @@ def main() -> None:
     all_sig = all(v["n_sig_fdr"] / N_UNITS >= 0.98 for v in results.values())
     min_sig_frac = min(v["n_sig_fdr"] / N_UNITS for v in results.values())
 
-    class _Args:
-        seed_a_name = args.seed_a_name
-        seed_p_name = args.seed_p_name
-        seed = args.seed
-        pref_top_decile = 0.1
+    characterization = characterize(results, coords, tid, args)
 
-    characterization = characterize(results, coords, layer_id, _Args())
+    log.info("Running topography control (true k-NN vs. random same-tower draws) ...")
+    topography_control = run_topography_control(
+        sheet_emb, seed_embeddings, results, tid, args, run_bins, surf_idx, vertex_to_col)
 
     metadata = {
         "analysis": "full_sheet_rsa",
         "n_units": N_UNITS,
         "sheet_shape": [SHEET_ROWS, SHEET_COLS],
-        "coordinate_system": "true (permute_coordinates, seed=42) -- see "
-                             "cca_seed_sheet_rsa_truecoords.py module docstring "
-                             "and topoomni_true_coords_seed42_provenance.json",
+        "coordinate_system": "true (permute_coordinates, seed=42) -- a deterministic "
+                             "seeded permutation of the raster lattice within each "
+                             "architectural block, not a rotation. See "
+                             "rsa/shared/sheet_rsa.py module docstring and "
+                             "topoomni_true_coords_seed42_provenance.json",
         "true_coords_cache": args.true_coords_cache,
-        "region_layer_id_scheme": (
-            "vision layer l -> l (0-31), audio layer l -> 100+l (100-131), "
-            "decoder layer l -> 200+l (200-235). All 36 decoder layers and both "
-            "full 32-layer encoder towers are present and each block is "
-            "internally contiguous -- unlike cca_seed_sheet_rsa_truecoords.py's "
-            "6-layer decoder subset, there are no isolated un-extracted-neighbour "
-            "bands within any single block. Cross-block adjacency (row 159/160, "
-            "vision-audio column boundary at col 255/256) is architectural, not "
-            "a claim about cortex."
+        "tower_scheme": (
+            "vision encoder: rows 0-159, cols 0-255 (40,960 units). audio encoder: "
+            "rows 0-159, cols 256-511 (40,960 units). thinker (language-model) stack: "
+            "rows 160-303, all cols (73,728 units). Towers are from each unit's RASTER "
+            "position, unaffected by the true-coordinate permutation (which only moves "
+            "where a unit is plotted, not which architectural block produced it)."
         ),
         "modality": "av only -- no unimodal a/v ablations extracted for the full "
                    "sheet (see topo_omni_extract_full_sheet.py module docstring).",
@@ -334,9 +315,10 @@ def main() -> None:
              "floor) was FDR-significant for every seed -- at ceiling. " if all_sig else
              f"Significance was meaningfully below ceiling for at least one seed "
              f"(minimum {min_sig_frac:.1%} FDR-significant). ") +
-            "This is a manipulation check, not a finding -- see rsa/cca_seed_sheet_rsa.py "
-            "module docstring. Magnitude (rho_mean, the A-P contrast, hotspot "
-            "composition by region_layer_id) is the informative signal."
+            "This is a manipulation check, not a finding: it shows a sheet unit's "
+            "k-NN patch tracks the movie at all, not that any unit is special. "
+            "Magnitude (rho_mean by tower, the A-P contrast, hotspot composition) "
+            "is the informative signal."
         ),
         "results_summary": {
             key: {"rho_min": float(v["rho"].min()), "rho_max": float(v["rho"].max()),
@@ -345,6 +327,16 @@ def main() -> None:
             for key, v in results.items()
         },
         "characterization": characterization,
+        "topography_control": topography_control,
+        "topography_control_interpretation": (
+            "For each seed, true_rho_mean (true k-NN neighbourhood) vs. "
+            "random_rho_mean (k=same, drawn uniformly from the same tower, "
+            "coordinates ignored, topo_n_draws independent draws pooled). "
+            "true_beats_random=false means the true spatial neighbourhood scored "
+            "no better than an arbitrary same-tower, same-size sample -- report "
+            "this plainly rather than treating the true-coordinate map as validated "
+            "topography."
+        ),
     }
     (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     log.info(f"Saved metadata: {out_dir / 'metadata.json'}")
@@ -363,31 +355,24 @@ def make_figures(results: dict, coords: np.ndarray, out_dir: Path,
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    caveat = (
-        "Full 304x512 sheet, TRUE (trained) coordinates. Rows 0-159: encoder "
-        "(vision cols 0-255, audio cols 256-511, 32 layers each x 5 rows). "
-        "Rows 160-303: all 36 decoder layers x 4 rows."
-    )
     seed_a, seed_p = args.seed_a_name, args.seed_p_name
     ra, rp = results[f"{seed_a}_av"], results[f"{seed_p}_av"]
     vlim = float(max(np.abs(ra["rho"]).max(), np.abs(rp["rho"]).max()))
 
     for name, r in ((seed_a, ra), (seed_p, rp)):
         fig, ax = plt.subplots(figsize=(10, 6))
-        im = _plot_sheet_map(ax, r["rho"], coords, f"{name} (av) full-sheet RSA rho",
-                             vlim, r["p_fdr"] < args.fdr_alpha, "RdBu_r")
+        im = plot_sheet_map(ax, r["rho"], coords, f"{name} (av) full-sheet RSA rho",
+                            vlim, r["p_fdr"] < args.fdr_alpha, "RdBu_r")
         fig.colorbar(im, ax=ax, shrink=0.8, label="Spearman rho")
-        fig.suptitle(caveat, fontsize=7.5, y=1.02)
         fig.savefig(out_dir / f"{name}_av_rho_sheet_map.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
 
     diff = ra["rho"] - rp["rho"]
     vlim_diff = float(np.abs(diff).max())
     fig, ax = plt.subplots(figsize=(10, 6))
-    im = _plot_sheet_map(ax, diff, coords, f"rho({seed_a}) - rho({seed_p})  [av]",
-                         vlim_diff, None, "RdBu_r")
+    im = plot_sheet_map(ax, diff, coords, f"rho({seed_a}) - rho({seed_p})  [av]",
+                        vlim_diff, None, "RdBu_r")
     fig.colorbar(im, ax=ax, shrink=0.8, label="Delta rho")
-    fig.suptitle(caveat, fontsize=7.5)
     fig.savefig(out_dir / "diff_rho_sheet_map.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 

@@ -26,7 +26,7 @@ Usage (all defaults set; only required args shown):
 
 Override defaults:
   --preprocessed-dir  /home/amin/Research/Representation/Movie/data/preprocessed
-  --outdir            /media/amin/Samsung_T5/amin/k_splithalf
+  --outdir            /media/amin/ADATA HD710 PRO/Research/Representation/Movie/outputs/k_splithalf
   --indiv-surf-template ".../midthickness_1.6/{sub}.{hem}.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
   --bin-sec 2.0
   --workbench /opt/workbench/bin_linux64/wb_command
@@ -75,7 +75,7 @@ _EXCLUDED_SUBJECTS_SAFEGUARD: set[str] = {"126931", "745555"}
 _DEFAULT_PREPROCESSED_DIR = (
     "/home/amin/Research/Representation/Movie/data/preprocessed"
 )
-_DEFAULT_OUTDIR = "/media/amin/Samsung_T5/amin/k_splithalf"
+_DEFAULT_OUTDIR = "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/outputs/k_splithalf"
 _DEFAULT_SURF_TEMPLATE = (
     "/home/amin/Research/Representation/Movie/data/midthickness_1.6"
     "/{sub}.{hem}.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"

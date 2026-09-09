@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -56,6 +57,7 @@ from scipy.stats import spearmanr
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from cf_modeling.cf_naming import persubject_output_root  # noqa: E402
 from cf_modeling.roi_mean_partial_connectivity import _load_mask  # noqa: E402
 from cf_modeling.channel_cca_analysis import (  # noqa: E402
     MODEL_CONFIGS, VARIANTS, _model_files, _processed_embedding, cca_axis,
@@ -70,12 +72,18 @@ log = logging.getLogger("persubject_cca")
 MOVIE_ROOT = Path("/home/amin/Research/Representation/Movie")
 DATA = MOVIE_ROOT / "data"
 OUTPUTS = MOVIE_ROOT / "outputs"
-RAW_DIR = DATA / "individual-59k"
+RAW_DIR = Path(os.environ.get(
+    "MOVIE_RAW_CIFTI_DIR",
+    "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/individual-59k",
+))
 SUBJECTS_LIST = DATA / "subjects.txt"
 TIMING_CSV = DATA / "movie_timing.csv"
 ROI_CONFIG = ROOT / "cf_modeling" / "roi_definitions.json"
 GLASSER_DLABEL = (
-    DATA / "HCP_S1200_GroupAvg_v1"
+    Path(os.environ.get(
+        "MOVIE_HCP_DIR",
+        "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1",
+    ))
     / "Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_"
     "Group_Colors.59k_fs_LR.dlabel.nii")
 SEARCHLIGHT_TMPL = (
@@ -83,7 +91,7 @@ SEARCHLIGHT_TMPL = (
         "/k100_delay5s_bin5s_skip5s_spearman"
         "/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy"))
 EMBEDDINGS_DIR = OUTPUTS / "model_embeddings"
-OUT_DIR = OUTPUTS / "cf_modeling/persubject_cca_1pct"
+OUT_DIR = persubject_output_root() / "persubject_cca_1pct"
 N_GRAY = 108441
 BIN_SEC = SKIP_SEC = DELAY_SEC = 5.0
 TR = 1.0

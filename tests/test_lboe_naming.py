@@ -20,6 +20,7 @@ MIGRATION_SPEC.loader.exec_module(MIGRATION)
 lboe_count = NAMING.lboe_count
 qualify_lboe = NAMING.qualify_lboe
 strip_lboe_suffix = NAMING.strip_lboe_suffix
+persubject_output_root = NAMING.persubject_output_root
 apply_plan = MIGRATION.apply_plan
 plan_migration = MIGRATION.plan_migration
 
@@ -30,6 +31,30 @@ def test_lboe_names_are_terminal_and_idempotent():
     assert strip_lboe_suffix("cca_a_peav_1pct_lboe100") == "cca_a_peav_1pct"
     assert lboe_count("cca_a_peav_1pct_lboe100") == 100
     assert lboe_count("cca_a_peav_1pct") is None
+
+
+def test_persubject_output_root_honours_override_and_default(monkeypatch, tmp_path: Path):
+    override = tmp_path / "external"
+    override.mkdir()
+    monkeypatch.setenv("MOVIE_PERSUBJECT_ROOT", str(override))
+    assert persubject_output_root() == override
+    monkeypatch.delenv("MOVIE_PERSUBJECT_ROOT")
+
+    # Real drive, no override: only meaningful when it's actually mounted.
+    if NAMING.PERSUBJECT_MOUNT.is_mount():
+        root = persubject_output_root()
+        assert root == NAMING.PERSUBJECT_MOUNT / NAMING.PERSUBJECT_SUBPATH
+        assert root.is_dir()
+
+
+def test_persubject_output_root_raises_on_unreachable_override(monkeypatch, tmp_path: Path):
+    missing = tmp_path / "does_not_exist"
+    monkeypatch.setenv("MOVIE_PERSUBJECT_ROOT", str(missing))
+    try:
+        persubject_output_root()
+        assert False, "expected RuntimeError for a nonexistent override path"
+    except RuntimeError as exc:
+        assert str(missing) in str(exc)
 
 
 def test_migration_qualifies_pair_files_but_preserves_source_mask_paths(tmp_path: Path):

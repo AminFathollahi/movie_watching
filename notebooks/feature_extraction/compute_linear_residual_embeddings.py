@@ -1,7 +1,7 @@
 """
 notebooks/feature_extraction/compute_linear_residual_embeddings.py
 =====================================================================
-Generates the "_linear_resid" pseudo-model embeddings: for every model in
+Generates the "_linear_resid_unimodal" pseudo-model embeddings: for every model in
 rsa.shared.model_registry.RESIDUALIZED_AV_MODELS, the ridge-regression residual of
 its AV joint embedding after regressing out AudioMAE(audio) +
 VideoMAEv2-Large(video) -- two independent unimodal specialists (same
@@ -16,11 +16,16 @@ cross-validated-ridge residual already relied on by
 encoding/variance_partition.py's Move-6 AVresid band).
 
 Output convention (matches every other pseudo-model, e.g. "_avscramble"):
-    {embeddings_dir}/{model}_av_linear_resid/bin{B}s_skip{S}s/{model}_av_linear_resid_av.npy
+    {embeddings_dir}/{model}_av_linear_resid_unimodal/bin{B}s_skip{S}s/{model}_av_linear_resid_unimodal_av.npy
+
+The "_unimodal" tag names the nuisance (external unimodal specialists,
+AudioMAE + VideoMAEv2-Large) as opposed to "_own" (--variant-suffix _own),
+which regresses out the target model's own a/v streams instead -- see
+--variant-suffix below.
 
 Once saved, run e.g.:
-    python rsa/searchlight.py --model {model}_av_linear_resid --modality av ...
-    python encoding/encoding.py --model {model}_av_linear_resid --modality av ...
+    python rsa/searchlight.py --model {model}_av_linear_resid_unimodal --modality av ...
+    python encoding/encoding.py --model {model}_av_linear_resid_unimodal --modality av ...
 
 Usage
 -----
@@ -64,7 +69,7 @@ NUISANCE_DEFAULT = [("audiomae", "a"), ("videomaev2-large", "v")]
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Generate _linear_resid pseudo-model embeddings for supported AV models.",
+        description="Generate _linear_resid_unimodal pseudo-model embeddings for supported AV models.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--embeddings-dir", required=True)
@@ -79,6 +84,14 @@ def parse_args():
                     help="Subset of RESIDUALIZED_AV_MODELS to process (default: all).")
     p.add_argument("--nuisance", nargs="+", default=None,
                     help="model:modality pairs (default: audiomae:a videomaev2-large:v).")
+    p.add_argument("--variant-suffix", default="", dest="variant_suffix",
+                    help="Suffix appended after '_av_linear_resid' in the output "
+                         "pseudo-model name, naming the nuisance choice. Empty "
+                         "(default) falls back to '_unimodal' -- the external-"
+                         "specialist nuisance. Pass e.g. '_own' with a "
+                         "model's own a/v streams as --nuisance to produce a "
+                         "distinctly-named variant instead of overwriting "
+                         "the default one.")
     p.add_argument("--force", action="store_true",
                     help="Replace residual embeddings that already exist.")
     return p.parse_args()
@@ -119,9 +132,11 @@ def main():
     nuisance_embs = [load_emb(m, mod) for m, mod in nuisance_spec]
     log.info(f"Nuisance: {nuisance_spec}  shapes={[e.shape for e in nuisance_embs]}")
 
+    variant_suffix = args.variant_suffix or "_unimodal"
+
     results = {}
     for model in models:
-        out_model = f"{model}_av_linear_resid"
+        out_model = f"{model}_av_linear_resid{variant_suffix}"
         out_path = emb_path(args.embeddings_dir, out_model, "av", args.bin_sec, args.skip_sec)
         if out_path.is_file() and not args.force:
             log.info(f"[{model}] SKIP -- output exists: {out_path}")

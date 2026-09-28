@@ -30,7 +30,7 @@ FULL_EMBEDDING = (
 )
 CHANNEL_LABELS = (
     "/home/amin/Research/Representation/Movie/outputs/cluster/peav/"
-    "_channel_timeseries_model_selection/norm-zscore_prepca50/selected_maps/"
+    "_channel_timeseries_model_selection/norm-zscore_raw/selected_maps/"
     "sreduce-mds_snc2_landmarks1000_extk8_iter300/"
     "sreduce-mds_snc2_landmarks1000_extk8_iter300_scluster-kmeans_k8/channel_labels.npy"
 )

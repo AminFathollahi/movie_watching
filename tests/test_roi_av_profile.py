@@ -6,56 +6,94 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from encoding.roi_av_profile import decomposition_metrics, participation_ratio, _resample_stats
-
-
-def test_purely_redundant_case_has_zero_synergy_and_full_redundancy():
-    # Video explains nothing A doesn't already: additive = A = V. Fusion (J)
-    # adds nothing beyond the additive model either.
-    metrics = decomposition_metrics(r2_a=0.4, r2_v=0.4, r2_additive=0.4, r2_joint=0.4)
-
-    assert metrics["unique_A"] == 0.0
-    assert metrics["unique_V"] == 0.0
-    assert np.isclose(metrics["redundancy"], 1.0)
-    assert np.isclose(metrics["synergy"], 0.0)
+from encoding.roi_av_profile import (
+    decomposition_metrics, partial_unique_correlations, participation_ratio, _resample_stats,
+    roi_mean_r2, roi_mean_timecourse,
+)
+from encoding.shared.fold_evaluator import _r2_per_target
 
 
 def test_purely_synergistic_case_has_positive_synergy():
     # A and V alone explain little; only the native joint embedding captures
     # the interaction, so R2_joint far exceeds the additive model.
-    metrics = decomposition_metrics(r2_a=0.1, r2_v=0.1, r2_additive=0.15, r2_joint=0.4)
+    metrics = decomposition_metrics(
+        r2_a=0.1, r2_v=0.1, r2_additive=0.15, r2_joint=0.4, unique_a=0.0, unique_v=0.0
+    )
 
     assert metrics["synergy"] > 0.2
 
 
-def test_audio_dominant_asymmetry():
-    metrics = decomposition_metrics(r2_a=0.4, r2_v=0.0, r2_additive=0.4, r2_joint=0.4)
+def test_asymmetric_uniques_pass_through():
+    metrics = decomposition_metrics(
+        r2_a=0.4, r2_v=0.0, r2_additive=0.4, r2_joint=0.4, unique_a=0.8, unique_v=0.0
+    )
 
-    assert np.isclose(metrics["audio_dominance"], 1.0)
-    assert np.isclose(metrics["unique_A"], 0.4)
+    assert np.isclose(metrics["unique_A"], 0.8)
     assert np.isclose(metrics["unique_V"], 0.0)
 
 
-def test_zero_denominators_return_nan_not_a_crash():
-    metrics = decomposition_metrics(r2_a=0.0, r2_v=0.0, r2_additive=0.0, r2_joint=0.0)
+def test_roi_mean_r2_matches_r2_of_the_averaged_timecourses():
+    rng = np.random.default_rng(3)
+    target = rng.normal(size=(200, 4))
+    prediction = target + rng.normal(scale=0.1, size=(200, 4))
 
-    assert np.isnan(metrics["audio_dominance"])
-    assert np.isnan(metrics["redundancy"])
+    expected = float(_r2_per_target(
+        roi_mean_timecourse(target)[:, None], roi_mean_timecourse(prediction)[:, None]
+    )[0])
 
-
-def test_redundancy_is_nan_when_either_band_r2_is_negative_or_near_zero():
-    # A noisy ROI with a slightly negative cross-validated R2 for one band
-    # must not produce a numeric (garbage) redundancy ratio.
-    metrics = decomposition_metrics(r2_a=0.05, r2_v=-0.02, r2_additive=0.05, r2_joint=0.05)
-    assert np.isnan(metrics["redundancy"])
-
-    metrics = decomposition_metrics(r2_a=0.05, r2_v=1e-5, r2_additive=0.05, r2_joint=0.05)
-    assert np.isnan(metrics["redundancy"])
+    assert np.isclose(roi_mean_r2(target, prediction), expected)
 
 
-def test_redundancy_is_defined_when_both_bands_clear_the_threshold():
-    metrics = decomposition_metrics(r2_a=0.2, r2_v=0.1, r2_additive=0.25, r2_joint=0.25)
-    assert not np.isnan(metrics["redundancy"])
+def test_roi_mean_r2_differs_from_mean_of_per_vertex_r2_under_shared_signal():
+    # Each vertex carries the same signal plus large independent noise, and
+    # the prediction is the noiseless shared signal broadcast to every
+    # vertex. Per-vertex R2 is swamped by each vertex's own noise, but
+    # averaging across vertices before scoring cancels the noise and
+    # recovers the shared signal almost exactly -- the two definitions must
+    # disagree sharply on data like this.
+    rng = np.random.default_rng(4)
+    n_samples, n_vertices = 500, 200
+    signal = rng.normal(size=(n_samples, 1))
+    noise = rng.normal(scale=5.0, size=(n_samples, n_vertices))
+    target = signal + noise
+    prediction = np.repeat(signal, n_vertices, axis=1)
+
+    per_vertex_mean_r2 = float(np.nanmean(_r2_per_target(target, prediction)))
+    roi_r2 = roi_mean_r2(target, prediction)
+
+    assert roi_r2 > 0.8
+    assert per_vertex_mean_r2 < 0.3
+    assert roi_r2 - per_vertex_mean_r2 > 0.5
+
+
+def test_partial_unique_correlations_isolates_the_driving_band():
+    # Target is exactly the audio prediction; video is independent noise, so
+    # controlling for video should not change corr(target, audio) much, and
+    # corr(target, video | audio) should collapse toward zero.
+    rng = np.random.default_rng(0)
+    audio_pred = rng.normal(size=(2000, 5))
+    video_pred = rng.normal(size=(2000, 5))
+    target = audio_pred + rng.normal(scale=0.01, size=(2000, 5))
+
+    unique_a, unique_v = partial_unique_correlations(target, audio_pred, video_pred)
+
+    assert unique_a > 0.99
+    assert abs(unique_v) < 0.1
+
+
+def test_partial_unique_correlations_bounded_when_bands_are_collinear():
+    # Video is an exact linear function of audio: the two nuisance-removal
+    # denominators (1 - r_first_second**2) go to zero. The result must stay a
+    # finite, clipped correlation, not NaN/inf.
+    rng = np.random.default_rng(1)
+    audio_pred = rng.normal(size=(200, 3))
+    video_pred = 2.0 * audio_pred + 1.0
+    target = audio_pred + rng.normal(scale=0.05, size=(200, 3))
+
+    unique_a, unique_v = partial_unique_correlations(target, audio_pred, video_pred)
+
+    assert np.isfinite(unique_a) and -1.0 <= unique_a <= 1.0
+    assert np.isfinite(unique_v) and -1.0 <= unique_v <= 1.0
 
 
 def test_resample_stats_reports_defined_fraction_and_drops_nan_before_resampling():
@@ -94,12 +132,12 @@ def test_participation_ratio_approaches_dimension_for_independent_features():
 
 
 if __name__ == "__main__":
-    test_purely_redundant_case_has_zero_synergy_and_full_redundancy()
     test_purely_synergistic_case_has_positive_synergy()
-    test_audio_dominant_asymmetry()
-    test_zero_denominators_return_nan_not_a_crash()
-    test_redundancy_is_nan_when_either_band_r2_is_negative_or_near_zero()
-    test_redundancy_is_defined_when_both_bands_clear_the_threshold()
+    test_asymmetric_uniques_pass_through()
+    test_roi_mean_r2_matches_r2_of_the_averaged_timecourses()
+    test_roi_mean_r2_differs_from_mean_of_per_vertex_r2_under_shared_signal()
+    test_partial_unique_correlations_isolates_the_driving_band()
+    test_partial_unique_correlations_bounded_when_bands_are_collinear()
     test_resample_stats_reports_defined_fraction_and_drops_nan_before_resampling()
     test_resample_stats_all_nan_yields_nan_statistic_not_a_crash()
     test_participation_ratio_is_one_for_rank_one_signal()

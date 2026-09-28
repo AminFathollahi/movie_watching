@@ -33,4 +33,11 @@ def test_exports_four_raw_views(tmp_path, monkeypatch):
     assert set(("bilateral", "within_hemisphere", "L", "R")) <= outputs.keys()
     for view in ("bilateral", "within_hemisphere", "L", "R"):
         assert nib.load(outputs[view]).shape == (1, 5)
+    assert outputs["metadata"].parent == tmp_path.parent
     assert "remain signed" in outputs["metadata"].read_text()
+
+
+def test_preprocessing_label_is_part_of_new_map_names():
+    names = MODULE.expected_names(
+        "cca_a_test", "cca_p_test", "raw_per_run_zscore")
+    assert all(name.endswith("_raw_per_run_zscore") for name in names)

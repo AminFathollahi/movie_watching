@@ -5,8 +5,8 @@
 `cca_a_peav_1pct_lboe100` × `cca_p_peav_1pct_lboe100`) was deliberately
 halted by the user to free the GPU, not a crash. 26 subjects are complete on
 disk at `/media/amin/ADATA HD710 PRO/cf_modeling/per_subject/cca_a_peav_1pct_lboe100_cca_p_peav_1pct_lboe100/subjects/`
-(each holding `band_sizes.npy`, `best_alphas.npy`, `betas_*.npy`,
-`product_map.npy`, `product_map_nc.npy`, `R2_*.npy`, `R2_full.npy`,
+(each holding `band_sizes.npy`, `best_alphas.npy`, `betas_*.npy`, and the
+legacy pre-migration names `product_map*.npy`, `R2_*.npy`, `R2_full.npy`,
 `pipeline.log`), 8.6 GB total. Subject 140117 was killed mid-fit: its
 directory holds only the `.yml` config and `pipeline.log`, no `.npy`, so it
 will be re-fit rather than skipped when the driver resumes. Log:
@@ -23,7 +23,7 @@ winner-take-all). Every entry below this line describes the now-deleted
 `outputs/cf_modeling/channel_cca_preference/results/` for the current
 results.
 
-- **Completed:** ordinary CCA ROI-mean Pearson maps (`_raw_corr`) for all 11 prepared CCA pairs. Each pair has one 8-map dscalar plus bilateral, within-hemisphere, L, and R 32×32 bivariate dlabels (44 total). No bivariate `_nc` maps were made: `_nc` is split-CF R² minus the one-ROI-mean OLS null R², not ordinary correlation.
+- **Completed:** zero-order CCA ROI-mean time-series Pearson-r maps (formerly `_raw_corr`) for all 11 prepared CCA pairs. Each pair has one 8-map dscalar plus bilateral, within-hemisphere, L, and R 32×32 bivariate dlabels (44 total). These are supplementary connectivity maps, not CF-model results. No null-corrected split-CF bivariate maps were made in this step.
 - **Completed:** PE-AV, Nemotron-18 MP, and Topo-Omni-18 sheet MP channel sensitivity from paired one-sided true-AV-minus-without-audio/video **block-bootstrap** tests (626 movie bins are autocorrelated, so the previous paired t-test's iid assumption was invalid; replaced with a moving-block bootstrap over `run_bins`, mirroring the block bootstrap already used for `compare_channel_classes`). Strict audio/video winner counts (unaffected by the test change — sign of the mean difference only) are PE-AV 477/547, Nemotron 1,010/1,038, and Topo-Omni 967/1,081. BH-FDR audio-only/video-only/both/neither counts under the block-bootstrap test are PE-AV 244/268/193/319, Nemotron 425/520/493/610, and Topo-Omni 366/503/553/626.
 - **Analysis unit:** one full AV representation per model over 626 aligned 5-s bins: PE-AV 626×1,024 and both Omni families 626×2,048. Token-pool representations are out of scope and removed.
 - **Multiplicity policy:** BH-FDR is retained because thousands of channel tests make raw p<.05 classifications invalid. BY and max-T FWER gates are not used to define exploratory channel labels; raw p-values, BH q-values, effect sizes, and confidence intervals remain available. Four-class cortical RSA separately reports empirical raw p, BH-FDR q, and max-T FWER p maps.

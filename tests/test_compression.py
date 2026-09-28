@@ -7,7 +7,6 @@ from sklearn.metrics import adjusted_rand_score
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from cluster.channel_stability import randomized_membership_null
 from encoding.shared.compression import (
     fit_compression,
     heldout_cluster_diagnostics,
@@ -60,7 +59,10 @@ def test_cluster_diagnostics_favor_known_channel_groups():
 def test_ari_is_label_name_invariant_but_not_membership_invariant():
     labels = np.repeat(np.arange(4), 20)
     renamed = np.array([3, 1, 0, 2])[labels]
-    null = randomized_membership_null(labels, renamed, 100, random_state=9)
+    rng = np.random.default_rng(9)
+    null = np.array([
+        adjusted_rand_score(labels, rng.permutation(renamed)) for _ in range(100)
+    ])
 
     assert adjusted_rand_score(labels, renamed) == 1.0
     assert np.quantile(null, 0.95) < 0.2

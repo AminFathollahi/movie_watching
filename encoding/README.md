@@ -8,7 +8,6 @@ Ridge regression models predict cortical fMRI responses from embeddings of video
 |--------|---------|------------------|
 | `encoding.py` | Per-subject/group-average ridge regression for video, audio, audiovisual | `outputs/encoding/{subject}/{model}/{config}` |
 | `incremental_av.py` | Run-wise comparison of A+V+J (joint) vs. A+V; compression-efficiency variants (PCA, random projection, clustering) | `outputs/encoding/incremental_av/{subject}/{model}/{config}` |
-| `pairing_control.py` | Audiovisual pairing-advantage control: compares intact pairings against fold-confined mismatched A/V pairings (3 seeds), with block-level inference over 14 unique movie blocks | `outputs/encoding/pairing_control/group_average/{model}/inference/` |
 | `compression_summary.py` | Aggregates compression-efficiency R² and fitted parameters across subjects | `outputs/encoding/incremental_av` |
 | `roi_av_profile.py` | Per-ROI audiovisual encoding profiles (unimodal and interactive effects) | `outputs/encoding/roi_av_profile` |
 | `av_derived_maps.py` | Group-average audiovisual conjunction, superadditivity, max-unimodal contrast maps | `outputs/encoding/group_average` |
@@ -23,7 +22,6 @@ Ridge regression models predict cortical fMRI responses from embeddings of video
 - `bash analysis.sh` — Group-average encoding, all models
 - `bash analysis.sh persubject [N_JOBS] [RESUME_SUBJECT]` — Per-subject ridge regression (GNU parallel)
 - `bash analysis.sh incremental_av` — Run-wise A+V+J vs. A+V and compression analyses
-- `bash analysis.sh pairing_control` — Fold-confined mismatch controls (seed configurable via `PAIRING_SEEDS`)
 - `bash analysis.sh factorial_interaction` — Crossed-pair AV interaction representation (seed configurable)
 
 `run_diff_study.sh`:

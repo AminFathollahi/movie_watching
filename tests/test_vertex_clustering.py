@@ -12,23 +12,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from cifti_io import save_cifti_map
-from cluster.channel_vertex_alignment import (
-    cluster_profiles as vertex_cluster_profiles,
-    profile_correlation_summary,
-    vertex_exclude_labels,
-)
 from cluster.io_cluster import write_dlabel
 from cluster.vertex_clustering import (
     CLUSTERERS,
     REDUCTIONS,
     cluster_embedding,
+    cluster_profiles as vertex_cluster_profiles,
     clustering_tag,
     expand_masked_labels,
     load_stimulus_mask,
     parse_args,
+    profile_correlation_summary,
     reduce_grayordinates,
     reduction_tag,
     run,
+    vertex_exclude_labels,
     zscore_timeseries_inplace,
 )
 

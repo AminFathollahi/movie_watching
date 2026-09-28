@@ -8,6 +8,21 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from cf_modeling.cf_naming import (
+        cf_model_map_stems,
+        legacy_cf_model_map_stems,
+        per_subject_mean_stem,
+        resolve_cf_model_map_path,
+    )
+except ModuleNotFoundError:
+    from cf_naming import (
+        cf_model_map_stems,
+        legacy_cf_model_map_stems,
+        per_subject_mean_stem,
+        resolve_cf_model_map_path,
+    )
+
 # Support package imports and direct script execution.
 try:
     from cf_modeling.bivariate_cifti import (
@@ -63,14 +78,29 @@ def main() -> None:
     args = parse_args()
     pair_root = args.output_base / args.mode / f"{args.roi_a}_{args.roi_b}"
     source_dir = pair_root / ("prep" if args.mode == "group_average" else "group")
-    suffix = "" if args.mode == "group_average" else "_avg"
     output_dir = args.output_dir or pair_root / "cifti_maps"
     output_dir.mkdir(parents=True, exist_ok=True)
+    stems = cf_model_map_stems(args.roi_a, args.roi_b)
+    legacy_stems = legacy_cf_model_map_stems(args.roi_a, args.roi_b)
 
     # Match plot_fig3a exactly: ROI B is dim1/blue/horizontal and ROI A is
     # dim2/red/vertical.
-    roi_a_values = np.load(source_dir / f"R2_{args.roi_a}{suffix}.npy")
-    roi_b_values = np.load(source_dir / f"R2_{args.roi_b}{suffix}.npy")
+    if args.mode == "group_average":
+        roi_a_path = resolve_cf_model_map_path(
+            source_dir, stems["split_r2_a"], legacy_stems["split_r2_a"])
+        roi_b_path = resolve_cf_model_map_path(
+            source_dir, stems["split_r2_b"], legacy_stems["split_r2_b"])
+        estimate = "fit_to_group_mean_timeseries"
+    else:
+        roi_a_path = resolve_cf_model_map_path(
+            source_dir, per_subject_mean_stem(stems["split_r2_a"]),
+            f"{legacy_stems['split_r2_a']}_avg")
+        roi_b_path = resolve_cf_model_map_path(
+            source_dir, per_subject_mean_stem(stems["split_r2_b"]),
+            f"{legacy_stems['split_r2_b']}_avg")
+        estimate = "mean_of_subject_maps"
+    roi_a_values = np.load(roi_a_path)
+    roi_b_values = np.load(roi_b_path)
     texture_path = find_pycortex_colormap(args.colormap_png)
     texture = load_rgba_texture(texture_path)
     keys, labels = quantize_bivariate(
@@ -82,7 +112,8 @@ def main() -> None:
         vmax=args.vmax,
     )
 
-    stem = f"bivariate_{args.roi_a}_{args.roi_b}_raw"
+    stem = (f"bivariate_cf_model_split_r2_{args.roi_a}_{args.roi_b}_"
+            f"{estimate}")
     dlabel_path = output_dir / f"{stem}_{args.bins}bin.dlabel.nii"
     dscalar_path = output_dir / f"{stem}_axes.dscalar.nii"
     legend_path = output_dir / f"{stem}_legend.png"
@@ -91,12 +122,12 @@ def main() -> None:
         labels,
         args.template_cifti,
         dlabel_path,
-        f"{args.roi_a} x {args.roi_b} raw R2 ({args.bins}x{args.bins})",
+        f"{args.roi_a} x {args.roi_b} split-CF R² ({args.bins}x{args.bins})",
     )
     save_pair_dscalar(
         roi_b_values,
         roi_a_values,
-        (f"R2_{args.roi_b}", f"R2_{args.roi_a}"),
+        (stems["split_r2_b"], stems["split_r2_a"]),
         args.template_cifti,
         dscalar_path,
     )

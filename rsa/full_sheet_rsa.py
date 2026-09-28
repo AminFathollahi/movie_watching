@@ -17,6 +17,19 @@ composition by tower, cross-seed hotspot overlap (Jaccard), and a topography
 control -- true k-NN neighbourhoods vs. random same-tower unit samples,
 reported honestly even when it does not favour the true neighbourhood.
 
+Each seed's RDM is built from ALL vertices in its mask (cca_a 588, cca_p
+370) across all 626 time bins, correlation distance -- NOT the ROI's mean
+timecourse -- then Spearman-correlated against each sheet unit's own k=100
+correlation-distance searchlight RDM. `sanity_corr` in the saved results is
+a separate, cheaper side check on the seed's mean time series only; it is
+not the RSA result. See rsa/shared/sheet_rsa.py for both.
+
+Cross-seed spatial correlation (0.86) and hotspot Jaccard (0.79) are both
+high, meaning the two seed maps largely coincide -- AND the cca_a-cca_p
+difference map has real structure concentrated in the audio tower (per-
+tower mean rho, cca_a/cca_p: vision 0.040/0.051, audio 0.273/0.144, thinker
+0.071/0.093). Both facts hold at once; neither should be reported alone.
+
 Modality: intact AV only -- topo_omni_extract_full_sheet.py extracts no
 unimodal a/v passes for the full sheet, so no per-unit modality-preference
 analysis is possible here.
@@ -43,7 +56,9 @@ from scipy import stats
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from rsa.perm_searchlight import _run_hemisphere, within_run_shift_pair_indices  # noqa: E402
+from rsa.perm_searchlight import (  # noqa: E402
+    _run_hemisphere, _run_hemisphere_paired, within_run_shift_pair_indices,
+)
 from rsa.shared.rsa_utils import (  # noqa: E402
     align_and_assert_bins, get_run_bin_counts, load_fmri_cifti,
     preprocess_fmri, process_model_embeddings,
@@ -52,7 +67,7 @@ from cf_modeling.roi_mean_partial_connectivity import _load_mask  # noqa: E402
 from rsa.shared.sheet_rsa import (  # noqa: E402
     N_UNITS, SHEET_COLS, SHEET_ROWS, TOWER_NAMES, characterize, knn_on_sheet,
     load_true_coords, plot_sheet_map, random_neighbors_within_tower,
-    sanity_corr, tower_id,
+    robust_vlim, sanity_corr, tower_id,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -242,17 +257,57 @@ def main() -> None:
     surf_idx = np.arange(N_UNITS, dtype=np.int32)
     vertex_to_col = np.arange(N_UNITS, dtype=np.int32)
 
+    # Both seeds share one brain RDM per unit (built from sheet_emb alone, not
+    # the seed) and perm_idx_all is generated once above and reused for both,
+    # so permutation j is the identical within-run circular shift for both --
+    # the paired null the difference test needs. _run_hemisphere_paired
+    # computes the shared brain RDM once per unit and derives both seeds' rho
+    # plus the paired two-sided diff null in the same permutation batch,
+    # rather than three independent passes.
+    seed_a_name, seed_p_name = args.seed_a_name, args.seed_p_name
+    sheet_al_a, seed_al_a = align_and_assert_bins(sheet_emb, seed_embeddings[seed_a_name])
+    sheet_al_p, seed_al_p = align_and_assert_bins(sheet_emb, seed_embeddings[seed_p_name])
+    assert np.array_equal(sheet_al_a, sheet_al_p), (
+        "Shared-permutation paired null requires an identical sheet-side "
+        "array for both seeds (same n_bins and values) -- got a mismatch."
+    )
+    sheet_aligned = sheet_al_a
+
+    log.info(f"Running paired searchlight RSA: seeds={seed_a_name},{seed_p_name} "
+             f"n_units={N_UNITS} gpu_batch_size={args.gpu_batch_size} "
+             f"perm_batch_size={args.perm_batch_size}")
+    t0 = time.time()
+    actual_rho_a, p_perm_a, actual_rho_p, p_perm_p, p_perm_diff = _run_hemisphere_paired(
+        sheet_aligned, seed_al_a, seed_al_p, neighbors, surf_idx, vertex_to_col,
+        args.method, perm_idx_all, args.gpu_batch_size, args.perm_batch_size,
+    )
+    log.info(f"  done in {time.time() - t0:.1f}s")
+
+    # Verify the observed rho reproduces the arrays already on disk before
+    # overwriting them -- the null is recomputed here, but actual_rho should
+    # not change.
+    reproduction_check: dict = {}
+    for name, new_rho in ((seed_a_name, actual_rho_a), (seed_p_name, actual_rho_p)):
+        old_path = out_dir / f"{name}_av_rho.npy"
+        if not old_path.exists():
+            continue
+        old_rho = np.load(old_path)
+        max_abs_diff = float(np.max(np.abs(old_rho - new_rho)))
+        close = bool(np.allclose(old_rho, new_rho, rtol=1e-4, atol=1e-6))
+        reproduction_check[name] = dict(close=close, max_abs_diff=max_abs_diff)
+        log.info(f"  reproduction check {name}: close={close} max_abs_diff={max_abs_diff:.3e}")
+        if not close:
+            raise SystemExit(
+                f"Observed rho for {name} did NOT reproduce the on-disk array "
+                f"{old_path} (max abs diff {max_abs_diff:.3e}). Stopping without "
+                "overwriting -- investigate before rerunning."
+            )
+
     results: dict[str, dict] = {}
-    for seed_name, seed_emb in seed_embeddings.items():
-        sheet_aligned, seed_aligned = align_and_assert_bins(sheet_emb, seed_emb)
-        log.info(f"Running searchlight RSA: seed={seed_name} n_units={N_UNITS} "
-                 f"gpu_batch_size={args.gpu_batch_size} perm_batch_size={args.perm_batch_size}")
-        t0 = time.time()
-        actual_rho, p_perm, _null_max = _run_hemisphere(
-            sheet_aligned, seed_aligned, neighbors, surf_idx, vertex_to_col,
-            args.method, perm_idx_all, args.gpu_batch_size, args.perm_batch_size,
-        )
-        log.info(f"  done in {time.time() - t0:.1f}s")
+    for seed_name, actual_rho, p_perm, seed_aligned in (
+        (seed_a_name, actual_rho_a, p_perm_a, seed_al_a),
+        (seed_p_name, actual_rho_p, p_perm_p, seed_al_p),
+    ):
         p_fdr = stats.false_discovery_control(
             p_perm.astype(np.float64), method="bh").astype(np.float32)
         n_sig = int((p_fdr < args.fdr_alpha).sum())
@@ -276,6 +331,70 @@ def main() -> None:
 
     all_sig = all(v["n_sig_fdr"] / N_UNITS >= 0.98 for v in results.values())
     min_sig_frac = min(v["n_sig_fdr"] / N_UNITS for v in results.values())
+
+    # Paired difference inference: per-unit two-sided p on rho(cca_a) -
+    # rho(cca_p), from the paired null computed above; BH-FDR across all
+    # N_UNITS. Kept separate from `results` (which characterize() and the
+    # topography control key off of by seed name) to avoid touching their
+    # schema.
+    diff_rho = actual_rho_a - actual_rho_p
+    p_fdr_diff = stats.false_discovery_control(
+        p_perm_diff.astype(np.float64), method="bh").astype(np.float32)
+    diff_sig_mask = p_fdr_diff < args.fdr_alpha
+    n_sig_diff = int(diff_sig_mask.sum())
+    frac_sig_diff = n_sig_diff / N_UNITS
+    log.info(f"  diff (cca_a - cca_p): n_sig_fdr={n_sig_diff}/{N_UNITS} ({frac_sig_diff:.2%})")
+
+    diff_by_tower = {}
+    for t in sorted(TOWER_NAMES):
+        m = tid == t
+        diff_by_tower[TOWER_NAMES[t]] = dict(
+            n_units=int(m.sum()), n_sig_fdr=int((diff_sig_mask & m).sum()),
+            frac_sig_fdr=float((diff_sig_mask & m).sum() / m.sum()),
+        )
+        log.info(f"    {TOWER_NAMES[t]}: {diff_by_tower[TOWER_NAMES[t]]['n_sig_fdr']}/"
+                 f"{diff_by_tower[TOWER_NAMES[t]]['n_units']} "
+                 f"({diff_by_tower[TOWER_NAMES[t]]['frac_sig_fdr']:.2%})")
+
+    diff_result = dict(rho=diff_rho, p_perm=p_perm_diff, p_fdr=p_fdr_diff,
+                       n_sig_fdr=n_sig_diff, frac_sig_fdr=frac_sig_diff,
+                       by_tower=diff_by_tower)
+    np.save(out_dir / "diff_p_perm.npy", p_perm_diff)
+    np.save(out_dir / "diff_p_fdr.npy", p_fdr_diff)
+    pd.DataFrame({
+        "unit_index": np.arange(N_UNITS),
+        "tower": [TOWER_NAMES[t] for t in tid],
+        "true_row": coords[:, 0], "true_col": coords[:, 1],
+        "raster_row": np.arange(N_UNITS) // SHEET_COLS,
+        "raster_col": np.arange(N_UNITS) % SHEET_COLS,
+        "diff_rho": diff_rho, "p_perm": p_perm_diff, "p_fdr": p_fdr_diff,
+    }).to_csv(out_dir / "diff.csv", index=False)
+
+    if frac_sig_diff >= 0.98:
+        diff_caveat = (
+            f"The difference test is ALSO at ceiling ({frac_sig_diff:.1%} FDR-"
+            "significant, p at the permutation floor for nearly every unit): for "
+            "the same reason as the per-seed against-zero tests, near-ceiling "
+            "significance here is a manipulation check, not a localization "
+            "finding. Magnitude (per-tower diff_mean, hotspot composition) "
+            "remains the informative signal."
+        )
+    elif frac_sig_diff < 0.5:
+        diff_caveat = (
+            f"The difference test is NOT at ceiling: {frac_sig_diff:.1%} of units "
+            "are FDR-significant overall, and it is uneven by tower (audio "
+            f"{diff_by_tower['audio']['frac_sig_fdr']:.1%}, vision "
+            f"{diff_by_tower['vision']['frac_sig_fdr']:.1%}, thinker "
+            f"{diff_by_tower['thinker']['frac_sig_fdr']:.1%}) -- this is "
+            "informative: the a-p contrast is not uniformly significant "
+            "across the sheet."
+        )
+    else:
+        diff_caveat = (
+            f"{frac_sig_diff:.1%} of units are FDR-significant on the a-p "
+            "difference -- neither at ceiling nor sparse; see diff_inference."
+            "by_tower for the distribution."
+        )
 
     characterization = characterize(results, coords, tid, args)
 
@@ -332,16 +451,42 @@ def main() -> None:
             "For each seed, true_rho_mean (true k-NN neighbourhood) vs. "
             "random_rho_mean (k=same, drawn uniformly from the same tower, "
             "coordinates ignored, topo_n_draws independent draws pooled). "
-            "true_beats_random=false means the true spatial neighbourhood scored "
-            "no better than an arbitrary same-tower, same-size sample -- report "
-            "this plainly rather than treating the true-coordinate map as validated "
-            "topography."
+            "true_beats_random=false throughout is what spatial smoothness "
+            "predicts, not evidence against topography: the sheet maps show "
+            "clear spatial structure (smooth, labyrinthine, not scattered), and "
+            "smoothness is exactly what makes a compact k=100 patch of mutually "
+            "redundant neighbours span fewer independent dimensions than a "
+            "scattered same-size sample -- so it scores lower by construction "
+            "regardless of whether the true coordinates are meaningful. This "
+            "control does not test topographic significance either way; a claim "
+            "that the topography IS meaningful would need a different control "
+            "(e.g. against sheets with the spatial loss ablated, or a spatially "
+            "shuffled sheet preserving the marginal rho distribution)."
         ),
+        "diff_inference": {
+            "description": (
+                "Per-unit paired two-sided permutation test on "
+                "rho(cca_a) - rho(cca_p). perm_idx_all (within_run_shift_pair_"
+                "indices, seed=42) is generated once and reused for both seeds "
+                "(see main()), so permutation j applies the identical within-run "
+                "circular shift to both -- null_diff_j(unit) = null_rho_a_j(unit) "
+                "- null_rho_p_j(unit) is a genuinely paired null. p(unit) = "
+                "(1 + #{j : |null_diff_j(unit)| >= |observed_diff(unit)|}) / "
+                "(1 + n_perm); BH-FDR across all units."
+            ),
+            "n_perm": args.n_perm, "perm_seed": args.seed, "fdr_alpha": args.fdr_alpha,
+            "n_units": N_UNITS, "n_sig_fdr": n_sig_diff, "frac_sig_fdr": frac_sig_diff,
+            "by_tower": diff_by_tower,
+            "reproduction_check": reproduction_check,
+            "caveat": diff_caveat,
+            "files": ["diff_p_perm.npy", "diff_p_fdr.npy", "diff.csv",
+                     "diff_p_sheet_map.png", "diff_fdr_sig_sheet_map.png"],
+        },
     }
     (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     log.info(f"Saved metadata: {out_dir / 'metadata.json'}")
 
-    make_figures(results, coords, out_dir, args)
+    make_figures(results, diff_result, coords, out_dir, args)
     log.info("Done.")
 
 
@@ -349,7 +494,7 @@ def main() -> None:
 # Figures: one 304x512 sheet heatmap PNG per seed
 # =============================================================================
 
-def make_figures(results: dict, coords: np.ndarray, out_dir: Path,
+def make_figures(results: dict, diff_result: dict, coords: np.ndarray, out_dir: Path,
                  args: argparse.Namespace) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -357,23 +502,64 @@ def make_figures(results: dict, coords: np.ndarray, out_dir: Path,
 
     seed_a, seed_p = args.seed_a_name, args.seed_p_name
     ra, rp = results[f"{seed_a}_av"], results[f"{seed_p}_av"]
-    vlim = float(max(np.abs(ra["rho"]).max(), np.abs(rp["rho"]).max()))
 
+    # Per-seed maps: sequential perceptually-uniform cmap, SHARED colour scale
+    # -- robust (1st/99th pct) limits over the pooled rho of both seeds, so a
+    # colour means the same rho in both panels (cca_p's weaker values are not
+    # stretched to fill the same range as cca_a's stronger ones). rho is at
+    # FDR ceiling here (>=99% of units significant for both seeds -- see
+    # significance_caveat in metadata.json), so marking significant units
+    # would paint over nearly the whole map; mark the rare NON-significant
+    # units instead.
+    pooled_rho = np.concatenate([ra["rho"], rp["rho"]])
+    vmin, vmax = robust_vlim(pooled_rho, pct=1.0)
     for name, r in ((seed_a, ra), (seed_p, rp)):
         fig, ax = plt.subplots(figsize=(10, 6))
         im = plot_sheet_map(ax, r["rho"], coords, f"{name} (av) full-sheet RSA rho",
-                            vlim, r["p_fdr"] < args.fdr_alpha, "RdBu_r")
-        fig.colorbar(im, ax=ax, shrink=0.8, label="Spearman rho")
+                            vmin, vmax, r["p_fdr"] >= args.fdr_alpha, "viridis")
+        fig.colorbar(im, ax=ax, shrink=0.8,
+                    label=f"Spearman rho (scale shared across seeds, clipped to "
+                          f"pooled 1st-99th pct: [{vmin:.3f}, {vmax:.3f}])")
         fig.savefig(out_dir / f"{name}_av_rho_sheet_map.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
 
     diff = ra["rho"] - rp["rho"]
-    vlim_diff = float(np.abs(diff).max())
+    _, vlim_diff = robust_vlim(np.abs(diff), pct=1.0)
     fig, ax = plt.subplots(figsize=(10, 6))
     im = plot_sheet_map(ax, diff, coords, f"rho({seed_a}) - rho({seed_p})  [av]",
-                        vlim_diff, None, "RdBu_r")
-    fig.colorbar(im, ax=ax, shrink=0.8, label="Delta rho")
+                        -vlim_diff, vlim_diff, None, "RdBu_r")
+    fig.colorbar(im, ax=ax, shrink=0.8,
+                label=f"Delta rho (clipped to 99th pct |diff|: +/-{vlim_diff:.3f})")
     fig.savefig(out_dir / "diff_rho_sheet_map.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    # Paired-difference inference maps: uncorrected -log10(p) for readability
+    # (transform stated in the colorbar label), and the FDR-significance map
+    # signed by which seed wins (+1 cca_a, -1 cca_p, 0 not significant).
+    eps = np.finfo(np.float32).tiny
+    neglog_p = -np.log10(np.maximum(diff_result["p_perm"], eps))
+    vmin_p, vmax_p = robust_vlim(neglog_p, pct=1.0)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    im = plot_sheet_map(ax, neglog_p, coords,
+                        f"rho({seed_a}) - rho({seed_p}): paired two-sided permutation p, uncorrected",
+                        vmin_p, vmax_p, None, "viridis")
+    fig.colorbar(im, ax=ax, shrink=0.8,
+                label=f"-log10(p) (clipped to 1st-99th pct: [{vmin_p:.2f}, {vmax_p:.2f}])")
+    fig.savefig(out_dir / "diff_p_sheet_map.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    sig_mask = diff_result["p_fdr"] < args.fdr_alpha
+    sig_dir = np.where(sig_mask, np.sign(diff), 0.0).astype(np.float32)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    im = plot_sheet_map(
+        ax, sig_dir, coords,
+        f"rho({seed_a}) - rho({seed_p}): FDR-significant at alpha={args.fdr_alpha} "
+        f"(n={diff_result['n_sig_fdr']}/{diff_result['rho'].size}, "
+        f"{diff_result['frac_sig_fdr']:.1%})",
+        -1, 1, None, "RdBu_r")
+    fig.colorbar(im, ax=ax, shrink=0.8,
+                label=f"+1 = {seed_a} > {seed_p} sig., -1 = {seed_p} > {seed_a} sig., 0 = not FDR-significant")
+    fig.savefig(out_dir / "diff_fdr_sig_sheet_map.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     log.info(f"Saved figures under {out_dir}")

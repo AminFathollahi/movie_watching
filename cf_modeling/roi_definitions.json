@@ -6,6 +6,11 @@
       "posterior": "cca_p"
     },
     "threshold": 0.12,
+    "default_variant": {
+      "tag": "peav_fixed_0p12",
+      "source": "pe-av-small-16-frame_av",
+      "selection_rule": "fixed PE-AV RSA threshold 0.12; retain the two largest qualifying temporal surface components in each hemisphere"
+    },
     "max_lboe_per_hemisphere": 100,
     "n_targets_batch": 4000,
     "backend": "torch",

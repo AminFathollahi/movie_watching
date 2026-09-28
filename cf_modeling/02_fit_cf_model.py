@@ -50,8 +50,8 @@ STREAMING MODE (--raw-dir):
 
 Skip logic
 ----------
-If R2_{roi_a}_nc.npy and R2_{roi_b}_nc.npy both exist in the output directory,
-the run is skipped (safe for GNU parallel reruns).
+If both ``cf_model_null_corrected_split_r2_{roi}.npy`` maps exist in the
+output directory, the run is skipped (safe for GNU parallel reruns).
 
 Usage (see README for the full mode/input-mode matrix)
 -----
@@ -95,6 +95,7 @@ if str(_CF_DIR) not in sys.path:
 from lib.config_builder  import build_temp_yaml
 from lib.subject_adapter import CfSubjectAdapter
 from lib.cf_model        import CfModel
+from cf_naming import cf_model_map_stems
 
 # ---------------------------------------------------------------------------
 # Himalaya torch_cuda monkey-patch: arange() must default to CUDA device so
@@ -292,10 +293,13 @@ def _run_pipeline(
     cache_dir = os.path.join(roi_root, "subsurfaces")
 
     # ── Skip if already done ──────────────────────────────────────────────
-    done_a = os.path.exists(os.path.join(out_dir, f"R2_{args.roi_a}_nc.npy"))
-    done_b = os.path.exists(os.path.join(out_dir, f"R2_{args.roi_b}_nc.npy"))
+    stems = cf_model_map_stems(args.roi_a, args.roi_b)
+    done_a = os.path.exists(os.path.join(
+        out_dir, f"{stems['null_corrected_split_r2_a']}.npy"))
+    done_b = os.path.exists(os.path.join(
+        out_dir, f"{stems['null_corrected_split_r2_b']}.npy"))
     if done_a and done_b:
-        log.info("%sR2_nc maps already exist — skipping.", prefix)
+        log.info("%sNull-corrected split-CF R² maps already exist — skipping.", prefix)
         return
 
     # ── Load subsurfaces ──────────────────────────────────────────────────

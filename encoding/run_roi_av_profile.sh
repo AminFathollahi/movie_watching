@@ -21,7 +21,7 @@ cd "$SCRIPT_DIR/.."
 
 DATA_BASE="/home/amin/Research/Representation/Movie/data"
 OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
-HCP_DIR="${MOVIE_HCP_DIR:-/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
+HCP_DIR="${MOVIE_HCP_DIR:-/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
 
 PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/raw"
 FMRI_SUFFIX="raw"

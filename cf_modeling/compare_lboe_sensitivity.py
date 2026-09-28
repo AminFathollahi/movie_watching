@@ -9,6 +9,15 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from cf_modeling.cf_naming import (
+        cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
+    )
+except ModuleNotFoundError:
+    from cf_naming import (
+        cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
+    )
+
 
 def _finite_corr(first: np.ndarray, second: np.ndarray) -> float:
     keep = np.isfinite(first) & np.isfinite(second)
@@ -19,10 +28,15 @@ def _finite_corr(first: np.ndarray, second: np.ndarray) -> float:
 
 def _load_model(count: int, root: Path, roi_a: str, roi_p: str) -> dict:
     prep = root / "prep"
+    stems = cf_model_map_stems(roi_a, roi_p)
+    legacy_stems = legacy_cf_model_map_stems(roi_a, roi_p)
     maps = {
-        "full": np.load(prep / "R2_full.npy"),
-        "a": np.load(prep / f"R2_{roi_a}.npy"),
-        "p": np.load(prep / f"R2_{roi_p}.npy"),
+        "full": np.load(resolve_cf_model_map_path(
+            prep, stems["full_r2"], legacy_stems["full_r2"])),
+        "a": np.load(resolve_cf_model_map_path(
+            prep, stems["split_r2_a"], legacy_stems["split_r2_a"])),
+        "p": np.load(resolve_cf_model_map_path(
+            prep, stems["split_r2_b"], legacy_stems["split_r2_b"])),
     }
     band_sizes = np.load(prep / "band_sizes.npy").astype(int)
     return {

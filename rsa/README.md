@@ -224,15 +224,14 @@ parallel --citation
 
 `rsa/full_sheet_rsa.py` is the single consolidated driver: one RSA sweep
 across the ENTIRE 304×512 = 155,648-unit Topo-Omni sheet for each CCA seed
-ROI, under TRUE (trained) coordinates. It replaces three earlier scripts:
-`cca_seed_sheet_rsa.py` (layer 18 only, 2,048 units = 1.3% of the sheet,
-plotted at the RASTER fallback lattice — not the coordinate system the
-checkpoint trained under), `cca_seed_sheet_rsa_truecoords.py` (fixed the
-coordinates but still only 6 hand-picked decoder layers), and
-`topography_control.py` (a separate follow-up script, now folded in as one
-part of the same sweep). Both retired drivers are gone from `rsa/`; the
-geometry, plotting, and `characterize()`/hotspot machinery they and this
-script shared now live in `rsa/shared/sheet_rsa.py`.
+ROI, under TRUE (trained) coordinates. It replaces three earlier, narrower
+drivers, all retired and gone from `rsa/`: a layer-18-only driver (2,048
+units = 1.3% of the sheet, plotted at the RASTER fallback lattice — not the
+coordinate system the checkpoint trained under), a true-coordinate driver
+restricted to 6 hand-picked thinker-stack layers, and a separate
+topography-control follow-up, now folded in as one part of the same sweep.
+The geometry, plotting, and `characterize()`/hotspot machinery they and
+this script shared now live in `rsa/shared/sheet_rsa.py`.
 
 - `notebooks/feature_extraction/topo_omni_extract_full_sheet.py` — extracts
   the complete 304×512 = 155,648-unit Topo-Omni cortical sheet, intact joint
@@ -278,10 +277,30 @@ bit-identical across two torch builds. Cached at
 seed 42, spearman, bin 5s / skip 5s, delay 5s, FDR alpha 0.05, true
 coordinates as above.
 
+**Seed RDM construction:** each seed's RDM is built from ALL vertices in its
+mask (cca_a 588, cca_p 370) across all 626 time bins, correlation distance —
+NOT the ROI's mean timecourse — then Spearman-correlated against each sheet
+unit's own k=100 correlation-distance searchlight RDM. `sanity_corr` in the
+per-unit CSVs is a separate, cheaper side check (plain Pearson r against the
+seed's mean time series) and is not the RSA result.
+
 **Artifacts:** `outputs/rsa/cca_seed_sheet_rsa/fullsheet_k100_truecoords/`:
 `cca_a_av.csv`, `cca_a_av_rho.npy`, `cca_a_av_rho_sheet_map.png`,
 `cca_p_av.csv`, `cca_p_av_rho.npy`, `cca_p_av_rho_sheet_map.png`,
-`diff_rho_sheet_map.png`, `metadata.json`.
+`diff_rho_sheet_map.png`, `diff.csv`, `diff_p_perm.npy`, `diff_p_fdr.npy`,
+`diff_p_sheet_map.png`, `diff_fdr_sig_sheet_map.png`, `metadata.json`. All
+PNGs mark the vision/audio/thinker boundaries with dotted separator lines
+and labels (valid under true coordinates — see Sheet geometry above); the
+two per-seed rho maps share ONE colour scale — robust 1st-99th percentile
+limits over the pooled rho of both seeds (stated in the colorbar label) so a
+colour means the same rho in both panels — with the rare non-significant
+units marked (>=99% FDR-significance at ceiling means marking significant
+units would paint over nearly the whole map). The rho difference map uses
+its own diverging colormap centred at zero with a symmetric 99th-percentile
+|diff| limit. `diff_p_sheet_map.png` plots -log10(p) (uncorrected, paired
+two-sided permutation test, see "Per-unit inference on the difference"
+below); `diff_fdr_sig_sheet_map.png` plots the signed FDR-significance mask
+(+1 cca_a > cca_p, -1 cca_p > cca_a, 0 not significant).
 
 **Results** (all from `metadata.json`):
 
@@ -308,18 +327,32 @@ coordinates as above.
 - Cross-seed spatial Pearson r = 0.8639; hotspot Jaccard 0.7940 (overlap
   13,778 of union 17,352).
 - **Topography control** (true k=100 neighbourhood vs. k=100 random units
-  drawn uniformly from the same tower, 3 draws): the true neighbourhood did
-  **not** beat random in any of the 8 seed×scope combinations checked (2
-  seeds × {overall, vision, audio, thinker}) — `true_beats_random=false`
-  throughout. E.g. cca_a overall: true mean 0.1157 vs. random mean 0.1697;
-  cca_a audio tower: true 0.2732 vs. random 0.3966. This does not pass —
-  see caveat 3 below.
+  drawn uniformly from the same tower, 3 draws): `true_beats_random=false`
+  in all 8 seed×scope combinations checked (2 seeds × {overall, vision,
+  audio, thinker}) — e.g. cca_a overall: true mean 0.1157 vs. random mean
+  0.1697; cca_a audio tower: true 0.2732 vs. random 0.3966. This is what
+  spatial smoothness predicts, not evidence against topography — see
+  caveat 3 below for why, and what this control does and does not show.
+- **Per-unit inference on the difference.** The per-seed FDR tests above are
+  each against zero and do not test rho(cca_a) vs. rho(cca_p) directly. A
+  paired two-sided permutation test does: `perm_idx_all` (the within-run
+  circular-shift index array) is generated once and reused for both seeds,
+  so permutation j is the identical shift for both, making
+  `null_diff_j(unit) = null_rho_a_j(unit) - null_rho_p_j(unit)` a genuine
+  paired null; p(unit) = (1 + #{j : |null_diff_j| >= |observed_diff|}) /
+  (1 + n_perm), BH-FDR across all 155,648 units. See `metadata.json`'s
+  `diff_inference` for the exact fraction FDR-significant and its by-tower
+  breakdown.
 
 **Caveats — limits, not findings:**
 
-1. Cross-seed spatial r = 0.864 with hotspot Jaccard 0.794 means the two
-   seed maps are largely the same map. The A-P contrast is a residual on
-   top of a large shared signal, not two independent topographies.
+1. Cross-seed spatial r = 0.864 with hotspot Jaccard 0.794 — both high, so
+   the two seed maps largely coincide overall. That is not the whole
+   picture: the difference map has real structure concentrated in the audio
+   tower (per-tower mean rho, cca_a/cca_p: vision 0.0395/0.0506, audio
+   0.2732/0.1439, thinker 0.0706/0.0931), so the A-P contrast is not a
+   uniform residual on an otherwise identical map — it is a specific,
+   audio-tower effect. Both facts hold at once; report neither alone.
 2. The hotspot contiguity test is saturated and should not be cited as
    evidence. `observed_mean_nn_dist` was 1.0023 (cca_a) and 1.0034 (cca_p)
    against an integer-grid floor of exactly 1.0, versus a null of ~1.7059.
@@ -327,12 +360,22 @@ coordinates as above.
    produce. It also tests spatial clustering on coordinates that were
    themselves generated by a topographic training objective, so clustering
    is expected by construction.
-3. The topography control (above) did not pass: a random same-tower,
-   same-size unit sample scored *higher* mean rho than the true k=100
-   spatial neighbourhood in every combination checked. That is consistent
-   with the searchlight not using topography at all within a tower — a
-   k=100 patch behaves like an arbitrary sample of the tower, not a
-   spatially localized one. The per-tower magnitude comparisons above
-   (vision/audio/thinker rho, the A-P contrast) do not depend on this
-   control and stand on their own; treat any claim of true 2-D topographic
-   localization on this sheet as unsupported.
+3. The topography control (above) found a random same-tower, same-size unit
+   sample scoring *higher* mean rho than the true k=100 spatial neighbourhood
+   in every combination checked — but that does not mean the true
+   coordinates carry no topography. The regenerated sheet maps show
+   obvious, strong spatial structure (smooth, labyrinthine, not scattered)
+   across all three towers. Spatial smoothness is precisely what makes a
+   compact k=100 patch score *lower* than a scattered same-size sample:
+   adjacent units in a smooth map are mutually redundant, so the compact
+   patch spans fewer independent dimensions than an equally sized scattered
+   draw, which by chance covers more of the map's variance. The control
+   result is what smoothness predicts either way, whether or not the
+   topography is scientifically meaningful — it is uninformative about that
+   question, not evidence against it. Establishing whether the topography
+   is meaningful needs a different control: for example, comparing this
+   sheet against one with the spatial-smoothness training loss ablated, or
+   against a spatially shuffled sheet that preserves the marginal rho
+   distribution. The per-tower magnitude comparisons above (vision/audio/
+   thinker rho, the A-P contrast) do not depend on this control and stand
+   on their own.

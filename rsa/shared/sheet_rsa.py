@@ -17,7 +17,18 @@ here, never "decoder".
 Coordinates: no trained coords.npy ships with the released checkpoint or its
 HF cache. `load_true_coords` is a deterministic regeneration of
 `init_coords.permute_coordinates(seed=42)`, validated bit-identical across
-two torch builds.
+two torch builds. The permutation reorders units WITHIN each architectural
+block only (verified: every unit's true row/col stays inside its own
+block's raster bounds) -- so straight lines at col 256 (rows 0-159) and row
+160 (all cols) are valid tower separators under true coordinates too, and
+`plot_sheet_map` draws them that way.
+
+RSA seed construction: each seed RDM is built from ALL vertices in that
+seed's mask (cca_a 588, cca_p 370) across all 626 time bins, correlation
+distance, then Spearman-correlated against each sheet unit's own k=100
+correlation-distance searchlight RDM. It is NOT built from the ROI's mean
+timecourse. `sanity_corr` below is a separate, cheaper side check (plain
+Pearson r against the seed's mean time series) and is not the RSA result.
 """
 
 import sys
@@ -101,7 +112,9 @@ def random_neighbors_within_tower(tid: np.ndarray, k: int,
 # =============================================================================
 
 def sanity_corr(sheet_emb: np.ndarray, seed_emb: np.ndarray) -> np.ndarray:
-    """Plain Pearson r between the seed ROI's mean time series and each unit."""
+    """Side check only, NOT the RSA result: plain Pearson r between the seed
+    ROI's mean time series and each unit. The actual RSA seed RDM uses all
+    vertices in the mask, correlation distance -- see module docstring."""
     seed_mean = seed_emb.mean(axis=1)
     seed_z = (seed_mean - seed_mean.mean()) / (seed_mean.std() + 1e-12)
     unit_z = (sheet_emb - sheet_emb.mean(axis=0, keepdims=True)) / (
@@ -125,15 +138,37 @@ def _canvas(values: np.ndarray, coords: np.ndarray) -> tuple[np.ndarray, int, in
     return canvas, rmin, rmax
 
 
+def robust_vlim(values: np.ndarray, pct: float = 1.0) -> tuple[float, float]:
+    """(low, high) percentile colour limits -- robust to outlier tails that
+    would otherwise collapse the bulk of the distribution into one end of
+    the colormap. `pct` is the tail cut on each side (e.g. 1.0 -> [1st,
+    99th] percentile)."""
+    return float(np.percentile(values, pct)), float(np.percentile(values, 100 - pct))
+
+
+def _draw_tower_boundaries(ax) -> None:
+    """Thin dotted separators + labels between the vision/audio/thinker
+    blocks, valid in TRUE-coordinate space because permute_coordinates only
+    reorders units WITHIN a block (see module docstring)."""
+    ax.plot([256, 256], [-0.5, ENCODER_ROWS - 0.5], ":", color="black", lw=0.6)
+    ax.plot([0, SHEET_COLS], [ENCODER_ROWS - 0.5, ENCODER_ROWS - 0.5], ":", color="black", lw=0.6)
+    label_kw = dict(fontsize=7, ha="center", va="center",
+                    bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.65))
+    ax.text(128, 15, "vision", **label_kw)
+    ax.text(384, 15, "audio", **label_kw)
+    ax.text(256, 232, "thinker", **label_kw)
+
+
 def plot_sheet_map(ax, values: np.ndarray, coords: np.ndarray, title: str,
-                   vlim: float, fdr_mask: np.ndarray | None, cmap: str):
+                   vmin: float, vmax: float, mark_mask: np.ndarray | None, cmap: str):
     canvas, rmin, rmax = _canvas(values, coords)
-    im = ax.imshow(canvas, aspect="auto", cmap=cmap, vmin=-vlim, vmax=vlim,
+    im = ax.imshow(canvas, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax,
                     extent=[0, SHEET_COLS, rmax + 0.5, rmin - 0.5])
-    if fdr_mask is not None and fdr_mask.any():
-        rows, cols = coords[fdr_mask, 0], coords[fdr_mask, 1]
+    if mark_mask is not None and mark_mask.any():
+        rows, cols = coords[mark_mask, 0], coords[mark_mask, 1]
         ax.scatter(cols + 0.5, rows + 0.5, s=4, facecolors="none",
                    edgecolors="black", linewidths=0.4)
+    _draw_tower_boundaries(ax)
     ax.set_title(title, fontsize=9)
     ax.set_xlabel("sheet col")
     ax.set_ylabel("sheet row (true)")

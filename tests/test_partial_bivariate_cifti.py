@@ -19,14 +19,14 @@ SPEC.loader.exec_module(MODULE)
 
 def _partial_cifti(path: Path, roi_a: str, roi_p: str) -> None:
     names = [
-        f"partial_r_{roi_a}_given_{roi_p}_bilateral",
-        f"partial_r_{roi_p}_given_{roi_a}_bilateral",
-        f"partial_r_{roi_a}_given_{roi_p}_within_hemisphere",
-        f"partial_r_{roi_p}_given_{roi_a}_within_hemisphere",
-        f"partial_r_{roi_a}_given_{roi_p}_L",
-        f"partial_r_{roi_p}_given_{roi_a}_L",
-        f"partial_r_{roi_a}_given_{roi_p}_R",
-        f"partial_r_{roi_p}_given_{roi_a}_R",
+        f"roi_mean_timeseries_partial_pearson_r_{roi_a}_given_{roi_p}_bilateral",
+        f"roi_mean_timeseries_partial_pearson_r_{roi_p}_given_{roi_a}_bilateral",
+        f"roi_mean_timeseries_partial_pearson_r_{roi_a}_given_{roi_p}_within_hemisphere",
+        f"roi_mean_timeseries_partial_pearson_r_{roi_p}_given_{roi_a}_within_hemisphere",
+        f"roi_mean_timeseries_partial_pearson_r_{roi_a}_given_{roi_p}_L",
+        f"roi_mean_timeseries_partial_pearson_r_{roi_p}_given_{roi_a}_L",
+        f"roi_mean_timeseries_partial_pearson_r_{roi_a}_given_{roi_p}_R",
+        f"roi_mean_timeseries_partial_pearson_r_{roi_p}_given_{roi_a}_R",
     ]
     scalar = nib.cifti2.ScalarAxis(names)
     brain = nib.cifti2.BrainModelAxis.from_mask(
@@ -59,6 +59,7 @@ def test_export_writes_all_four_views_with_shared_scale(tmp_path, monkeypatch):
         image = nib.load(outputs[view])
         assert image.shape == (1, 6)
         assert image.header.get_axis(0).name[0].endswith(f"({view}, 4x4)")
+    assert outputs["metadata"].parent == tmp_path.parent
     metadata = outputs["metadata"].read_text()
     assert "signed values are preserved" in metadata
 

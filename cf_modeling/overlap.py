@@ -33,6 +33,15 @@ import numpy as np
 from scipy import stats as scipy_stats
 from scipy.stats import spearmanr
 
+try:
+    from cf_modeling.cf_naming import (
+        cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
+    )
+except ModuleNotFoundError:
+    from cf_naming import (
+        cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
+    )
+
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)s  %(message)s",
                     datefmt="%H:%M:%S")
@@ -84,12 +93,12 @@ def _save_dscalar(arr, name, bm_axis, out_dir):
 # Per-subject map collection
 # =============================================================================
 
-def collect_maps(subjects_dir, map_name, min_subjects):
-    """Load map_name.npy from all completed subject directories → (N, n_verts)."""
+def collect_maps(subjects_dir, map_name, min_subjects, legacy_name=None):
+    """Load canonical subject CF maps, with a temporary legacy fallback."""
     sub_dirs = sorted(glob(os.path.join(subjects_dir, "*")))
     arrays, missing = [], []
     for sd in sub_dirs:
-        path = os.path.join(sd, f"{map_name}.npy")
+        path = resolve_cf_model_map_path(sd, map_name, legacy_name)
         if os.path.exists(path):
             arrays.append(np.load(path))
         else:
@@ -249,9 +258,17 @@ def run_group_average(args):
     os.makedirs(results_dir, exist_ok=True)
 
     log.info("\nLoading CF-model integration maps …")
-    product_map = np.load(os.path.join(prep_dir, "product_map.npy"))
-    R2_a_nc           = np.load(os.path.join(prep_dir, f"R2_{args.roi_a}_nc.npy"))
-    R2_b_nc           = np.load(os.path.join(prep_dir, f"R2_{args.roi_b}_nc.npy"))
+    stems = cf_model_map_stems(args.roi_a, args.roi_b)
+    legacy_stems = legacy_cf_model_map_stems(args.roi_a, args.roi_b)
+    product_map = np.load(resolve_cf_model_map_path(
+        prep_dir, stems["joint_split_r2_geomean"],
+        legacy_stems["joint_split_r2_geomean"]))
+    R2_a_nc = np.load(resolve_cf_model_map_path(
+        prep_dir, stems["null_corrected_split_r2_a"],
+        legacy_stems["null_corrected_split_r2_a"]))
+    R2_b_nc = np.load(resolve_cf_model_map_path(
+        prep_dir, stems["null_corrected_split_r2_b"],
+        legacy_stems["null_corrected_split_r2_b"]))
     log.info(f"  product_map: frac>0={np.mean(product_map>0):.1%}")
 
     bm_axis        = _bm_axis_from_template(args.template_cifti)
@@ -321,9 +338,14 @@ def run_per_subject(args):
     os.makedirs(cifti_dir, exist_ok=True)
 
     log.info("\nLoading per-subject null-corrected R² maps …")
-    maps_a = collect_maps(subjects_dir, f"R2_{args.roi_a}_nc", args.min_subjects)
-    maps_b = collect_maps(subjects_dir, f"R2_{args.roi_b}_nc", args.min_subjects)
-    maps_product = collect_maps(subjects_dir, "product_map", args.min_subjects) 
+    stems = cf_model_map_stems(args.roi_a, args.roi_b)
+    legacy_stems = legacy_cf_model_map_stems(args.roi_a, args.roi_b)
+    maps_a = collect_maps(subjects_dir, stems["null_corrected_split_r2_a"],
+                          args.min_subjects, legacy_stems["null_corrected_split_r2_a"])
+    maps_b = collect_maps(subjects_dir, stems["null_corrected_split_r2_b"],
+                          args.min_subjects, legacy_stems["null_corrected_split_r2_b"])
+    maps_product = collect_maps(subjects_dir, stems["joint_split_r2_geomean"],
+                                args.min_subjects, legacy_stems["joint_split_r2_geomean"])
     N = maps_a.shape[0]
     log.info(f"  N subjects: {N}")
 

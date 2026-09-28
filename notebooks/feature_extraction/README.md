@@ -39,7 +39,7 @@ Extracts audiovisual, audio-only, and video-only embeddings from transformer mod
 - `extract_cav_mae_sync.py` — Synchronized audio-visual embeddings
 
 **Support & Utility Scripts**
-- `av_pairing.py` | Extract and validate paired audio and video feature sequences at frame and bin levels; used by pairing_control.py and factorial_interaction | `outputs/model_embeddings` |
+- `av_pairing.py` | Extract and validate paired audio and video feature sequences at frame and bin levels; used by factorial_interaction | `outputs/model_embeddings` |
 - `compute_linear_residual_embeddings.py` | Generate linear-residual embeddings (A/V residualized on the other) | `outputs/model_embeddings` |
 - `compute_projection_residual_embeddings.py` | Generate projection-residual embeddings (remove best-rank-k projection component) | `outputs/model_embeddings` |
 - `build_scramble_unimodal_copies.py` | Create dummy single-modality versions of scrambled embeddings | utility |

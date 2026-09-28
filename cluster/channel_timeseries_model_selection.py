@@ -38,8 +38,7 @@ from vertex_model_selection import (  # noqa: E402
     select_reducers, cluster_grid, cluster_tag, _fit_cluster,
     cluster_selection_score,
 )
-from vertex_clustering import clustering_report, fit_preliminary_pca  # noqa: E402
-from channel_vertex_alignment import regress_out_global, _zscore_1d  # noqa: E402
+from vertex_clustering import clustering_report, regress_out_global, _zscore_1d  # noqa: E402
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -65,8 +64,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-sec", type=float, default=5.0)
     parser.add_argument("--delay-sec", type=float, default=5.0)
     parser.add_argument("--tr", type=float, default=1.0)
-    parser.add_argument("--pre-pca", default=None,
-                        help="Defaults to this family's baseline pre-PCA cache "
+    parser.add_argument("--features", default=None,
+                        help="Defaults to this family's baseline channel-features cache "
                              "(run channel_timeseries_clustering.py first)")
     parser.add_argument("--output-dir", default=OUTPUT_DIR)
     parser.add_argument("--reductions", nargs="+", choices=REDUCTION_METHODS,
@@ -118,7 +117,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-clustering-sweep", action="store_true")
     parser.add_argument("--regress-global", action="store_true",
                         help="Regress the across-channel mean bin time series out of every "
-                             "channel before z-scoring/pre-PCA (only applies when --pre-pca "
+                             "channel before z-scoring (only applies when --features "
                              "is not given explicitly; cached under a distinct tag)")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
@@ -131,7 +130,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def run_channel_clustering_sweeps(selected: pd.DataFrame, pre_pca: np.ndarray,
+def run_channel_clustering_sweeps(selected: pd.DataFrame, features: np.ndarray,
                                   channel_ids: list[str], root: Path,
                                   args: argparse.Namespace) -> pd.DataFrame:
     """Channel analogue of run_clustering_sweeps: same sweep, CSV output for winners."""
@@ -141,7 +140,7 @@ def run_channel_clustering_sweeps(selected: pd.DataFrame, pre_pca: np.ndarray,
     else:
         rng = np.random.default_rng(args.random_state + 1)
         eval_indices = np.sort(rng.choice(
-            len(pre_pca), size=min(args.cluster_sample_size, len(pre_pca)), replace=False
+            len(features), size=min(args.cluster_sample_size, len(features)), replace=False
         ))
         np.save(eval_path, eval_indices)
 
@@ -216,7 +215,7 @@ def run_channel_clustering_sweeps(selected: pd.DataFrame, pre_pca: np.ndarray,
     # Unlike grayordinates, the evaluation sample is the full channel set
     # whenever cluster_sample_size >= n_channels, so HDBSCAN's min_cluster_size
     # never needs full-fit rescaling for these datasets.
-    scale_factor = len(pre_pca) / len(eval_indices)
+    scale_factor = len(features) / len(eval_indices)
     winners["full_fit_min_cluster_size"] = np.nan
     hdbscan_mask = winners["method"] == "hdbscan"
     winners.loc[hdbscan_mask, "full_fit_min_cluster_size"] = (
@@ -318,52 +317,49 @@ def run_channel_clustering_sweeps(selected: pd.DataFrame, pre_pca: np.ndarray,
     return winners
 
 
-def _build_global_regressed_pre_pca(args: argparse.Namespace, n_components: int = 50) -> Path:
-    """Cache a pre-PCA built from channels with the across-channel mean regressed out first."""
+def _build_global_regressed_features(args: argparse.Namespace) -> Path:
+    """Cache channel features with the across-channel mean regressed out first."""
     out_dir = (Path(args.output_dir) / args.family / "_channel_timeseries" /
-               "norm-zscore_prepca50_nc3_landmarks2000_globalregressed")
+               "norm-zscore_raw_globalregressed")
     out_dir.mkdir(parents=True, exist_ok=True)
-    pre_pca_path = out_dir / f"channel_timeseries_prepca{n_components}.npy"
+    features_path = out_dir / "channel_timeseries_features.npy"
     channel_ids_path = out_dir / "channel_ids.json"
-    if pre_pca_path.exists() and channel_ids_path.exists() and not args.force:
-        return pre_pca_path
+    if features_path.exists() and channel_ids_path.exists() and not args.force:
+        return features_path
     timeseries, channel_ids = load_channel_timeseries(args)
     regressor = _zscore_1d(timeseries.mean(axis=0))
     residual = regress_out_global(timeseries, regressor)
-    pre_pca, pre_pca_info = fit_preliminary_pca(residual, n_components, args.random_state)
-    np.save(pre_pca_path, pre_pca)
+    np.save(features_path, residual)
     channel_ids_path.write_text(json.dumps(channel_ids, indent=2) + "\n")
-    (out_dir / f"channel_timeseries_prepca{n_components}_report.json").write_text(
-        json.dumps({"family": args.family, "regress_global": True,
-                    "preliminary_pca": pre_pca_info}, indent=2, sort_keys=True) + "\n"
+    (out_dir / "channel_timeseries_features_report.json").write_text(
+        json.dumps({"family": args.family, "regress_global": True}, indent=2, sort_keys=True) + "\n"
     )
-    return pre_pca_path
+    return features_path
 
 
 def run(args: argparse.Namespace) -> Path:
-    if args.pre_pca is None:
+    if args.features is None:
         if args.regress_global:
-            args.pre_pca = str(_build_global_regressed_pre_pca(args))
+            args.features = str(_build_global_regressed_features(args))
         else:
-            default_tag = "norm-zscore_prepca50_nc3_landmarks2000"
-            args.pre_pca = str(
+            default_tag = "norm-zscore_nc3_landmarks2000"
+            args.features = str(
                 Path(args.output_dir) / args.family / "_channel_timeseries" / default_tag /
-                "channel_timeseries_prepca50.npy"
+                "channel_timeseries_features.npy"
             )
-    pre_pca_path = Path(args.pre_pca)
-    if not pre_pca_path.exists():
+    features_path = Path(args.features)
+    if not features_path.exists():
         raise FileNotFoundError(
-            f"Preliminary PCA not found: {pre_pca_path}. Run "
+            f"Channel features not found: {features_path}. Run "
             "channel_timeseries_clustering.py for this family first."
         )
-    channel_ids_path = pre_pca_path.parent / "channel_ids.json"
+    channel_ids_path = features_path.parent / "channel_ids.json"
     channel_ids = json.loads(channel_ids_path.read_text())
-    pre_pca = np.load(pre_pca_path)
-    if pre_pca.ndim != 2 or pre_pca.shape[0] != len(channel_ids):
-        raise ValueError("Preliminary PCA rows do not match cached channel_ids")
+    features = np.load(features_path)
+    if features.ndim != 2 or features.shape[0] != len(channel_ids):
+        raise ValueError("Channel features rows do not match cached channel_ids")
     root = channel_model_selection_dir(
-        args.output_dir, args.family,
-        prepca_components=pre_pca.shape[1], regress_global=args.regress_global,
+        args.output_dir, args.family, regress_global=args.regress_global,
     )
     root.mkdir(parents=True, exist_ok=True)
 
@@ -371,17 +367,17 @@ def run(args: argparse.Namespace) -> Path:
     if args.skip_reduction_sweep:
         reduction_table = pd.read_csv(reduction_table_path)
     else:
-        reduction_table = run_reducer_sweep(pre_pca, root, args)
+        reduction_table = run_reducer_sweep(features, root, args)
     selected = select_reducers(reduction_table, root, args)
 
     winners = None
     if not args.skip_clustering_sweep:
-        winners = run_channel_clustering_sweeps(selected, pre_pca, channel_ids, root, args)
+        winners = run_channel_clustering_sweeps(selected, features, channel_ids, root, args)
     manifest = {
         "analysis": "channel_timeseries_hyperparameter_model_selection",
         "family": args.family,
-        "preliminary_pca": str(pre_pca_path.resolve()),
-        "pre_pca_shape": list(pre_pca.shape),
+        "features": str(features_path.resolve()),
+        "features_shape": list(features.shape),
         "reduction_objective": {
             "trustworthiness": 0.4, "continuity": 0.4,
             "distance_rank_agreement": 0.2,

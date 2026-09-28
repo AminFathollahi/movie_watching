@@ -30,11 +30,6 @@
 #                              PE-AV and the highest-max-rho feasible LM map
 #               cca_raw_corr_all
 #                              Backfill raw-r maps/dlabels for completed CCA fits
-#               roi_hierarchy  Two-stage mediation/latency/integration-window
-#                              directionality tests: (1) upstream a5/ffc ->
-#                              cca_a/cca_p, (2) cca_a/cca_p -> frontal Glasser
-#                              parcels, plus the whole-cortex cca_a/cca_p
-#                              winner-take-all connectivity gradient map
 #               persubject   Per-subject CF modeling for all PERSUBJECT_PAIRS
 #               all          geometry + avg + persubject  (default)
 #
@@ -72,7 +67,6 @@
 #
 # Resume / skip
 #   geometry:    skips if both sub_{roi}.pkl caches already exist.
-#   persubject:  skips any subject whose R2_nc maps already exist.
 #   Delete the output .npy files to force a rerun.
 #
 # Silence GNU parallel citation notice (run once)
@@ -86,7 +80,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # =============================================================================
 
 DATA_BASE="/home/amin/Research/Representation/Movie/data"
-HCP_DIR="${MOVIE_HCP_DIR:-/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
+HCP_DIR="${MOVIE_HCP_DIR:-/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
 PYCORTEX_STORE="${DATA_BASE}/hedger2026"
 export PYCORTEX_FILESTORE="$PYCORTEX_STORE"
 OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
@@ -156,6 +150,10 @@ FMRI_GROUP_CIFTI="${PREPROCESSED_DIR}/group_average_hedger_sg_psc_cortex_59k.dts
 FMRI_GROUP_CIFTI_FULLBRAIN="${PREPROCESSED_DIR}/group_average_hedger_sg_psc_fullbrain.dtseries.nii"
 FMRI_GROUP_RUN_TRS="${PREPROCESSED_DIR}/group_average_hedger_sg_psc_run_trs.npy"
 
+RSA_PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/raw"
+RSA_GROUP_CIFTI="${RSA_PREPROCESSED_DIR}/group_average_raw_cortex_59k.dtseries.nii"
+RSA_GROUP_RUN_TRS="${RSA_PREPROCESSED_DIR}/group_average_raw_run_trs.npy"
+
 # Single authoritative subject list — 175 subjects with full 7T fMRI + midthickness.
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 
@@ -173,33 +171,6 @@ RSA_MODEL="pe-av-small-16-frame"   # RSA model name used in overlap.py output fi
 # ROI CSV masks directory (output of 00_make_roi_masks.py)
 MASKS_DIR="${OUTPUT_BASE}/masks"
 ROI_DEFINITIONS="${SCRIPT_DIR}/roi_definitions.json"
-
-# ── ROI hierarchy directionality tests (roi_hierarchy.py) ──────────────────
-# Paths mirror encoding/analysis.sh's run_incremental_av(): the "raw" group
-# average (no SG/PSC/GSR) is the encoding pipeline's fMRI input, distinct
-# from this script's own hedger_sg_psc CF-model average above.
-TIMING_CSV="${DATA_BASE}/movie_timing.csv"
-EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
-ENCODING_PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/raw"
-ENCODING_FMRI_SUFFIX="raw"
-ROI_HIERARCHY_MODELS=("pe-av-small-16-frame" "nemotron_layer18_mp")
-if [ -n "${ROI_HIERARCHY_MODELS_OVERRIDE:-}" ]; then
-    IFS=';' read -ra ROI_HIERARCHY_MODELS <<< "$ROI_HIERARCHY_MODELS_OVERRIDE"
-fi
-ROI_HIERARCHY_OUTPUT="${OUTPUT_BASE}/roi_hierarchy"
-ROI_HIERARCHY_BACKEND="torch"   # CPU — GPU is in use by another job
-# Two-stage tier ordering: a5/ffc feed the CCA seeds, which in turn feed
-# frontal cortex. Each stage's sources are disjoint from the other stage's
-# ROI set (see run_roi_hierarchy_model) so a source never doubles as a
-# target within the same run.
-ROI_HIERARCHY_UPSTREAM_SOURCES=("a5" "ffc")
-ROI_HIERARCHY_FRONTAL_SOURCES=("cca_a" "cca_p")
-# Bilateral Glasser frontal targets spanning ventrolateral, dorsolateral and
-# frontal-pole cortex. Verified against load_glasser_parcels() output.
-FRONTAL_PARCELS=(
-    44 45 IFJa IFJp IFSa IFSp 47l p47r a47r 46
-    a9-46v p9-46v 9-46d 8C 8Av a10p p10p 10d
-)
 
 # ── himalaya modeling parameters ─────────────────────────────────────────────
 BACKEND="torch_cuda"    # torch_cuda | torch | numpy
@@ -297,26 +268,33 @@ run_bivariate_workbench_export() {
 run_roi_mean_partial_connectivity() {
     local ROI_A="$1"
     local ROI_P="$2"
-    local OUT_DIR="${OUTPUT_BASE}/group_average/${ROI_A}_${ROI_P}/cifti_maps"
-    local PARTIAL_CIFTI="${OUT_DIR}/roi_mean_partial_connectivity_${ROI_A}_${ROI_P}.dscalar.nii"
+    local PREPROCESSING="$3"
+    local DTC_SERIES="$4"
+    local RUN_TRS="$5"
+    local COLLECTION_TAG="${6:-${ROI_A}_${ROI_P}}"
+    local PREPROCESSING_LABEL="${PREPROCESSING}_per_run_zscore"
+    local OUT_DIR="${OUTPUT_BASE}/group_average/roi_mean_timeseries_connectivity_${COLLECTION_TAG}/cifti_maps"
+    local PARTIAL_CIFTI="${OUT_DIR}/roi_mean_timeseries_partial_pearson_r_${ROI_A}_${ROI_P}_${PREPROCESSING_LABEL}.dscalar.nii"
     local MASK_ROI_A MASK_ROI_P
     MASK_ROI_A=$(source_mask_roi "$ROI_A")
     MASK_ROI_P=$(source_mask_roi "$ROI_P")
-    log "  Exact ROI-mean partial connectivity (${ROI_A}|${ROI_P}, bilateral + within-hemisphere) ..."
+    log "  ROI-mean partial Pearson-r (${ROI_A}|${ROI_P}; ${PREPROCESSING_LABEL}) ..."
     run_python "${SCRIPT_DIR}/roi_mean_partial_connectivity.py" \
-        --dtseries   "$FMRI_GROUP_CIFTI" \
-        --run-trs    "$FMRI_GROUP_RUN_TRS" \
+        --dtseries   "$DTC_SERIES" \
+        --run-trs    "$RUN_TRS" \
         --roi-a      "$ROI_A" \
         --roi-p      "$ROI_P" \
         --mask-a     "${MASKS_DIR}/${MASK_ROI_A}_mask.dscalar.nii" \
         --mask-p     "${MASKS_DIR}/${MASK_ROI_P}_mask.dscalar.nii" \
-        --output-dir "$OUT_DIR"
+        --output-dir "$OUT_DIR" \
+        --preprocessing "$PREPROCESSING"
     log "  Exporting bilateral/within-hemisphere/L/R partial-r bivariate dlabels ..."
     run_python "${SCRIPT_DIR}/export_partial_bivariate_cifti.py" \
         --partial-cifti "$PARTIAL_CIFTI" \
         --roi-a         "$ROI_A" \
         --roi-p         "$ROI_P" \
         --output-dir    "$OUT_DIR" \
+        --preprocessing-label "$PREPROCESSING_LABEL" \
         --bins          32 \
         --vmin          0 \
         --vmax          0.4
@@ -325,38 +303,68 @@ run_roi_mean_partial_connectivity() {
 run_roi_mean_raw_connectivity() {
     local ROI_A="$1"
     local ROI_P="$2"
-    local OUT_DIR="${OUTPUT_BASE}/group_average/${ROI_A}_${ROI_P}/cifti_maps"
-    local RAW_CIFTI="${OUT_DIR}/roi_mean_raw_connectivity_${ROI_A}_${ROI_P}.dscalar.nii"
-    local BIVARIATE_STEM="${OUT_DIR}/bivariate_raw_corr_${ROI_A}_${ROI_P}"
+    local PREPROCESSING="$3"
+    local DTC_SERIES="$4"
+    local RUN_TRS="$5"
+    local COLLECTION_TAG="${6:-${ROI_A}_${ROI_P}}"
+    local PREPROCESSING_LABEL="${PREPROCESSING}_per_run_zscore"
+    local OUT_DIR="${OUTPUT_BASE}/group_average/roi_mean_timeseries_connectivity_${COLLECTION_TAG}/cifti_maps"
+    local ZERO_ORDER_CIFTI="${OUT_DIR}/roi_mean_timeseries_zero_order_pearson_r_${ROI_A}_${ROI_P}_${PREPROCESSING_LABEL}.dscalar.nii"
+    local BIVARIATE_STEM="${OUT_DIR}/bivariate_roi_mean_timeseries_zero_order_pearson_r_${ROI_A}_${ROI_P}_${PREPROCESSING_LABEL}"
     local MASK_ROI_A MASK_ROI_P
     MASK_ROI_A=$(source_mask_roi "$ROI_A")
     MASK_ROI_P=$(source_mask_roi "$ROI_P")
-    if [ -f "$RAW_CIFTI" ] && \
+    if [ -f "$ZERO_ORDER_CIFTI" ] && \
        [ -f "${BIVARIATE_STEM}_bilateral_32bin.dlabel.nii" ] && \
        [ -f "${BIVARIATE_STEM}_within_hemisphere_32bin.dlabel.nii" ] && \
        [ -f "${BIVARIATE_STEM}_L_32bin.dlabel.nii" ] && \
        [ -f "${BIVARIATE_STEM}_R_32bin.dlabel.nii" ]; then
-        log "  Raw CCA correlation maps already exist for ${ROI_A} x ${ROI_P} — skipping"
+        log "  Zero-order ROI-mean Pearson-r maps already exist for ${ROI_A} x ${ROI_P} (${PREPROCESSING_LABEL}) — skipping"
         return 0
     fi
-    log "  Ordinary ROI-mean correlations (${ROI_A}, ${ROI_P}; bilateral + hemispheric) ..."
+    log "  Zero-order ROI-mean Pearson-r maps (${ROI_A}, ${ROI_P}; ${PREPROCESSING_LABEL}; not CF maps) ..."
     run_python "${SCRIPT_DIR}/roi_mean_raw_connectivity.py" \
-        --dtseries   "$FMRI_GROUP_CIFTI" \
-        --run-trs    "$FMRI_GROUP_RUN_TRS" \
+        --dtseries   "$DTC_SERIES" \
+        --run-trs    "$RUN_TRS" \
         --roi-a      "$ROI_A" \
         --roi-p      "$ROI_P" \
         --mask-a     "${MASKS_DIR}/${MASK_ROI_A}_mask.dscalar.nii" \
         --mask-p     "${MASKS_DIR}/${MASK_ROI_P}_mask.dscalar.nii" \
-        --output-dir "$OUT_DIR"
-    log "  Exporting raw-r bilateral/within-hemisphere/L/R bivariate dlabels ..."
+        --output-dir "$OUT_DIR" \
+        --preprocessing "$PREPROCESSING"
+    log "  Exporting zero-order Pearson-r bilateral/within-hemisphere/L/R bivariate dlabels ..."
     run_python "${SCRIPT_DIR}/export_raw_corr_bivariate_cifti.py" \
-        --raw-cifti  "$RAW_CIFTI" \
+        --zero-order-cifti "$ZERO_ORDER_CIFTI" \
         --roi-a      "$ROI_A" \
         --roi-p      "$ROI_P" \
         --output-dir "$OUT_DIR" \
+        --preprocessing-label "$PREPROCESSING_LABEL" \
         --bins       32 \
         --vmin       0 \
         --vmax       0.4
+}
+
+run_roi_mean_connectivity_preprocessing_variants() {
+    local ROI_A="$1"
+    local ROI_P="$2"
+    local MASK_ROI_A MASK_ROI_P COLLECTION_TAG
+    MASK_ROI_A=$(source_mask_roi "$ROI_A")
+    MASK_ROI_P=$(source_mask_roi "$ROI_P")
+    if [ "$MASK_ROI_A" = a5 ] && [ "$MASK_ROI_P" = ffc ]; then
+        COLLECTION_TAG="A5_glasser_FFC_glasser"
+    elif [ "$MASK_ROI_A" = cca_a_peav_1pct ] && [ "$MASK_ROI_P" = cca_p_peav_1pct ]; then
+        COLLECTION_TAG="cca_a_peav_top_1pct_cca_p_peav_top_1pct"
+    else
+        COLLECTION_TAG="${MASK_ROI_A}_${MASK_ROI_P}"
+    fi
+    run_roi_mean_raw_connectivity "$MASK_ROI_A" "$MASK_ROI_P" \
+        "sg_psc" "$FMRI_GROUP_CIFTI" "$FMRI_GROUP_RUN_TRS" "$COLLECTION_TAG"
+    run_roi_mean_partial_connectivity "$MASK_ROI_A" "$MASK_ROI_P" \
+        "sg_psc" "$FMRI_GROUP_CIFTI" "$FMRI_GROUP_RUN_TRS" "$COLLECTION_TAG"
+    run_roi_mean_raw_connectivity "$MASK_ROI_A" "$MASK_ROI_P" \
+        "raw" "$RSA_GROUP_CIFTI" "$RSA_GROUP_RUN_TRS" "$COLLECTION_TAG"
+    run_roi_mean_partial_connectivity "$MASK_ROI_A" "$MASK_ROI_P" \
+        "raw" "$RSA_GROUP_CIFTI" "$RSA_GROUP_RUN_TRS" "$COLLECTION_TAG"
 }
 
 # =============================================================================
@@ -492,8 +500,8 @@ _run_one_subject() {
     local LOG="${OUT_DIR}/pipeline.log"
 
     # Skip if null-corrected R² maps already exist
-    if [ -f "${OUT_DIR}/R2_${ROI_A}_nc.npy" ] && \
-       [ -f "${OUT_DIR}/R2_${ROI_B}_nc.npy" ]; then
+    if [ -f "${OUT_DIR}/cf_model_null_corrected_split_r2_${ROI_A}.npy" ] && \
+       [ -f "${OUT_DIR}/cf_model_null_corrected_split_r2_${ROI_B}.npy" ]; then
         echo "[$(date +%H:%M:%S)] ${SUB} ${ROI_A}×${ROI_B}: already done — skipping"
         return 0
     fi
@@ -704,8 +712,7 @@ run_avg_pair() {
         --template-cifti "$FMRI_GROUP_CIFTI"
     run_bivariate_workbench_export "$ROI_A" "$ROI_B" "group_average"
     if [[ "$ROI_A" == cca_a* && "$ROI_B" == cca_p* ]]; then
-        run_roi_mean_raw_connectivity "$ROI_A" "$ROI_B"
-        run_roi_mean_partial_connectivity "$ROI_A" "$ROI_B"
+        run_roi_mean_connectivity_preprocessing_variants "$ROI_A" "$ROI_B"
     fi
     log "[03] Done"
 
@@ -775,12 +782,17 @@ run_cca_fit_pair() {
 }
 
 run_cca() {
-    local CCA_CONFIG ROI_A ROI_B CCA_N_LBOE CCA_TARGET_BATCH CCA_BACKEND CCA_CPU_THREADS
-    CCA_CONFIG=$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["cca_temporal_islands"]; n=c["names"]; print(n["anterior"], n["posterior"], c["max_lboe_per_hemisphere"], c["n_targets_batch"], c["backend"], c["cpu_threads"])' "$ROI_DEFINITIONS")
-    read -r ROI_A ROI_B CCA_N_LBOE CCA_TARGET_BATCH CCA_BACKEND CCA_CPU_THREADS <<< "$CCA_CONFIG"
+    local CCA_CONFIG ROI_A ROI_B CCA_TAG CCA_THRESHOLD CCA_N_LBOE CCA_TARGET_BATCH CCA_BACKEND CCA_CPU_THREADS
+    CCA_CONFIG=$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["cca_temporal_islands"]; d=c["default_variant"]; print(c["names"]["anterior"], c["names"]["posterior"], d["tag"], c["threshold"], c["max_lboe_per_hemisphere"], c["n_targets_batch"], c["backend"], c["cpu_threads"])' "$ROI_DEFINITIONS")
+    read -r ROI_A ROI_B CCA_TAG CCA_THRESHOLD CCA_N_LBOE CCA_TARGET_BATCH CCA_BACKEND CCA_CPU_THREADS <<< "$CCA_CONFIG"
+    ROI_A="${ROI_A}_${CCA_TAG}"
+    ROI_B="${ROI_B}_${CCA_TAG}"
 
-    log "=== Extract functional CCA ROIs ==="
+    log "=== Extract PE-AV fixed-threshold CCA ROIs (${CCA_TAG}; threshold=${CCA_THRESHOLD}) ==="
     run_python "${SCRIPT_DIR}/run_cca_islands.py" \
+        --map             "${RSA_BASE}/raw/group_average/pe-av-small-16-frame_av/k100_delay5s_bin5s_skip5s_spearman/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy" \
+        --threshold       "$CCA_THRESHOLD" \
+        --roi-suffix      "$CCA_TAG" \
         --roi-config      "$ROI_DEFINITIONS" \
         --glasser-dlabel  "$GLASSER_DLABEL" \
         --output-base     "$OUTPUT_BASE"
@@ -1137,10 +1149,10 @@ run_cca_raw_corr_all() {
     log "=== Backfill ordinary CCA correlation maps for completed fits ==="
     for PREP in "${OUTPUT_BASE}"/group_average/cca_a*/prep; do
         [ -d "$PREP" ] || continue
-        mapfile -t FILES < <(find "$PREP" -maxdepth 1 -type f -name 'R2_cca_*_nc.npy' -printf '%f\n' | sort)
+        mapfile -t FILES < <(find "$PREP" -maxdepth 1 -type f -name 'cf_model_null_corrected_split_r2_cca_*.npy' -printf '%f\n' | sort)
         if [ "${#FILES[@]}" -eq 2 ]; then
-            FIRST="${FILES[0]#R2_}"; FIRST="${FIRST%_nc.npy}"
-            SECOND="${FILES[1]#R2_}"; SECOND="${SECOND%_nc.npy}"
+            FIRST="${FILES[0]#cf_model_null_corrected_split_r2_}"; FIRST="${FIRST%.npy}"
+            SECOND="${FILES[1]#cf_model_null_corrected_split_r2_}"; SECOND="${SECOND%.npy}"
             if [[ "$FIRST" == cca_a* ]]; then ROI_A="$FIRST"; ROI_P="$SECOND"; else ROI_A="$SECOND"; ROI_P="$FIRST"; fi
         else
             PAIR="$(basename "$(dirname "$PREP")")"
@@ -1149,122 +1161,9 @@ run_cca_raw_corr_all() {
             ROI_P="cca_p${PAIR#*_cca_p}"
         fi
         [[ "$ROI_A" == cca_a* && "$ROI_P" == cca_p* ]] || continue
-        run_roi_mean_raw_connectivity "$ROI_A" "$ROI_P"
+        run_roi_mean_connectivity_preprocessing_variants "$ROI_A" "$ROI_P"
     done
     log "=== Raw CCA correlation backfill complete ==="
-}
-
-# =============================================================================
-# ROI HIERARCHY DIRECTIONALITY TESTS (roi_hierarchy.py)
-# =============================================================================
-# Two-stage tier ordering: (1) upstream — a5/ffc as sources, cca_a/cca_p as
-# frontal targets, testing whether the CCA seeds are downstream of a5/ffc;
-# (2) frontal — cca_a/cca_p as sources, the Glasser frontal parcel set as
-# targets, testing whether frontal cortex is downstream of the CCA seeds.
-# Each stage runs mediation asymmetry, response-latency gradient and
-# temporal-integration-window gradient (roi_hierarchy.py) into its own
-# output subdirectory. A separate whole-cortex winner-take-all dominance map
-# (frontal_gradient_map.py) then compares only cca_a vs cca_p connectivity —
-# a5/ffc's raw/partial maps are still produced as tier-ordering evidence but
-# do not compete as peer seeds in that map.
-
-run_roi_hierarchy_masks() {
-    local ROI MASK_PATH
-    for ROI in a5 ffc; do
-        MASK_PATH="${MASKS_DIR}/${ROI}_mask.dscalar.nii"
-        [ -f "$MASK_PATH" ] && continue
-        log "  Building ${ROI} grayordinate mask ..."
-        run_python "${SCRIPT_DIR}/make_glasser_roi_mask.py" \
-            --glasser-dlabel "$GLASSER_DLABEL" \
-            --template-cifti "$FMRI_GROUP_CIFTI" \
-            --roi            "${ROI^^}" \
-            --output-path    "$MASK_PATH"
-    done
-}
-
-# STAGE_TAG selects both the ROI set loaded and the sources within it:
-#   upstream — a5, ffc (parcel) as sources; cca_a, cca_p (mask) as targets.
-#   frontal  — cca_a, cca_p (mask) as sources; FRONTAL_PARCELS as targets.
-# The two ROI sets are disjoint, so a source never doubles as a target.
-run_roi_hierarchy_model() {
-    local STAGE_TAG="$1"
-    local MODEL_NAME="$2"
-    shift 2
-    local -a SOURCES=("$@")
-    local -a SOURCE_ARGS=() ROI_LOAD_ARGS=()
-    local ROI PARCEL
-
-    for ROI in "${SOURCES[@]}"; do
-        SOURCE_ARGS+=(--source-roi "$ROI")
-    done
-
-    if [ "$STAGE_TAG" = "upstream" ]; then
-        ROI_LOAD_ARGS=(
-            --parcel-roi "a5=A5"
-            --parcel-roi "ffc=FFC"
-            --roi-mask   "cca_a=${MASKS_DIR}/cca_a_mask.dscalar.nii"
-            --roi-mask   "cca_p=${MASKS_DIR}/cca_p_mask.dscalar.nii"
-        )
-    else
-        ROI_LOAD_ARGS=(
-            --roi-mask "cca_a=${MASKS_DIR}/cca_a_mask.dscalar.nii"
-            --roi-mask "cca_p=${MASKS_DIR}/cca_p_mask.dscalar.nii"
-        )
-        for PARCEL in "${FRONTAL_PARCELS[@]}"; do
-            ROI_LOAD_ARGS+=(--parcel-roi "${PARCEL}=${PARCEL}")
-        done
-    fi
-
-    local OUT_DIR="${ROI_HIERARCHY_OUTPUT}/${STAGE_TAG}"
-    log "=== ROI hierarchy [${STAGE_TAG}]: ${MODEL_NAME} (sources: ${SOURCES[*]}) ==="
-    run_python "${SCRIPT_DIR}/roi_hierarchy.py" \
-        --preprocessed-dir "$ENCODING_PREPROCESSED_DIR" \
-        --fmri-suffix      "$ENCODING_FMRI_SUFFIX" \
-        --subject          group_average \
-        --timing-csv       "$TIMING_CSV" \
-        --embeddings-dir   "$EMBEDDINGS_DIR" \
-        --model            "$MODEL_NAME" \
-        --output-dir       "$OUT_DIR" \
-        --bin-sec           5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0 \
-        --glasser-dlabel   "$GLASSER_DLABEL" \
-        "${ROI_LOAD_ARGS[@]}" \
-        "${SOURCE_ARGS[@]}" \
-        --backend          "$ROI_HIERARCHY_BACKEND" \
-        --stage            "${ROI_HIERARCHY_STAGE:-all}"
-    log "=== ROI hierarchy [${STAGE_TAG}] ${MODEL_NAME} complete ==="
-}
-
-run_roi_hierarchy_connectivity() {
-    local OUT_A_P="${OUTPUT_BASE}/group_average/cca_a_cca_p/cifti_maps"
-    local OUT_A5_FFC="${OUTPUT_BASE}/group_average/a5_ffc/cifti_maps"
-
-    log "=== Frontal connectivity gradient: raw + partial evidence maps ==="
-    run_roi_mean_raw_connectivity     cca_a cca_p
-    run_roi_mean_raw_connectivity     a5    ffc
-    run_roi_mean_partial_connectivity cca_a cca_p
-    run_roi_mean_partial_connectivity a5    ffc
-
-    log "  Winner-take-all whole-cortex gradient map (cca_a vs cca_p) ..."
-    run_python "${SCRIPT_DIR}/frontal_gradient_map.py" \
-        --seed "cca_a=${OUT_A_P}/r_cca_a_raw_corr_bilateral.npy" \
-        --seed "cca_p=${OUT_A_P}/r_cca_p_raw_corr_bilateral.npy" \
-        --exclude-roi "cca_a=${MASKS_DIR}/cca_a_mask.dscalar.nii" \
-        --exclude-roi "cca_p=${MASKS_DIR}/cca_p_mask.dscalar.nii" \
-        --glasser-dlabel "$GLASSER_DLABEL" \
-        --template-cifti "$FMRI_GROUP_CIFTI" \
-        --output-dir "${ROI_HIERARCHY_OUTPUT}/frontal_gradient_map"
-    log "=== Frontal connectivity gradient complete ==="
-}
-
-run_roi_hierarchy() {
-    local MODEL_NAME
-    run_roi_hierarchy_masks
-    for MODEL_NAME in "${ROI_HIERARCHY_MODELS[@]}"; do
-        run_roi_hierarchy_model upstream "$MODEL_NAME" "${ROI_HIERARCHY_UPSTREAM_SOURCES[@]}"
-        run_roi_hierarchy_model frontal  "$MODEL_NAME" "${ROI_HIERARCHY_FRONTAL_SOURCES[@]}"
-    done
-    run_roi_hierarchy_connectivity
-    log "=== ROI hierarchy analysis complete ==="
 }
 
 # =============================================================================
@@ -1286,12 +1185,10 @@ case "$MODE" in
     cca_raw_corr_all)          run_cca_raw_corr_all ;;
     persubject)                run_persubject ;;
     persubject_cca_peav_1pct)  run_persubject_cca_peav_1pct "$N_LBOE" ;;
-    roi_hierarchy)              run_roi_hierarchy ;;
-    roi_hierarchy_connectivity) run_roi_hierarchy_connectivity ;;
     all)                       run_geometry; run_avg; run_persubject ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Use: masks | geometry | preprocess | avg | cca | cca_peav_2pct | cca_peav_0p104 | cca_1pct_all | cca_prepare_variants | cca_peav_1pct_lboe_sensitivity | cca_nemotron_18_mp_lboe_sensitivity | cca_hemi_saddle_selected | cca_raw_corr_all | persubject | persubject_cca_peav_1pct | roi_hierarchy | all" >&2
+        echo "Use: masks | geometry | preprocess | avg | cca | cca_peav_2pct | cca_peav_0p104 | cca_1pct_all | cca_prepare_variants | cca_peav_1pct_lboe_sensitivity | cca_nemotron_18_mp_lboe_sensitivity | cca_hemi_saddle_selected | cca_raw_corr_all | persubject | persubject_cca_peav_1pct | all" >&2
         exit 1 ;;
 esac
 

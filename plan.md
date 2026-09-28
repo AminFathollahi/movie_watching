@@ -78,8 +78,6 @@ Add an anatomical ROI analysis, or define seeds on training subjects/stimuli and
 
 More importantly, directly test the proposed dissociation. “Anterior binds speech with music; posterior binds speech with faces” requires an interaction between **region and content relationship**, beyond speech, music, and face main effects. Category-map overlap alone cannot demonstrate binding.
 
-The [Zhou paper](https://www.nature.com/articles/s41467-026-73947-8) motivates a frontal organization hypothesis, but your project’s frontal gradient still needs its own quantitative test and uncertainty estimate.
-
 ### 7. B4 needs stronger separation of shared stimulus responses from coupling
 
 Sliding-window correlations can rise when two regions respond to the same event, even without a change in their relationship. Regressing window means and global signal does not necessarily remove this. Task-evoked responses can systematically inflate functional-connectivity estimates. [Cole et al., 2019](https://www.colelab.org/pubs/ColeEtAl2019NeuroImage.pdf)
@@ -401,39 +399,21 @@ that they are multimodal in different senses.
 - `cca_p` — **synergistic**: video carries unique variance and the joint audiovisual
   representation exceeds the additive combination of its unimodal parts.
 
-Unimodal reference regions: Glasser `A5` (auditory) and `FFC` (visual).
+Unimodal controls: Glasser `A5` (auditory) and `FFC` (visual).
 
-Three independent measurements, all label-free:
+Two independent measurements, all label-free:
 
-1. **Redundancy versus synergy** (`encoding/roi_av_profile.py`). Per ROI, held-out
-   `R2_A`, `R2_V`, `R2_additive`, `R2_joint`; unique, shared, and
-   `synergy = R2_joint - R2_additive` retaining sign; audio dominance; redundancy index;
-   and the participation ratio of the audio- and video-predicted ROI timecourses.
-   Redundant multimodality gives `synergy ~= 0` with `shared ~= min(R2_A, R2_V)`.
+1. **Unique variance and synergy** (`encoding/roi_av_profile.py`). Per ROI, held-out
+   `R2_A`, `R2_V`, `R2_additive`, `R2_joint`; `synergy = R2_joint - R2_additive`
+   retaining sign; the participation ratio of the audio- and
+   video-predicted ROI timecourses; and unique$_A$/unique$_V$ as genuine partial
+   correlations between the ROI's observed timecourse and each band's out-of-fold
+   prediction, controlling for the other band's out-of-fold prediction.
 
 2. **Category structure without labels**, same script, second band configuration. The
    transcript text embedding stands in for audio-semantic category structure and the
    caption text embedding for visual-semantic structure. `cca_a` should be carried by
    transcript alone; `cca_p` should require both.
-
-3. **Pairing dependence** (`encoding/pairing_control.py`, ROI set extended to `cca_a`,
-   `cca_p`, `a5`, `ffc`). `B = G_intact - mean_s G_s` over fold-confined mismatch seeds.
-   Redundant multimodality is pairing-insensitive (`B ~= 0`); genuine binding is not.
-   The reliability of the `cca_a` versus `cca_p` difference in `B` is the primary
-   statistic, not the per-region values.
-
-## Frontal gradient as downstream of the temporal sources
-
-`cf_modeling/roi_hierarchy.py`, three converging directionality tests plus the map.
-
-- **Mediation asymmetry** (primary). For source `S` and frontal target `T`,
-  `A(S->T) = 1 - R2(T | S removed) / R2(T)` with the removal fitted on training runs
-  only, against the reverse `A(T->S)`. A positive asymmetry places `T` downstream.
-- **Response latency gradient**. Delay sweep; downstream regions peak later.
-- **Integration-window gradient**. Held-out fit against embedding bin length;
-  downstream regions peak at longer windows.
-- **Winner-take-all frontal map** labelling each frontal vertex by its dominant source
-  among `cca_a`, `cca_p`, `a5`, `ffc`, alongside the per-seed partial-connectivity maps.
 
 ## Outstanding blockers
 
@@ -446,20 +426,3 @@ Three independent measurements, all label-free:
   the clusters can be said to carry structure.
 - Population inference still requires individual-subject fits and related-participant-aware
   resampling; it is on hold until the group-average maps show promise.
-
-## ROI definitions, verified
-
-Checked by mapping each image through its own CIFTI brain-model axis. The Glasser
-dlabel is dense (118584 = 59292 x 2, medial wall included) while the fMRI data and the
-masks are 108441 (medial wall excluded), so the two never align positionally; every
-caller reaches the parcels through `rsa.glasser.load_glasser_parcels`, which keys on
-`(structure, vertex)` on both sides, via `encoding.incremental_av.load_target_rois`.
-
-- `cca_a` (738 grayordinates): anterior superior temporal — TA2, MBelt, PI, STGa, 52.
-- `cca_p` (525 grayordinates): posterior temporal and temporo-parietal — TPOJ1, A4,
-  STV, A5.
-- Neither ROI intersects any of the 18 frontal parcels, so the downstream test is not
-  circular.
-- The `a5` anchor shares vertices with both: 20 with `cca_a` (2.7%) and 32 with `cca_p`
-  (6.1%). Mediation involving `a5` is reported both as-is and with those vertices
-  excluded.

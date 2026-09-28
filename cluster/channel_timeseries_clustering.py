@@ -33,7 +33,7 @@ from rsa.shared.rsa_utils import process_model_embeddings  # noqa: E402
 from io_cluster import write_channel_labels_csv  # noqa: E402
 from vertex_clustering import (  # noqa: E402
     REDUCTIONS, CLUSTERERS, analysis_tag, reduction_tag, clustering_tag,
-    zscore_timeseries_inplace, fit_preliminary_pca, reduce_grayordinates,
+    zscore_timeseries_inplace, reduce_grayordinates,
     cluster_embedding, _label_names,
 )
 
@@ -51,12 +51,12 @@ RUN_TRS = (
 )
 
 
-def channel_model_selection_dir(output_dir, family: str, *, prepca_components: int = 50,
+def channel_model_selection_dir(output_dir, family: str, *,
                                 regress_global: bool = False) -> Path:
     """Root of the channel reducer/cluster hyperparameter sweep for one family
     (written by ``channel_timeseries_model_selection.py``; read by it and by
-    ``channel_vertex_alignment.py`` / ``screen_temporal_differentiation.py``)."""
-    tag = f"norm-zscore_prepca{prepca_components}"
+    ``screen_temporal_differentiation.py``)."""
+    tag = "norm-zscore_raw"
     if regress_global:
         tag += "_globalregressed"
     return Path(output_dir) / family / "_channel_timeseries_model_selection" / tag
@@ -80,8 +80,6 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--clusterers", nargs="+", choices=CLUSTERERS,
                         default=list(CLUSTERERS))
     parser.add_argument("--n-components", type=int, choices=(2, 3), default=3)
-    parser.add_argument("--pre-pca-components", type=int, default=50,
-                        help="Denoising/tractability PCA dimension shared by all reductions")
     parser.add_argument("--n-landmarks", type=int, default=2_000,
                         help="Landmarks used by MDS, Isomap, and t-SNE (capped at channel count)")
     parser.add_argument("--extension-neighbors", type=int, default=8)
@@ -130,20 +128,17 @@ def run(args: argparse.Namespace) -> Path:
     )
     output_root.mkdir(parents=True, exist_ok=True)
     manifest_path = output_root / "manifest.json"
-    pre_pca_path = output_root / f"channel_timeseries_prepca{args.pre_pca_components}.npy"
-    pre_pca_report_path = (
-        output_root / f"channel_timeseries_prepca{args.pre_pca_components}_report.json"
-    )
+    features_path = output_root / "channel_timeseries_features.npy"
+    features_report_path = output_root / "channel_timeseries_features_report.json"
     channel_ids_path = output_root / "channel_ids.json"
     normalization = (
         "none" if args.no_zscore_timeseries else "within-channel z-score over movie bins"
     )
 
-    if pre_pca_path.exists() and pre_pca_report_path.exists() and channel_ids_path.exists() and not args.force:
-        preprocessing_report = json.loads(pre_pca_report_path.read_text())
-        log.info("Loading cached preliminary PCA: %s", pre_pca_path)
-        pre_pca = np.load(pre_pca_path)
-        pre_pca_info = preprocessing_report["preliminary_pca"]
+    if features_path.exists() and features_report_path.exists() and channel_ids_path.exists() and not args.force:
+        preprocessing_report = json.loads(features_report_path.read_text())
+        log.info("Loading cached channel features: %s", features_path)
+        features = np.load(features_path)
         input_shape = preprocessing_report["input_shape_channels_by_bins"]
         n_constant = int(preprocessing_report["n_constant_timeseries"])
         channel_ids = json.loads(channel_ids_path.read_text())
@@ -159,26 +154,19 @@ def run(args: argparse.Namespace) -> Path:
             if n_constant:
                 log.warning("Converted %d constant time series to zero", n_constant)
 
-        log.info("Fitting shared %d-component preliminary PCA", args.pre_pca_components)
-        pre_pca, pre_pca_info = fit_preliminary_pca(
-            timeseries, args.pre_pca_components, args.random_state
-        )
-        del timeseries
+        features = timeseries
         preprocessing_report = {
             "family": args.family,
             "input_shape_channels_by_bins": input_shape,
             "timeseries_normalization": normalization,
             "n_constant_timeseries": n_constant,
-            "requested_pre_pca_components": args.pre_pca_components,
-            "random_state": args.random_state,
-            "preliminary_pca": pre_pca_info,
         }
-        np.save(pre_pca_path, pre_pca)
-        _json_dump(pre_pca_report_path, preprocessing_report)
+        np.save(features_path, features)
+        _json_dump(features_report_path, preprocessing_report)
         channel_ids_path.write_text(json.dumps(channel_ids, indent=2) + "\n")
 
-    if pre_pca.ndim != 2 or pre_pca.shape[0] != len(channel_ids) or not np.isfinite(pre_pca).all():
-        raise ValueError(f"Preliminary-PCA cache is invalid: {pre_pca_path}")
+    if features.ndim != 2 or features.shape[0] != len(channel_ids) or not np.isfinite(features).all():
+        raise ValueError(f"Channel-features cache is invalid: {features_path}")
 
     manifest: dict[str, Any] = {
         "analysis": "channel_timeseries_dimensionality_reduction_clustering",
@@ -186,7 +174,7 @@ def run(args: argparse.Namespace) -> Path:
         "input_shape_channels_by_bins": input_shape,
         "timeseries_normalization": normalization,
         "n_constant_timeseries": n_constant,
-        "preliminary_pca": pre_pca_info,
+        "feature_space": "original movie-bin time series; no preliminary PCA",
         "arguments": vars(args),
         "results": {},
     }
@@ -205,7 +193,7 @@ def run(args: argparse.Namespace) -> Path:
         else:
             log.info("Computing %s embedding", reduction)
             embedding, reduction_info = reduce_grayordinates(
-                pre_pca,
+                features,
                 method=reduction,
                 n_components=args.n_components,
                 n_landmarks=args.n_landmarks,
@@ -220,16 +208,10 @@ def run(args: argparse.Namespace) -> Path:
                 random_state=args.random_state,
                 n_jobs=args.n_jobs,
             )
-            if reduction == "pca":
-                selected_evr = pre_pca_info["explained_variance_ratio"][:args.n_components]
-                reduction_info.update(
-                    explained_variance_ratio=selected_evr,
-                    cumulative_explained_variance=np.cumsum(selected_evr).tolist(),
-                )
             np.save(embedding_path, embedding)
             _json_dump(reduction_report_path, reduction_info)
 
-        if embedding.shape != (pre_pca.shape[0], args.n_components):
+        if embedding.shape != (features.shape[0], args.n_components):
             raise ValueError(f"Cached embedding has unexpected shape: {embedding_path}")
         manifest["results"][reduction] = {
             "embedding": str(embedding_path),

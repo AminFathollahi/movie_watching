@@ -381,6 +381,266 @@ def _perm_searchlight_cpu(fmri_hem, model_emb, neighbors, surface_indices,
 
 
 # =============================================================================
+# Paired dual-seed permutation searchlight (difference null)
+# =============================================================================
+# For a fixed unit, both seeds' searchlight RDM is built from the SAME brain
+# data (fmri_hem) -- only the model RDM (from the seed embedding) differs.
+# The functions below compute that shared brain RDM once per unit and derive
+# both seeds' rho/null against it, so permutation j's null_rho_a and
+# null_rho_p come from the identical within-run circular shift (perm_idx_all
+# is one array, indexed the same way for both) -- a paired null for
+# null_diff_j = null_rho_a_j - null_rho_p_j. Nothing beyond one (B, P) null
+# tensor per seed is held at a time; the full null is never stored.
+
+def _perm_vertex_cpu_paired(surf_v, fmri_cpu, model_norm_a, model_norm_p,
+                            neighbors, vertex_to_col, tril_idx, method, perm_idx_all):
+    """Single-vertex paired test: per-seed rho/exceedance plus the two-sided
+    paired-difference exceedance, all against the one brain RDM."""
+    n_perm = len(perm_idx_all)
+    neighbor_surf = neighbors[surf_v]
+    neighbor_cols = vertex_to_col[neighbor_surf]
+    neighbor_cols = neighbor_cols[neighbor_cols >= 0]
+    if len(neighbor_cols) < 2:
+        return 0.0, n_perm, 0.0, n_perm, n_perm
+
+    hood = fmri_cpu[:, neighbor_cols]
+    mu   = hood.mean(axis=1, keepdims=True)
+    hc   = hood - mu
+    nrms = np.sqrt((hc ** 2).sum(axis=1, keepdims=True))
+    nrms[nrms < 1e-10] = 1.0
+    hn   = hc / nrms
+    fmri_flat = (1.0 - hn @ hn.T)[tril_idx]
+
+    if method == "spearman":
+        order = np.argsort(fmri_flat)
+        fr    = np.empty(len(fmri_flat), dtype=np.float32)
+        fr[order] = np.arange(len(fmri_flat), dtype=np.float32)
+        fc    = fr - fr.mean()
+        fn    = np.linalg.norm(fc)
+        brain_norm = (fc / fn).astype(np.float32) if fn > 1e-10 else fc.astype(np.float32)
+    else:
+        fc    = (fmri_flat - fmri_flat.mean()).astype(np.float32)
+        fn    = np.linalg.norm(fc)
+        brain_norm = (fc / fn) if fn > 1e-10 else fc
+
+    actual_rho_a = float(np.dot(brain_norm, model_norm_a))
+    actual_rho_p = float(np.dot(brain_norm, model_norm_p))
+    null_rho_a   = model_norm_a[perm_idx_all] @ brain_norm   # (n_perm,)
+    null_rho_p   = model_norm_p[perm_idx_all] @ brain_norm   # (n_perm,) -- same perm_idx_all
+    null_diff    = null_rho_a - null_rho_p
+    exceed_a     = int((null_rho_a >= actual_rho_a).sum())
+    exceed_p     = int((null_rho_p >= actual_rho_p).sum())
+    exceed_diff  = int((np.abs(null_diff) >= abs(actual_rho_a - actual_rho_p)).sum())
+    return actual_rho_a, exceed_a, actual_rho_p, exceed_p, exceed_diff
+
+
+def _perm_searchlight_gpu_paired(fmri_hem, model_emb_a, model_emb_p, neighbors,
+                                 surface_indices, vertex_to_col, method,
+                                 perm_idx_all, vertex_batch_size, perm_batch_size,
+                                 device):
+    """GPU-batched paired permutation searchlight for one hemisphere/sheet.
+
+    Returns
+    -------
+    actual_rho_a, p_perm_a, actual_rho_p, p_perm_p, p_perm_diff : (n_verts,) float32
+    p_perm_diff is the two-sided paired exceedance on rho_a - rho_p.
+    """
+    import torch
+
+    n_verts  = fmri_hem.shape[1]
+    n_bins   = fmri_hem.shape[0]
+    tril_idx = np.tril_indices(n_bins, k=-1)
+    n_pairs  = len(tril_idx[0])
+    n_perm = len(perm_idx_all)
+
+    _, model_norm_a = _precompute_model_rdm(model_emb_a, n_bins, tril_idx, method)
+    _, model_norm_p = _precompute_model_rdm(model_emb_p, n_bins, tril_idx, method)
+    model_norm_a_t = torch.from_numpy(model_norm_a).to(device)
+    model_norm_p_t = torch.from_numpy(model_norm_p).to(device)
+
+    if perm_idx_all.shape != (n_perm, n_pairs):
+        raise ValueError(
+            f"Permutation index shape {perm_idx_all.shape}; expected {(n_perm, n_pairs)}")
+
+    fmri_t = torch.from_numpy(fmri_hem.T.astype(np.float32)).to(device)
+
+    neighbor_cols_all = vertex_to_col[neighbors]
+    surf_verts_for_v  = surface_indices.astype(np.int32)
+    ncols_for_v       = neighbor_cols_all[surf_verts_for_v]
+    valid_counts = np.sum(ncols_for_v >= 0, axis=1)
+    analyzable = valid_counts >= 2
+    neighborhood_sizes = np.unique(valid_counts[analyzable])[::-1]
+
+    log.info(
+        f"  [GPU paired] {analyzable.sum():,} analyzable verts in "
+        f"{len(neighborhood_sizes)} neighborhood-size groups "
+        f"(batch={vertex_batch_size}) | n_pairs={n_pairs:,}, perm_batch={perm_batch_size}"
+    )
+
+    actual_rho_a = np.zeros(n_verts, dtype=np.float32)
+    actual_rho_p = np.zeros(n_verts, dtype=np.float32)
+    exceed_a    = np.zeros(n_verts, dtype=np.int64)
+    exceed_p    = np.zeros(n_verts, dtype=np.int64)
+    exceed_diff = np.zeros(n_verts, dtype=np.int64)
+
+    tril_row = torch.tensor(tril_idx[0], dtype=torch.long, device=device)
+    tril_col = torch.tensor(tril_idx[1], dtype=torch.long, device=device)
+
+    processed = 0
+    for neighbor_count in neighborhood_sizes:
+        group_verts = np.where(valid_counts == neighbor_count)[0]
+        for b_start in range(0, len(group_verts), vertex_batch_size):
+            batch_v = group_verts[b_start: b_start + vertex_batch_size]
+            batch_nc = np.stack([
+                row[row >= 0] for row in ncols_for_v[batch_v]
+            ]).astype(np.int64)
+            B = len(batch_v)
+
+            hood = fmri_t[torch.from_numpy(batch_nc).to(device)].permute(
+                0, 2, 1).float()
+            mu = hood.mean(dim=2, keepdim=True)
+            hc = hood - mu
+            norms = torch.linalg.norm(hc, dim=2, keepdim=True).clamp(min=1e-10)
+            hn = hc / norms
+            del hood, hc, norms
+
+            flat = (1.0 - torch.bmm(hn, hn.permute(0, 2, 1)))[:, tril_row, tril_col]
+            del hn
+
+            if method == "spearman":
+                ranks = torch.argsort(torch.argsort(flat, dim=1), dim=1).float()
+                fc = ranks - ranks.mean(dim=1, keepdim=True)
+                del ranks
+            else:
+                fc = flat - flat.mean(dim=1, keepdim=True)
+            del flat
+
+            fn = torch.linalg.norm(fc, dim=1, keepdim=True).clamp(min=1e-10)
+            brain_norm_t = fc / fn          # (B, n_pairs) -- shared by both seeds
+            del fc, fn
+
+            rho_a_batch = (brain_norm_t * model_norm_a_t).sum(dim=1)   # (B,)
+            rho_p_batch = (brain_norm_t * model_norm_p_t).sum(dim=1)   # (B,)
+            diff_batch  = rho_a_batch - rho_p_batch
+            abs_diff_batch = diff_batch.abs()
+            actual_rho_a[batch_v] = rho_a_batch.cpu().float().numpy()
+            actual_rho_p[batch_v] = rho_p_batch.cpu().float().numpy()
+
+            exceed_a_t    = torch.zeros(B, dtype=torch.int64, device=device)
+            exceed_p_t    = torch.zeros(B, dtype=torch.int64, device=device)
+            exceed_diff_t = torch.zeros(B, dtype=torch.int64, device=device)
+            for p0 in range(0, n_perm, perm_batch_size):
+                p1 = min(p0 + perm_batch_size, n_perm)
+                idx_t = torch.from_numpy(perm_idx_all[p0:p1]).to(
+                    device=device, dtype=torch.long)
+                perm_model_a = model_norm_a_t[idx_t]
+                perm_model_p = model_norm_p_t[idx_t]
+                null_rho_a = brain_norm_t @ perm_model_a.T   # (B, P)
+                null_rho_p = brain_norm_t @ perm_model_p.T   # (B, P) -- same idx_t
+                null_diff  = null_rho_a - null_rho_p
+                exceed_a_t    += (null_rho_a >= rho_a_batch.unsqueeze(1)).sum(dim=1)
+                exceed_p_t    += (null_rho_p >= rho_p_batch.unsqueeze(1)).sum(dim=1)
+                exceed_diff_t += (null_diff.abs() >= abs_diff_batch.unsqueeze(1)).sum(dim=1)
+                del idx_t, perm_model_a, perm_model_p, null_rho_a, null_rho_p, null_diff
+
+            exceed_a[batch_v]    = exceed_a_t.cpu().numpy()
+            exceed_p[batch_v]    = exceed_p_t.cpu().numpy()
+            exceed_diff[batch_v] = exceed_diff_t.cpu().numpy()
+            del brain_norm_t, rho_a_batch, rho_p_batch, diff_batch, abs_diff_batch
+            del exceed_a_t, exceed_p_t, exceed_diff_t
+
+            if device == "cuda":
+                torch.cuda.empty_cache()
+
+            processed += B
+            if processed == B or processed % (20 * vertex_batch_size) < B:
+                log.info(
+                    f"  [{processed:,}/{analyzable.sum():,}] neighbors={neighbor_count} "
+                    f"mean_rho_a={actual_rho_a[batch_v].mean():.4f} "
+                    f"mean_rho_p={actual_rho_p[batch_v].mean():.4f}"
+                )
+
+    if np.any(~analyzable):
+        exceed_a[~analyzable] = n_perm
+        exceed_p[~analyzable] = n_perm
+        exceed_diff[~analyzable] = n_perm
+
+    p_perm_a    = ((exceed_a + 1.0) / (n_perm + 1.0)).astype(np.float32)
+    p_perm_p    = ((exceed_p + 1.0) / (n_perm + 1.0)).astype(np.float32)
+    p_perm_diff = ((exceed_diff + 1.0) / (n_perm + 1.0)).astype(np.float32)
+    return actual_rho_a, p_perm_a, actual_rho_p, p_perm_p, p_perm_diff
+
+
+def _perm_searchlight_cpu_paired(fmri_hem, model_emb_a, model_emb_p, neighbors,
+                                 surface_indices, vertex_to_col, method, perm_idx_all):
+    """CPU-only paired permutation searchlight using joblib threads."""
+    from joblib import Parallel, delayed
+
+    n_verts  = fmri_hem.shape[1]
+    n_bins   = fmri_hem.shape[0]
+    tril_idx = np.tril_indices(n_bins, k=-1)
+    n_pairs  = len(tril_idx[0])
+
+    _, model_norm_a = _precompute_model_rdm(model_emb_a, n_bins, tril_idx, method)
+    _, model_norm_p = _precompute_model_rdm(model_emb_p, n_bins, tril_idx, method)
+    n_perm = len(perm_idx_all)
+    if perm_idx_all.shape != (n_perm, n_pairs):
+        raise ValueError(
+            f"Permutation index shape {perm_idx_all.shape}; expected {(n_perm, n_pairs)}")
+
+    surf_verts_for_v = surface_indices.astype(np.int32)
+    log.info(f"  [CPU perm paired] {n_verts:,} vertices (joblib) ...")
+
+    results = Parallel(n_jobs=-1, prefer="threads")(
+        delayed(_perm_vertex_cpu_paired)(
+            int(surf_verts_for_v[v]), fmri_hem, model_norm_a, model_norm_p,
+            neighbors, vertex_to_col, tril_idx, method, perm_idx_all,
+        )
+        for v in range(n_verts)
+    )
+
+    rho_a = np.array([r[0] for r in results], dtype=np.float32)
+    exc_a = np.array([r[1] for r in results], dtype=np.int64)
+    rho_p = np.array([r[2] for r in results], dtype=np.float32)
+    exc_p = np.array([r[3] for r in results], dtype=np.int64)
+    exc_diff = np.array([r[4] for r in results], dtype=np.int64)
+    p_perm_a    = ((exc_a + 1.0) / (n_perm + 1.0)).astype(np.float32)
+    p_perm_p    = ((exc_p + 1.0) / (n_perm + 1.0)).astype(np.float32)
+    p_perm_diff = ((exc_diff + 1.0) / (n_perm + 1.0)).astype(np.float32)
+    return rho_a, p_perm_a, rho_p, p_perm_p, p_perm_diff
+
+
+def _run_hemisphere_paired(fmri_hem, emb_a, emb_p, neighbors, surf_indices, vertex_to_col,
+                           method, perm_idx_all, gpu_batch_size, perm_batch_size):
+    """Try GPU; fall back to CPU on OOM or missing torch. Paired variant of
+    _run_hemisphere: computes both seeds' rho/p_perm plus the paired
+    two-sided difference null in one pass, sharing the per-unit brain RDM."""
+    try:
+        import torch
+        _oom = [torch.cuda.OutOfMemoryError]
+        if hasattr(torch, "AcceleratorError"):
+            _oom.append(torch.AcceleratorError)
+        _oom = tuple(_oom)
+        if torch.cuda.is_available():
+            log.info("  Attempting GPU paired permutation searchlight ...")
+            try:
+                return _perm_searchlight_gpu_paired(
+                    fmri_hem, emb_a, emb_p, neighbors, surf_indices, vertex_to_col,
+                    method, perm_idx_all, gpu_batch_size, perm_batch_size, "cuda",
+                )
+            except _oom as e:
+                log.warning(f"  GPU OOM ({type(e).__name__}) — falling back to CPU")
+                torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+    return _perm_searchlight_cpu_paired(
+        fmri_hem, emb_a, emb_p, neighbors, surf_indices, vertex_to_col,
+        method, perm_idx_all,
+    )
+
+
+# =============================================================================
 # Hemisphere dispatcher
 # =============================================================================
 

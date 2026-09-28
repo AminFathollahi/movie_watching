@@ -5,9 +5,9 @@ Derive functional ROI masks from a completed CF model run.
 
 Workflow
 --------
-1.  Load R2_full, R2_{src_a}_nc, R2_{src_b}_nc from the source CF model's
+1.  Load full and null-corrected split-CF R² maps from the source CF model's
     prep/ (group_average) or group/ (per_subject) directory.
-2.  Restrict to valid vertices: R2_full > --min-r2-full (default 0).
+2.  Restrict to valid vertices: full CF R² > --min-r2-full (default 0).
 3.  Apply a relative threshold within valid vertices to define:
       "{output_roi_a}" mask  — vertices where R2_{src_a}_nc is above the
                                q-th percentile (default 50th) of all valid
@@ -55,6 +55,9 @@ if str(_CF_DIR) not in sys.path:
     sys.path.insert(0, str(_CF_DIR))
 
 from lib.data_adapter import grayord_to_sphere_space, N_VERTS_PER_HEM
+from cf_naming import (
+    cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,24 +74,29 @@ _OUT_BASE = "/home/amin/Research/Representation/Movie/outputs/cf_modeling"
 # =============================================================================
 
 def _load_r2_maps(output_base: str, mode: str, src_a: str, src_b: str) -> tuple:
-    """Load R2_full, R2_a_nc, R2_b_nc from the appropriate prep/group dir."""
+    """Load full and null-corrected split-CF R² maps from prep/group."""
     roi_tag = f"{src_a}_{src_b}"
     if mode == "group_average":
         prep_dir = os.path.join(output_base, "group_average", roi_tag, "prep")
     else:
         prep_dir = os.path.join(output_base, "per_subject", roi_tag, "group")
 
-    for name in ["R2_full", f"R2_{src_a}_nc", f"R2_{src_b}_nc"]:
-        path = os.path.join(prep_dir, f"{name}.npy")
+    stems = cf_model_map_stems(src_a, src_b)
+    legacy_stems = legacy_cf_model_map_stems(src_a, src_b)
+    required = ("full_r2", "null_corrected_split_r2_a", "null_corrected_split_r2_b")
+    paths = {}
+    for key in required:
+        path = resolve_cf_model_map_path(prep_dir, stems[key], legacy_stems[key])
+        paths[key] = path
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"Required map not found: {path}\n"
                 f"Run 02_fit_cf_model.py (and integration_maps.py for per_subject) first."
             )
 
-    R2_full = np.load(os.path.join(prep_dir, "R2_full.npy")).astype(np.float32)
-    R2_a_nc = np.load(os.path.join(prep_dir, f"R2_{src_a}_nc.npy")).astype(np.float32)
-    R2_b_nc = np.load(os.path.join(prep_dir, f"R2_{src_b}_nc.npy")).astype(np.float32)
+    R2_full = np.load(paths["full_r2"]).astype(np.float32)
+    R2_a_nc = np.load(paths["null_corrected_split_r2_a"]).astype(np.float32)
+    R2_b_nc = np.load(paths["null_corrected_split_r2_b"]).astype(np.float32)
 
     log.info("Loaded maps from: %s", prep_dir)
     log.info("  R2_full : shape=%s  mean=%.4f  frac>0=%.1f%%",

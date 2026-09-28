@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Compute bilateral and hemispheric ROI-mean partial-correlation maps."""
-
 from __future__ import annotations
 
 import argparse
@@ -11,12 +9,13 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 
+from cf_modeling.cf_naming import ROI_MEAN_PREPROCESSING, ROI_MEAN_PREPROCESSING_OPTIONS, roi_mean_preprocessing_label
+
 
 log = logging.getLogger("roi_mean_partial_connectivity")
 
 
 def _runwise_standardize(values: np.ndarray, run_trs: np.ndarray) -> np.ndarray:
-    """Z-score every column independently within each run (ddof=0)."""
     values = np.asarray(values, dtype=np.float64)
     if values.ndim == 1:
         values = values[:, None]
@@ -41,12 +40,6 @@ def paired_partial_correlations(
     first_z: np.ndarray,
     second_z: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return corr(Y, first|second) and corr(Y, second|first) together.
-
-    Inputs must already be centered/standardized over the same observations.
-    The implementation uses the exact three-correlation identity and performs
-    no ridge regularization.
-    """
     target_z = np.asarray(target_z, dtype=np.float64)
     first_z = np.asarray(first_z, dtype=np.float64).reshape(-1)
     second_z = np.asarray(second_z, dtype=np.float64).reshape(-1)
@@ -100,7 +93,6 @@ def _load_mask(path: Path, expected: int) -> np.ndarray:
 
 def _stream_mask_means(dataobj, masks: dict[str, np.ndarray], n_trs: int,
                        n_gray: int, batch_size: int) -> dict[str, np.ndarray]:
-    """Accumulate several sparse mask means without ArrayProxy fancy indexing."""
     sums = {name: np.zeros(n_trs, dtype=np.float64) for name in masks}
     counts = {name: 0 for name in masks}
     for start in range(0, n_gray, batch_size):
@@ -141,16 +133,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mask-a", type=Path, required=True)
     parser.add_argument("--mask-p", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--preprocessing", choices=sorted(ROI_MEAN_PREPROCESSING_OPTIONS),
+                        default="raw")
+    parser.add_argument(
+        "--supporting-dir", type=Path, default=None,
+        help=("Directory for NPY component backups and JSON provenance. Default: "
+              "the pair directory (parent of cifti_maps)"),
+    )
     parser.add_argument("--batch-size", type=int, default=4096)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    preprocessing_label = roi_mean_preprocessing_label(args.preprocessing)
     for path in (args.dtseries, args.run_trs, args.mask_a, args.mask_p):
         if not path.exists():
             raise FileNotFoundError(path)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    supporting_dir = args.supporting_dir or args.output_dir.parent
+    supporting_dir.mkdir(parents=True, exist_ok=True)
 
     image = nib.load(args.dtseries)
     if len(image.shape) != 2:
@@ -205,10 +207,10 @@ def main() -> None:
 
     maps = [bilateral_a, bilateral_p, within_a, within_p]
     names = [
-        f"partial_r_{args.roi_a}_given_{args.roi_p}_bilateral",
-        f"partial_r_{args.roi_p}_given_{args.roi_a}_bilateral",
-        f"partial_r_{args.roi_a}_given_{args.roi_p}_within_hemisphere",
-        f"partial_r_{args.roi_p}_given_{args.roi_a}_within_hemisphere",
+        f"roi_mean_timeseries_partial_pearson_r_{args.roi_a}_given_{args.roi_p}_bilateral_{preprocessing_label}",
+        f"roi_mean_timeseries_partial_pearson_r_{args.roi_p}_given_{args.roi_a}_bilateral_{preprocessing_label}",
+        f"roi_mean_timeseries_partial_pearson_r_{args.roi_a}_given_{args.roi_p}_within_hemisphere_{preprocessing_label}",
+        f"roi_mean_timeseries_partial_pearson_r_{args.roi_p}_given_{args.roi_a}_within_hemisphere_{preprocessing_label}",
     ]
     for hem in ("L", "R"):
         outside = np.ones(n_gray, dtype=bool)
@@ -220,15 +222,22 @@ def main() -> None:
             isolated = values.copy()
             isolated[outside] = np.nan
             maps.append(isolated)
-            names.append(f"partial_r_{source}_given_{condition}_{hem}")
+            names.append(
+                f"roi_mean_timeseries_partial_pearson_r_{source}_given_{condition}_{hem}_{preprocessing_label}")
 
-    out_path = args.output_dir / f"roi_mean_partial_connectivity_{args.roi_a}_{args.roi_p}.dscalar.nii"
+    out_path = args.output_dir / (
+        f"roi_mean_timeseries_partial_pearson_r_{args.roi_a}_{args.roi_p}_{preprocessing_label}.dscalar.nii")
     _save_dscalar(np.stack(maps), names, image, out_path)
     for name, values in zip(names[:4], maps[:4]):
-        np.save(args.output_dir / f"{name}.npy", values)
+        np.save(supporting_dir / f"{name}.npy", values)
 
     metadata = {
-        "analysis": "exact_pairwise_partial_correlation",
+        "analysis": "roi_mean_timeseries_exact_pairwise_partial_pearson_correlation",
+        "analysis_scope": (
+            "ROI-mean fMRI time-series connectivity; not a connective-field model"),
+        "preprocessing_option": args.preprocessing,
+        "preprocessing_label": preprocessing_label,
+        "preprocessing": ROI_MEAN_PREPROCESSING[preprocessing_label],
         "dtseries": str(args.dtseries),
         "run_trs": run_trs.tolist(),
         "n_timepoints": int(n_trs),
@@ -254,7 +263,8 @@ def main() -> None:
         "cifti": str(out_path),
         "map_names": names,
     }
-    metadata_path = args.output_dir / f"roi_mean_partial_connectivity_{args.roi_a}_{args.roi_p}.json"
+    metadata_path = supporting_dir / (
+        f"roi_mean_timeseries_partial_pearson_r_{args.roi_a}_{args.roi_p}_{preprocessing_label}.json")
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     log.info("Saved %s", out_path)
 

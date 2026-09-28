@@ -54,6 +54,11 @@ import sys
 
 import numpy as np
 
+try:
+    from cf_modeling.cf_naming import cf_model_map_stems
+except ModuleNotFoundError:
+    from cf_naming import cf_model_map_stems
+
 # ---------------------------------------------------------------------------
 # Vicsompy import — resolved at runtime from the source repo.
 # The VICSOMPY_REPO path is injected by 01/02 scripts before this module
@@ -320,7 +325,7 @@ class CfModel(MssCf):
         out_dir: str,
         n_cortex: int = None,
     ) -> None:
-        """Save all R² maps as npy files.
+        """Save all held-out CF R² maps as clearly named ``.npy`` files.
 
         CIFTI output is handled downstream by integration_maps.py, which
         writes a single combined dscalar with all scalar and derived maps.
@@ -367,16 +372,17 @@ class CfModel(MssCf):
             np.clip(R2_a_nc, 0, None) * np.clip(R2_b_nc, 0, None)
         ).astype(np.float32)
 
+        stems = cf_model_map_stems(roi_a, roi_b)
         maps = {
-            "R2_full":              R2_full,
-            f"R2_{roi_a}":          R2_a,
-            f"R2_{roi_b}":          R2_b,
-            f"R2_null_{roi_a}":     R2_null_a,
-            f"R2_null_{roi_b}":     R2_null_b,
-            f"R2_{roi_a}_nc":       R2_a_nc,
-            f"R2_{roi_b}_nc":       R2_b_nc,
-            "product_map":          product_map,
-            "product_map_nc":       product_map_nc,
+            stems["full_r2"]: R2_full,
+            stems["split_r2_a"]: R2_a,
+            stems["split_r2_b"]: R2_b,
+            stems["roi_mean_null_r2_a"]: R2_null_a,
+            stems["roi_mean_null_r2_b"]: R2_null_b,
+            stems["null_corrected_split_r2_a"]: R2_a_nc,
+            stems["null_corrected_split_r2_b"]: R2_b_nc,
+            stems["joint_split_r2_geomean"]: product_map,
+            stems["joint_null_corrected_split_r2_geomean"]: product_map_nc,
         }
 
         # ── Log summary stats ───────────────────────────────────────────────
@@ -473,5 +479,4 @@ class CfModel(MssCf):
             raise RuntimeError(
                 "Call inject_subsurfaces() before make_dm_grayord() or test_xval_grayord()."
             )
-
 

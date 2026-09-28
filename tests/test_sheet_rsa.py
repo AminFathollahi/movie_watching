@@ -7,8 +7,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from rsa.shared.sheet_rsa import (
-    N_UNITS, SHEET_COLS, TOWER_AUDIO, TOWER_NAMES, TOWER_THINKER, TOWER_VISION,
-    characterize, knn_on_sheet, random_neighbors_within_tower, tower_id,
+    ENCODER_ROWS, N_UNITS, SHEET_COLS, TOWER_AUDIO, TOWER_NAMES, TOWER_THINKER,
+    TOWER_VISION, characterize, knn_on_sheet, load_true_coords,
+    random_neighbors_within_tower, robust_vlim, tower_id,
 )
 
 
@@ -64,3 +65,29 @@ def test_characterize_per_tower_and_hotspot_overlap():
     overlap = out["hotspot_overlap"]
     assert 0.0 <= overlap["jaccard"] <= 1.0
     assert overlap["overlap_n"] <= overlap["union_n"]
+
+
+def test_robust_vlim_clips_outliers():
+    values = np.concatenate([np.full(98, 1.0), [0.0, 100.0]])
+    lo, hi = robust_vlim(values, pct=1.0)
+    assert lo <= 1.0 <= hi
+    assert hi < 100.0
+
+
+def test_true_coords_stay_within_tower_raster_bounds():
+    """Separator lines at col 256 (rows 0-159) and row 160 are valid under
+    TRUE coordinates only because permute_coordinates reorders units WITHIN
+    a block, never across a block boundary. Regression check for that fact."""
+    cache = Path("/home/amin/Research/Representation/Movie/outputs/rsa/"
+                "cca_seed_sheet_rsa/topoomni_true_coords_seed42.npy")
+    if not cache.exists():
+        return
+    coords = load_true_coords(cache)
+    tid = tower_id()
+    for t, col_lo, col_hi in ((TOWER_VISION, 0, 255), (TOWER_AUDIO, 256, 511)):
+        m = tid == t
+        assert coords[m, 0].max() <= ENCODER_ROWS - 1
+        assert coords[m, 1].min() >= col_lo
+        assert coords[m, 1].max() <= col_hi
+    m = tid == TOWER_THINKER
+    assert coords[m, 0].min() >= ENCODER_ROWS

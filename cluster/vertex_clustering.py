@@ -149,10 +149,7 @@ def _float_tag(value: float) -> str:
 
 def analysis_tag(args: argparse.Namespace) -> str:
     norm = "raw" if args.no_zscore_timeseries else "zscore"
-    return (
-        f"norm-{norm}_prepca{args.pre_pca_components}_nc{args.n_components}"
-        f"_landmarks{args.n_landmarks}"
-    )
+    return f"norm-{norm}_nc{args.n_components}_landmarks{args.n_landmarks}"
 
 
 def reduction_tag(method: str, args: argparse.Namespace) -> str:
@@ -222,6 +219,78 @@ def zscore_timeseries_inplace(timeseries: np.ndarray) -> int:
     return int(constant.sum())
 
 
+def _zscore_1d(v: np.ndarray) -> np.ndarray:
+    v = v.astype(np.float64) - v.astype(np.float64).mean()
+    s = v.std()
+    return (v / s if s > 0 else v).astype(np.float32)
+
+
+def regress_out_global(profiles: np.ndarray, regressor: np.ndarray) -> np.ndarray:
+    """Residualize each z-scored profile row against one zero-mean regressor, then re-zscore."""
+    beta = (profiles @ regressor) / (regressor @ regressor)
+    residual = (profiles - beta[:, None] * regressor[None, :]).astype(np.float32)
+    zscore_timeseries_inplace(residual)
+    return residual
+
+
+def labels_path(model_selection_dir: Path, row: "pd.Series", filename: str) -> Path:
+    reducer_tag = str(row["reducer_tag"])
+    cluster_tag = str(row["full_fit_cluster_tag"])
+    return (model_selection_dir / "selected_maps" / reducer_tag
+            / f"{reducer_tag}_{cluster_tag}" / filename)
+
+
+def cluster_profiles(units_by_bins: np.ndarray, labels: np.ndarray,
+                     exclude: tuple[int, ...] = (-1,)
+                     ) -> tuple[np.ndarray, list[int], dict[int, int], int]:
+    """Z-scored mean time series per cluster, excluding ``exclude`` label values.
+
+    Channel labels use the sklearn convention (-1 = noise); vertex labels use
+    :func:`expand_masked_labels`'s convention (0 = outside the stimulus mask,
+    plus a reserved noise key) — pass ``exclude`` accordingly, see
+    :func:`vertex_exclude_labels`.
+    """
+    if units_by_bins.shape[0] != labels.shape[0]:
+        raise ValueError("labels length does not match unit rows")
+    n_excluded = int(np.isin(labels, exclude).sum())
+    cluster_ids = sorted(int(c) for c in np.unique(labels) if c not in exclude)
+    if not cluster_ids:
+        raise ValueError("No clusters found")
+    profiles = np.stack(
+        [units_by_bins[labels == cid].mean(axis=0) for cid in cluster_ids]
+    ).astype(np.float32)
+    counts = {cid: int((labels == cid).sum()) for cid in cluster_ids}
+    zscore_timeseries_inplace(profiles)
+    return profiles, cluster_ids, counts, n_excluded
+
+
+def vertex_exclude_labels(labels_file: Path) -> tuple[int, ...]:
+    """Vertex label values to exclude from clustering: 0 (outside the
+    stimulus mask) plus the reserved HDBSCAN noise key recorded in the
+    sibling ``spatial_report.json``, if any."""
+    exclude = [0]
+    report_file = labels_file.parent / "spatial_report.json"
+    if report_file.exists():
+        noise_label = json.loads(report_file.read_text()).get("noise_label")
+        if noise_label is not None:
+            exclude.append(int(noise_label))
+    return tuple(exclude)
+
+
+def profile_correlation_summary(profiles: np.ndarray) -> dict[str, Any]:
+    """Mean/max |off-diagonal correlation| among a side's own cluster profiles.
+
+    Close to 1 means the clusters are temporally redundant (the partition
+    barely differentiates in time), regardless of the sign of the relation.
+    """
+    n = profiles.shape[0]
+    if n < 2:
+        return {"mean_abs_off_diag": None, "max_abs_off_diag": None}
+    corr = (profiles @ profiles.T) / profiles.shape[1]
+    off = corr[~np.eye(n, dtype=bool)]
+    return {"mean_abs_off_diag": float(np.mean(np.abs(off))), "max_abs_off_diag": float(np.max(np.abs(off)))}
+
+
 def load_stimulus_mask(mask_path: str, threshold: float, n_vertices: int) -> np.ndarray:
     """Boolean mask of stimulus-driven vertices (mask value > threshold)."""
     values = load_single_map(mask_path)
@@ -258,25 +327,6 @@ def expand_masked_labels(raw_labels: np.ndarray,
     if noise_key is not None:
         names[noise_key] = "noise"
     return full, names, noise_key
-
-
-def fit_preliminary_pca(timeseries: np.ndarray, n_components: int,
-                        random_state: int) -> tuple[np.ndarray, dict[str, Any]]:
-    """Fit the shared randomized PCA used for denoising and tractability."""
-    k = min(n_components, timeseries.shape[0], timeseries.shape[1])
-    if k < 2:
-        raise ValueError(f"Need at least two preliminary components, got {k}")
-    model = PCA(n_components=k, svd_solver="randomized", random_state=random_state)
-    features = model.fit_transform(timeseries).astype(np.float32, copy=False)
-    info = {
-        "method": "pca",
-        "n_components": int(k),
-        "explained_variance_ratio": model.explained_variance_ratio_.tolist(),
-        "cumulative_explained_variance": np.cumsum(
-            model.explained_variance_ratio_
-        ).tolist(),
-    }
-    return features, info
 
 
 def choose_landmarks(n_samples: int, n_landmarks: int,

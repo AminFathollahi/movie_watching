@@ -2,9 +2,14 @@
 
 For each ROI, fits nested leave-one-run-out ridge models on the group-average
 response using two proxy bands (A, V) plus the model's native joint
-audiovisual embedding (J), then decomposes the held-out R2 into unique,
-shared, and synergistic components. Two band configurations are supported
-via --band-config:
+audiovisual embedding (J). The ridge is fit per vertex, but both evaluation
+metrics are computed on the ROI-mean timecourse: held-out R2 (giving synergy)
+is the coefficient of determination between the
+ROI-mean observed and ROI-mean out-of-fold predicted timecourses, and unique
+audio/video variance is a genuine partial correlation between the same
+ROI-mean observed timecourse and each band's ROI-mean out-of-fold
+prediction, controlling for the other band's. Two band configurations are
+supported via --band-config:
 
   av    A = audio embedding, V = video embedding (native modality bands)
   text  A = transcript embedding (speech content, audio-semantic proxy),
@@ -32,6 +37,7 @@ SCRIPT_DIR = str(Path(__file__).resolve().parent)
 sys.path = [path for path in sys.path if path != SCRIPT_DIR]
 sys.path.insert(0, str(ROOT))
 
+from cf_modeling.roi_mean_partial_connectivity import paired_partial_correlations
 from encoding.incremental_av import (
     REPEATED_VALIDATION_CLIPS,
     _bh_qvalues,
@@ -99,29 +105,61 @@ def parse_args(argv=None):
 # Decomposition arithmetic (pure functions, unit-tested directly)
 # =============================================================================
 
-MIN_R2_FOR_REDUNDANCY = 1e-3
+def decomposition_metrics(r2_a: float, r2_v: float, r2_additive: float, r2_joint: float,
+                           unique_a: float, unique_v: float) -> dict:
+    """Assemble the R2-based and partial-correlation-based decomposition quantities.
 
-
-def decomposition_metrics(r2_a: float, r2_v: float, r2_additive: float, r2_joint: float) -> dict:
-    """Derive unique/shared/synergy quantities from four held-out R2 values."""
-    unique_a = r2_additive - r2_v
-    unique_v = r2_additive - r2_a
-    shared = r2_a + r2_v - r2_additive
+    unique_a/unique_v are genuine partial correlations -- corr(ROI, A | V) and
+    corr(ROI, V | A) -- computed by the caller from out-of-fold predictions
+    (see partial_unique_correlations); this function only derives the
+    remaining R2-based quantity (synergy) and assembles the record.
+    """
     synergy = r2_joint - r2_additive
-    dominance_denom = r2_a + r2_v
-    audio_dominance = (
-        (r2_a - r2_v) / dominance_denom if abs(dominance_denom) > 1e-8 else float("nan")
-    )
-    redundancy = (
-        shared / min(r2_a, r2_v)
-        if r2_a > MIN_R2_FOR_REDUNDANCY and r2_v > MIN_R2_FOR_REDUNDANCY
-        else float("nan")
-    )
     return {
         "R2_A": r2_a, "R2_V": r2_v, "R2_additive": r2_additive, "R2_joint": r2_joint,
-        "unique_A": unique_a, "unique_V": unique_v, "shared": shared,
-        "synergy": synergy, "audio_dominance": audio_dominance, "redundancy": redundancy,
+        "unique_A": unique_a, "unique_V": unique_v, "synergy": synergy,
     }
+
+
+def roi_mean_timecourse(values: np.ndarray) -> np.ndarray:
+    """Collapse an (n_samples, n_roi_targets) array to its per-sample ROI mean."""
+    return np.asarray(values, dtype=np.float64).mean(axis=1)
+
+
+def roi_mean_r2(target: np.ndarray, prediction: np.ndarray) -> float:
+    """Out-of-fold R2 between the ROI-mean observed and predicted timecourses.
+
+    target/prediction are (n_samples, n_roi_targets) arrays; both are
+    collapsed to their un-z-scored ROI mean via roi_mean_timecourse before
+    the standard R2 identity (1 - SS_res/SS_tot) is applied, so this stays a
+    genuine coefficient of determination -- unbounded below, not a squared
+    correlation -- evaluated on the same ROI-mean object as
+    partial_unique_correlations, just without that function's z-scoring.
+    """
+    observed = roi_mean_timecourse(target)
+    predicted = roi_mean_timecourse(prediction)
+    return float(_r2_per_target(observed[:, None], predicted[:, None])[0])
+
+
+def partial_unique_correlations(target: np.ndarray, audio_pred: np.ndarray,
+                                 video_pred: np.ndarray) -> tuple[float, float]:
+    """corr(ROI, A | V) and corr(ROI, V | A) from out-of-fold predictions.
+
+    target/audio_pred/video_pred are (n_samples, n_roi_targets) arrays over the
+    same observations (typically one movie block, one ROI); each is collapsed
+    to an ROI-mean timecourse via roi_mean_timecourse, z-scored over those
+    observations, and passed to paired_partial_correlations's exact
+    partial-correlation identity.
+    """
+    def roi_mean_z(values: np.ndarray) -> np.ndarray:
+        mean = roi_mean_timecourse(values)
+        std = mean.std()
+        return (mean - mean.mean()) / std if std > np.finfo(np.float64).eps else np.zeros_like(mean)
+
+    unique_a, unique_v = paired_partial_correlations(
+        roi_mean_z(target), roi_mean_z(audio_pred), roi_mean_z(video_pred)
+    )
+    return float(unique_a[0]), float(unique_v[0])
 
 
 def participation_ratio(x: np.ndarray) -> float:
@@ -161,9 +199,9 @@ def _resample_stats(effects: np.ndarray, n_bootstrap: int, n_permutations: int,
                      random_state: int) -> dict:
     """Block bootstrap/sign-flip over a metric vector, one entry per movie block.
 
-    NaN entries (e.g. an undefined redundancy ratio on that block) are dropped
-    before resampling; their fraction is reported rather than silently
-    discarded, and the whole statistic is NaN if fewer than 2 blocks remain.
+    NaN entries (an undefined metric on that block) are dropped before
+    resampling; their fraction is reported rather than silently discarded,
+    and the whole statistic is NaN if fewer than 2 blocks remain.
     """
     effects = np.asarray(effects, dtype=np.float64)
     defined = effects[~np.isnan(effects)]
@@ -298,12 +336,18 @@ def run(args) -> Path:
         for block in blocks:
             block_mask = video_ids == block
             r2 = {
-                tag: float(np.nanmean(_r2_per_target(
+                tag: roi_mean_r2(
                     targets[block_mask][:, columns], oof[tag][block_mask][:, columns]
-                )))
+                )
                 for tag in oof
             }
-            record = decomposition_metrics(r2["A"], r2["V"], r2["additive"], r2["joint"])
+            unique_a, unique_v = partial_unique_correlations(
+                targets[block_mask][:, columns],
+                oof["A"][block_mask][:, columns], oof["V"][block_mask][:, columns],
+            )
+            record = decomposition_metrics(
+                r2["A"], r2["V"], r2["additive"], r2["joint"], unique_a, unique_v
+            )
             record["roi"] = roi
             record["video_id"] = str(block)
             record["n_block_samples"] = int(block_mask.sum())
@@ -312,7 +356,7 @@ def run(args) -> Path:
 
     metric_names = [
         "R2_A", "R2_V", "R2_additive", "R2_joint",
-        "unique_A", "unique_V", "shared", "synergy", "audio_dominance", "redundancy",
+        "unique_A", "unique_V", "synergy",
     ]
     inference_rows = []
     for roi in roi_columns:
@@ -378,7 +422,6 @@ def run(args) -> Path:
         "inference_unit": "movie block (one non-validation video segment)",
         "n_blocks": len(blocks),
         "blocks": [str(block) for block in blocks],
-        "min_r2_for_redundancy": MIN_R2_FOR_REDUNDANCY,
         "rois": {name: int(len(columns)) for name, columns in roi_columns.items()},
         "bin_sec": args.bin_sec, "skip_sec": args.skip_sec, "delay_sec": args.delay_sec,
         "tr": args.tr, "hrf": args.hrf,

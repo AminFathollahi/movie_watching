@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Compute bilateral and hemispheric ROI-mean Pearson-correlation maps."""
-
 from __future__ import annotations
 
 import argparse
@@ -10,6 +8,8 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+
+from cf_modeling.cf_naming import ROI_MEAN_PREPROCESSING, ROI_MEAN_PREPROCESSING_OPTIONS, roi_mean_preprocessing_label
 
 try:
     from cf_modeling.roi_mean_partial_connectivity import (
@@ -33,7 +33,6 @@ log = logging.getLogger("roi_mean_raw_connectivity")
 
 
 def correlations(target_z: np.ndarray, source_z: np.ndarray) -> np.ndarray:
-    """Return column-wise Pearson correlations for standardized observations."""
     target_z = np.asarray(target_z, dtype=np.float64)
     source_z = np.asarray(source_z, dtype=np.float64).reshape(-1)
     if target_z.ndim == 1:
@@ -53,16 +52,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mask-a", type=Path, required=True)
     parser.add_argument("--mask-p", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--preprocessing", choices=sorted(ROI_MEAN_PREPROCESSING_OPTIONS),
+                        default="raw")
+    parser.add_argument(
+        "--supporting-dir", type=Path, default=None,
+        help=("Directory for NPY component backups and JSON provenance. Default: "
+              "the pair directory (parent of cifti_maps)"),
+    )
     parser.add_argument("--batch-size", type=int, default=4096)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    preprocessing_label = roi_mean_preprocessing_label(args.preprocessing)
     for path in (args.dtseries, args.run_trs, args.mask_a, args.mask_p):
         if not path.exists():
             raise FileNotFoundError(path)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    supporting_dir = args.supporting_dir or args.output_dir.parent
+    supporting_dir.mkdir(parents=True, exist_ok=True)
 
     image = nib.load(args.dtseries)
     if len(image.shape) != 2:
@@ -114,10 +123,10 @@ def main() -> None:
 
     maps = [bilateral_a, bilateral_p, within_a, within_p]
     names = [
-        f"r_{args.roi_a}_raw_corr_bilateral",
-        f"r_{args.roi_p}_raw_corr_bilateral",
-        f"r_{args.roi_a}_raw_corr_within_hemisphere",
-        f"r_{args.roi_p}_raw_corr_within_hemisphere",
+        f"roi_mean_timeseries_zero_order_pearson_r_{args.roi_a}_bilateral_{preprocessing_label}",
+        f"roi_mean_timeseries_zero_order_pearson_r_{args.roi_p}_bilateral_{preprocessing_label}",
+        f"roi_mean_timeseries_zero_order_pearson_r_{args.roi_a}_within_hemisphere_{preprocessing_label}",
+        f"roi_mean_timeseries_zero_order_pearson_r_{args.roi_p}_within_hemisphere_{preprocessing_label}",
     ]
     for hem in ("L", "R"):
         outside = np.ones(n_gray, dtype=bool)
@@ -126,15 +135,21 @@ def main() -> None:
             isolated = values.copy()
             isolated[outside] = np.nan
             maps.append(isolated)
-            names.append(f"r_{roi}_raw_corr_{hem}")
+            names.append(f"roi_mean_timeseries_zero_order_pearson_r_{roi}_{hem}_{preprocessing_label}")
 
-    out_path = args.output_dir / f"roi_mean_raw_connectivity_{args.roi_a}_{args.roi_p}.dscalar.nii"
+    out_path = args.output_dir / (
+        f"roi_mean_timeseries_zero_order_pearson_r_{args.roi_a}_{args.roi_p}_{preprocessing_label}.dscalar.nii")
     _save_dscalar(np.stack(maps), names, image, out_path)
     for name, values in zip(names[:4], maps[:4]):
-        np.save(args.output_dir / f"{name}.npy", values)
+        np.save(supporting_dir / f"{name}.npy", values)
 
     metadata = {
-        "analysis": "ordinary_pearson_correlation",
+        "analysis": "roi_mean_timeseries_zero_order_pearson_correlation",
+        "analysis_scope": (
+            "ROI-mean fMRI time-series connectivity; not a connective-field model"),
+        "preprocessing_option": args.preprocessing,
+        "preprocessing_label": preprocessing_label,
+        "preprocessing": ROI_MEAN_PREPROCESSING[preprocessing_label],
         "distinction_from_nc": (
             "These are correlations between ROI means and cortical timecourses; "
             "CF _nc is split-model R2 minus a one-regressor OLS null R2."),
@@ -149,7 +164,8 @@ def main() -> None:
         "map_names": names,
         "cifti": str(out_path),
     }
-    metadata_path = args.output_dir / f"roi_mean_raw_connectivity_{args.roi_a}_{args.roi_p}.json"
+    metadata_path = supporting_dir / (
+        f"roi_mean_timeseries_zero_order_pearson_r_{args.roi_a}_{args.roi_p}_{preprocessing_label}.json")
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     log.info("Saved %s", out_path)
 

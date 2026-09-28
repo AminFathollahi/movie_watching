@@ -152,8 +152,8 @@ def save_legend(
 
     fig, axis = plt.subplots(figsize=(4.2, 3.8), dpi=160)
     axis.imshow(texture, origin="upper", extent=[vmin, vmax, vmin, vmax])
-    axis.set_xlabel(xlabel or f"{roi_b} raw split $R^2$ (blue axis)")
-    axis.set_ylabel(ylabel or f"{roi_a} raw split $R^2$ (red axis)")
+    axis.set_xlabel(xlabel or f"{roi_b} split-CF $R^2$ (blue axis)")
+    axis.set_ylabel(ylabel or f"{roi_a} split-CF $R^2$ (red axis)")
     axis.set_title(title)
     fig.tight_layout()
     fig.savefig(output_path, bbox_inches="tight")

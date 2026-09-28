@@ -18,12 +18,7 @@
 #                            per-subject r maps → groupstats/ subdir
 #               incremental_av  Run-wise A+V versus A+V+J and compression
 #                               comparisons for the configured AV models
-#               pairing_control  Fold-confined AV mismatch extraction and
-#                                incremental encoding comparison
 #               factorial_interaction  Crossed-pair interaction representation
-#               category_profile  Manually annotated audio/visual category
-#                                 variance decomposition, isolated-source
-#                                 audio decoding, and cross-modal generalization
 #               all          avg + persubject + groupstats
 #
 #   BATCH_SIZE  N            Parallel subjects (default 8)
@@ -62,7 +57,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # CONFIG — all paths and analysis parameters defined here
 # =============================================================================
 DATA_BASE="/home/amin/Research/Representation/Movie/data"
-HCP_DIR="${MOVIE_HCP_DIR:-/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
+HCP_DIR="${MOVIE_HCP_DIR:-/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
 OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
 
 # Raw 7T CIFTI files (used in streaming mode — preprocess on-the-fly)
@@ -162,10 +157,9 @@ SEGMENTED_DIR="${MOVIE_SEGMENTED_DIR:-/media/amin/ADATA HD710 PRO/Research/Repre
 GLASSER_DLABEL="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
 CF_MASKS_DIR="${OUTPUTS_BASE}/cf_modeling/masks"
 
-# ROI set shared by incremental_av, pairing_control and factorial_interaction:
-# auditory/posterior_temporal parcels plus the CCA-derived anterior/posterior
-# temporal masks and their unimodal Glasser reference regions (A5 auditory,
-# FFC visual).
+# ROI set shared by incremental_av and factorial_interaction: auditory/
+# posterior_temporal parcels plus the CCA-derived anterior/posterior temporal
+# masks and their unimodal Glasser reference regions (A5 auditory, FFC visual).
 INCREMENTAL_ROI_ARGS=(
     --parcel-roi "auditory=A1,MBelt,LBelt,PBelt,RI,A4,A5"
     --parcel-roi "posterior_temporal=STGa,STSda,STSdp,STSva,STSvp,STV,TA2,TPOJ1,TPOJ2,TPOJ3"
@@ -174,9 +168,6 @@ INCREMENTAL_ROI_ARGS=(
     --parcel-roi "a5=A5"
     --parcel-roi "ffc=FFC"
 )
-
-CATEGORY_PROFILE_OUTPUT_DIR="${OUTPUT_DIR}/category_profile"
-CATEGORY_LABELS_DIR="${DATA_BASE}/per_segment_setare_labels"
 
 # ── Model registry ─────────────────────────────────────────────────────────
 # Format: "model_name:modalities"
@@ -629,54 +620,6 @@ run_incremental_control_fit() {
         "${TEMPLATE_ARGS[@]}"
 }
 
-run_pairing_control() {
-    if [ "$BIN_SEC" != "5" ] && [ "$BIN_SEC" != "5.0" ]; then
-        log "Pairing control currently requires 5-second segments"
-        return 1
-    fi
-    if [ ! -f "$GLASSER_DLABEL" ]; then
-        log "Missing Glasser dlabel: $GLASSER_DLABEL"
-        return 1
-    fi
-    export MOVIE_SEGMENTED_DIR="$SEGMENTED_DIR"
-    local MODEL_NAME SEED RUN OUTPUT_NAME TEMPLATE INTACT_ROOT
-    for MODEL_NAME in "${INCREMENTAL_MODELS[@]}"; do
-        OUTPUT_NAME="${MODEL_NAME}_pairing_intact"
-        run_incremental_control_fit \
-            "$MODEL_NAME" "$OUTPUT_NAME" "${OUTPUT_DIR}/pairing_control"
-        INTACT_ROOT="${OUTPUT_DIR}/pairing_control/group_average/${OUTPUT_NAME}/runwise_incremental_av_bin5s_skip5s"
-        for SEED in "${PAIRING_SEEDS[@]}"; do
-            for RUN in 1 2 3 4; do
-                if [ "$MODEL_NAME" = "pe-av-small-16-frame" ]; then
-                    conda run --no-capture-output -n avtransformer python \
-                        "${SCRIPT_DIR}/../notebooks/feature_extraction/pe_av_extract_scramble.py" \
-                        --held-out-run "$RUN" --seed "$SEED" --timing-csv "$TIMING_CSV"
-                else
-                    conda run --no-capture-output -n avtransformer python \
-                        "${SCRIPT_DIR}/../notebooks/feature_extraction/nemotron_extract_scramble.py" \
-                        --held-out-run "$RUN" --seed "$SEED" --timing-csv "$TIMING_CSV"
-                fi
-            done
-            OUTPUT_NAME="${MODEL_NAME}_avmismatch_seed${SEED}"
-            TEMPLATE="${MODEL_NAME}_avmismatch_run{run}_seed${SEED}"
-            run_incremental_control_fit \
-                "$MODEL_NAME" "$OUTPUT_NAME" "${OUTPUT_DIR}/pairing_control" "$TEMPLATE"
-        done
-
-        local AGGREGATE_ARGS=()
-        for SEED in "${PAIRING_SEEDS[@]}"; do
-            AGGREGATE_ARGS+=(
-                --mismatch-output
-                "${OUTPUT_DIR}/pairing_control/group_average/${MODEL_NAME}_avmismatch_seed${SEED}/runwise_incremental_av_bin5s_skip5s"
-            )
-        done
-        run_python "${SCRIPT_DIR}/pairing_control.py" \
-            --intact-output "$INTACT_ROOT" \
-            "${AGGREGATE_ARGS[@]}" \
-            --output-dir "${OUTPUT_DIR}/pairing_control/group_average/${MODEL_NAME}/inference"
-    done
-}
-
 run_factorial_interaction() {
     if [ "$BIN_SEC" != "5" ] && [ "$BIN_SEC" != "5.0" ]; then
         log "Factorial interaction currently requires 5-second segments"
@@ -709,39 +652,12 @@ run_factorial_interaction() {
     done
 }
 
-run_category_profile() {
-    if [ "$BIN_SEC" != "5" ] && [ "$BIN_SEC" != "5.0" ]; then
-        log "Category profile requires 5-second bins (manually annotated labels are 1 Hz)"
-        return 1
-    fi
-    if [ ! -f "$GLASSER_DLABEL" ]; then
-        log "Missing Glasser dlabel: $GLASSER_DLABEL"
-        return 1
-    fi
-    log "Category profile encoding"
-    run_python "${SCRIPT_DIR}/category_profile.py" \
-        --preprocessed-dir "$PREPROCESSED_DIR" \
-        --fmri-suffix "$FMRI_SUFFIX" \
-        --subject group_average \
-        --timing-csv "$TIMING_CSV" \
-        --labels-dir "$CATEGORY_LABELS_DIR" \
-        --output-dir "$CATEGORY_PROFILE_OUTPUT_DIR" \
-        --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" \
-        --delay-sec "$DELAY_SEC" --tr "$TR" \
-        --alpha-min "$ALPHA_MIN" --alpha-max "$ALPHA_MAX" --n-alphas "$N_ALPHAS" \
-        --n-iter "$INCREMENTAL_N_ITER" \
-        --backend "$BACKEND" \
-        --model-random-state "$INCREMENTAL_MODEL_RANDOM_STATE" \
-        --glasser-dlabel "$GLASSER_DLABEL" \
-        "${INCREMENTAL_ROI_ARGS[@]}"
-}
-
 # =============================================================================
 # DISPATCH
 # =============================================================================
 case "$MODE" in
     preprocess) run_preprocess ;;
-    avg|persubject|groupstats|incremental_av|pairing_control|factorial_interaction|category_profile|all)
+    avg|persubject|groupstats|incremental_av|factorial_interaction|all)
         # These modes read binned embeddings/fMRI, so they sweep BIN_SECS.
         # preprocess above doesn't depend on bin duration and runs once
         # regardless of how many entries are in BIN_SECS.
@@ -755,16 +671,14 @@ case "$MODE" in
                 persubject) run_persubject ;;
                 groupstats) run_groupstats ;;
                 incremental_av) run_incremental_av ;;
-                pairing_control) run_pairing_control ;;
                 factorial_interaction) run_factorial_interaction ;;
-                category_profile) run_category_profile ;;
                 all)        run_avg; run_persubject; run_groupstats ;;
             esac
         done
         ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Use: preprocess | avg | persubject | groupstats | incremental_av | pairing_control | factorial_interaction | category_profile | all" >&2
+        echo "Use: preprocess | avg | persubject | groupstats | incremental_av | factorial_interaction | all" >&2
         exit 1 ;;
 esac
 

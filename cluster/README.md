@@ -22,18 +22,6 @@ This directory holds two independent pipelines that answer different questions:
   interaction machinery above. **This is the entry point for new clustering
   work.**
 
-- **Run-generalization analyses** — `channel_stability.py` independently
-  reclusters channels across runs and evaluates frozen memberships on held-out
-  activity. `heldout_roi_alignment.py` selects a channel-cluster match using
-  training runs and evaluates that fixed match in anatomical auditory and
-  posterior-temporal ROIs on the unseen run. Both are invoked through
-  `cluster.sh`.
-
-```bash
-bash cluster/cluster.sh channel_stability
-bash cluster/cluster.sh heldout_roi_alignment
-```
-
 ## Script reference
 
 - `state_content.py` — characterizes what each HMM temporal state represents in
@@ -47,18 +35,18 @@ bash cluster/cluster.sh heldout_roi_alignment
   `vertex_clustering.py`: reduces and clusters embedding channels
   (rows) across the 626 aligned 5-second movie bins (columns) instead of
   grayordinates across fMRI TRs; reuses the same reduction/clustering code,
-  writes labels to CSV (no grayordinate axis to save as `.dlabel.nii`). Unlike
-  the vertex side it still fits a shared preliminary PCA before the nonlinear
-  reducers, and there is no stimulus-driven mask (channels aren't spatial).
+  writes labels to CSV (no grayordinate axis to save as `.dlabel.nii`). Like
+  the vertex side, reductions are fit directly on the movie-bin time series —
+  no preliminary PCA; there is no stimulus-driven mask either (channels
+  aren't spatial).
 - `channel_timeseries_model_selection.py` — channel analogue of
-  `vertex_model_selection.py`; same sweep/selection-score math, CSV
+  `vertex_model_selection.py`; same sweep/selection math, CSV
   output instead of CIFTI.
 - `consolidate_vertex_outputs.py` — merges the selected vertex
   cluster maps into review CIFTIs (see the "Hyperparameter
   selection workflow" section below for details); `--delete-duplicates` removes
   the superseded per-run dlabels after a round-trip validation passes.
-- `screen_temporal_differentiation.py` — screens selected clusterings by temporal distinctness: computes mean/max off-diagonal Pearson correlation among cluster-mean profiles. Solutions with near-redundant profiles (r > 0.9) are flagged as uninformative. Outputs per-solution correlation matrices and visualizations to `outputs/cluster/profile_correlations/`.
-- `vertex_roi_hotspot_enrichment.py` — tests whether vertex clusters over-represent auditory/visual/audiovisual Glasser ROI groups or the top 10% of the full-AV-embedding searchlight RSA map, using hypergeometric enrichment against the stimulus-driven mask population. Outputs to `outputs/cluster/_vertex_roi_hotspot_enrichment/`.
+- `screen_temporal_differentiation.py` — screens selected clusterings by temporal distinctness: computes mean/max off-diagonal Pearson correlation among cluster-mean profiles. Solutions with near-redundant profiles (r > 0.9) are flagged as uninformative. Writes `outputs/cluster/_channel_vertex_alignment_screen.csv`.
 
 ## Vertex dimensionality reduction and clustering
 
@@ -135,23 +123,34 @@ bash cluster/run_vertex_model_selection.sh
 ```
 
 The reducer sweep evaluates geometry preservation on a fixed grayordinate
-sample. Its selection score weights trustworthiness (40%), continuity (40%),
-and Spearman agreement between high- and low-dimensional distances (20%). It
+sample. Its selection score combines trustworthiness, continuity, and
+Spearman agreement between high- and low-dimensional distances. It
 saves every candidate embedding and selects one configuration for each
 reducer at each dimensionality. The default dimension grid is
-`2,3,4,5,6,8,10`. PCA uses an explained-variance elbow, MDS normalized stress,
-Isomap geodesic reconstruction error, t-SNE KL divergence, FastICA normalized
-reconstruction MSE, and UMAP geometry-quality saturation to select one
-latent-best dimension per method. UMAP additionally sweeps landmark count,
-`n_neighbors`, and `min_dist`.
+`2,3,4,5,6,8,10`. Latent-dimension selection is a diminishing-returns elbow
+criterion: each method's per-dimension quality curve is compared against the
+straight chord connecting its first and last grid points, and the dimension
+with the largest gap above that chord wins. PCA uses an explained-variance
+curve, MDS normalized stress, Isomap geodesic reconstruction error, t-SNE KL
+divergence, FastICA normalized reconstruction MSE, and UMAP geometry-quality
+saturation as the underlying per-dimension quality metric. UMAP additionally
+sweeps landmark count, `n_neighbors`, and `min_dist`.
 
 The clustering sweep then tests multiple `k` values for k-means, multiple
 `min_cluster_size`/`min_samples` combinations for HDBSCAN, and multiple
-threshold/branching-factor combinations for BIRCH. Selection combines
-silhouette, Davies-Bouldin, Calinski-Harabasz, cluster-size balance, and
-assigned-data coverage. The full sweep tables are retained, while full-cortex
-dlabels are generated for the selected configuration of each clustering
-algorithm on every selected reducer/dimensionality pair.
+threshold/branching-factor combinations for BIRCH, recording silhouette,
+Davies-Bouldin, Calinski-Harabasz, cluster-size balance, and assigned-data
+coverage for every candidate. Each candidate's selection score is a composite
+of these internal validity indices and its cluster-size balance. The
+pipeline's internal ranking of these candidates is not a defensible way to
+choose cluster granularity (see
+`RESULTS.md`'s methodological caveat) and is never used downstream to pick a
+final solution — that selection is instead by temporal differentiation (mean
+absolute off-diagonal correlation between cluster mean timecourses, gated by
+assigned fraction >= 0.5; `screen_temporal_differentiation.py`). The full
+sweep tables are retained, while full-cortex dlabels are generated for every
+selected reducer/dimensionality x clustering-algorithm pair so any candidate
+can be pulled up for downstream screening.
 
 HDBSCAN's selected `min_cluster_size` is scaled by the ratio of full-cortex to
 evaluation-sample size before the final fit. This preserves the selected
@@ -175,7 +174,11 @@ review files; redundant individual and superseded dlabels are removed only
 after the consolidated files pass a round-trip validation.
 
 The executed notebooks are `cluster/vertex_cluster_scatterplots.ipynb` and
-`cluster/channel_cluster_scatterplots.ipynb`. Both include:
+`cluster/channel_cluster_scatterplots.ipynb`. Each has a single `MODEL`/`FAMILY`
+parameter at the top (default `nemotron_layer18_mp`; the channel notebook also
+accepts `peav`) that namespaces its figure output directory, so both models can
+be executed into separate figure trees without editing anything else. Both
+notebooks include:
 
 - reducer hyperparameter and dimension sweeps showing trustworthiness,
   continuity, distance-rank correlation, and each method's named criterion;
@@ -185,10 +188,14 @@ The executed notebooks are `cluster/vertex_cluster_scatterplots.ipynb` and
 - 36 selected display-space cluster plots;
 - 36 latent-best label projections onto 2-D and 3-D spaces;
 - 2 projections of the global latent-best winner;
-- cluster-evidence diagnostics, including independent-run stability for PE-AV.
+- cluster-evidence diagnostics comparing each selected solution's internal
+  validity (silhouette) against its temporal differentiation (mean absolute
+  off-diagonal correlation between cluster mean profiles).
 
-The executed channel and vertex notebooks contain 115 and 114 indexed figures,
-respectively. PE-AV is the channel notebook's default family.
+The executed vertex notebook contains 114 indexed figures (identical content
+per model, since vertex clustering is shared across families); the executed
+channel notebook contains 112 (peav) to 114 (nemotron_layer18_mp), since the
+active set of reducer hyperparameters swept differs slightly by family.
 
 Outputs are written under:
 
@@ -208,9 +215,5 @@ outputs/cluster/group_average/_vertex/norm-zscore_raw/
 │   └── selected_birch_clusterings_2d_3d_bestdim.dlabel.nii
 └── figures/
 ```
-
-The prior sweep trees (computed with a mandatory 50-component pre-PCA and no
-stimulus mask) are retired under
-`outputs/cluster/group_average/_superseded_vertex/`.
 
 All grids are configurable from the Python CLI. The workflow is resumable.

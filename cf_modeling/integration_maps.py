@@ -3,13 +3,18 @@ cf_modeling/integration_maps.py
 =================================
 Derive integration maps and save a single combined CIFTI from CF model results.
 
-For group_average mode: loads R² maps from the prep directory.
-For per_subject mode: aggregates R² maps across subjects (nanmean).
+For ``group_average`` mode: loads the CF fit to one group-mean fMRI time
+series from the prep directory.  This is not an average of fitted maps.
+For ``per_subject`` mode: aggregates subject-level CF R² maps (nanmean).
 
-Single CIFTI output: cf_result_{roi_a}_{roi_b}.dscalar.nii
+Single CIFTI output: cf_model_maps_{roi_a}_{roi_b}_*.dscalar.nii
   All scalar maps in one file for wb_view / viz_cf_modeling.ipynb:
-    R2_full, R2_{a}, R2_{b}, R2_null_{a}, R2_null_{b},
-    R2_{a}_nc, R2_{b}_nc, product_map, product_map_nc,
+    cf_model_full_r2, cf_model_split_r2_{a}, cf_model_split_r2_{b},
+    cf_model_roi_mean_null_r2_{a}, cf_model_roi_mean_null_r2_{b},
+    cf_model_null_corrected_split_r2_{a},
+    cf_model_null_corrected_split_r2_{b},
+    cf_model_joint_split_r2_geomean,
+    cf_model_joint_null_corrected_split_r2_geomean,
     modality_balance
 
 The 2D bimodal map (R²_a_nc vs R²_b_nc colour wheel) is generated in
@@ -17,6 +22,7 @@ viz_cf_modeling.ipynb via pycortex — not saved as a CIFTI.
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -29,6 +35,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from cifti_io import save_cifti_multimap
+from cf_modeling.cf_naming import (
+    cf_model_map_stems,
+    legacy_cf_model_map_stems,
+    per_subject_mean_stem,
+    resolve_cf_model_map_path,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)s  %(message)s",
@@ -43,12 +55,12 @@ _PYCORTEX_STORE = "/home/amin/Research/Representation/Movie/data/hedger2026"
 # Per-subject map collection
 # =============================================================================
 
-def collect_maps(subjects_dir, map_name, min_subjects):
-    """Load map_name.npy from all completed subject directories → (N, n_verts)."""
+def collect_maps(subjects_dir, map_name, min_subjects, legacy_name=None):
+    """Load a canonical subject map, accepting legacy names during migration."""
     sub_dirs = sorted(glob(os.path.join(subjects_dir, "*")))
     arrays, missing = [], []
     for sd in sub_dirs:
-        path = os.path.join(sd, f"{map_name}.npy")
+        path = resolve_cf_model_map_path(sd, map_name, legacy_name)
         if os.path.exists(path):
             arrays.append(np.load(path))
         else:
@@ -97,6 +109,8 @@ def main():
     roi_root = f"{args.output_base}/{args.mode}/{args.roi_a}_{args.roi_b}"
     roi_a    = args.roi_a
     roi_b    = args.roi_b
+    stems = cf_model_map_stems(roi_a, roi_b)
+    legacy_stems = legacy_cf_model_map_stems(roi_a, roi_b)
 
     log.info("=" * 60)
     log.info("Integration maps — %s  %s × %s", args.mode, roi_a, roi_b)
@@ -108,16 +122,19 @@ def main():
         out_cifti_dir = f"{roi_root}/cifti_maps"
         os.makedirs(out_cifti_dir, exist_ok=True)
 
-        log.info("Loading R² maps …")
-        R2_full    = np.load(os.path.join(prep_dir, "R2_full.npy"))
-        R2_a       = np.load(os.path.join(prep_dir, f"R2_{roi_a}.npy"))
-        R2_b       = np.load(os.path.join(prep_dir, f"R2_{roi_b}.npy"))
-        R2_null_a  = np.load(os.path.join(prep_dir, f"R2_null_{roi_a}.npy"))
-        R2_null_b  = np.load(os.path.join(prep_dir, f"R2_null_{roi_b}.npy"))
-        R2_a_nc    = np.load(os.path.join(prep_dir, f"R2_{roi_a}_nc.npy"))
-        R2_b_nc    = np.load(os.path.join(prep_dir, f"R2_{roi_b}_nc.npy"))
-        product    = np.load(os.path.join(prep_dir, "product_map.npy"))
-        product_nc = np.load(os.path.join(prep_dir, "product_map_nc.npy"))
+        log.info("Loading held-out CF R² maps …")
+        def _load(key):
+            return np.load(resolve_cf_model_map_path(
+                prep_dir, stems[key], legacy_stems[key]))
+        R2_full    = _load("full_r2")
+        R2_a       = _load("split_r2_a")
+        R2_b       = _load("split_r2_b")
+        R2_null_a  = _load("roi_mean_null_r2_a")
+        R2_null_b  = _load("roi_mean_null_r2_b")
+        R2_a_nc    = _load("null_corrected_split_r2_a")
+        R2_b_nc    = _load("null_corrected_split_r2_b")
+        product    = _load("joint_split_r2_geomean")
+        product_nc = _load("joint_null_corrected_split_r2_geomean")
 
     else:  # per_subject
         subjects_dir  = f"{roi_root}/subjects"
@@ -126,35 +143,34 @@ def main():
         os.makedirs(group_dir,     exist_ok=True)
         os.makedirs(out_cifti_dir, exist_ok=True)
 
-        log.info("Aggregating per-subject R² maps …")
-        def _avg(name):
-            return np.nanmean(collect_maps(subjects_dir, name, args.min_subjects),
+        log.info("Aggregating subject-level held-out CF R² maps …")
+        def _avg(key):
+            return np.nanmean(collect_maps(
+                subjects_dir, stems[key], args.min_subjects, legacy_stems[key]),
                               axis=0).astype(np.float32)
 
-        R2_full    = _avg("R2_full")
-        R2_a       = _avg(f"R2_{roi_a}")
-        R2_b       = _avg(f"R2_{roi_b}")
-        R2_null_a  = _avg(f"R2_null_{roi_a}")
-        R2_null_b  = _avg(f"R2_null_{roi_b}")
-        R2_a_nc    = _avg(f"R2_{roi_a}_nc")
-        R2_b_nc    = _avg(f"R2_{roi_b}_nc")
-        product    = _avg("product_map")
-        product_nc = _avg("product_map_nc")
+        R2_full    = _avg("full_r2")
+        R2_a       = _avg("split_r2_a")
+        R2_b       = _avg("split_r2_b")
+        R2_null_a  = _avg("roi_mean_null_r2_a")
+        R2_null_b  = _avg("roi_mean_null_r2_b")
+        R2_a_nc    = _avg("null_corrected_split_r2_a")
+        R2_b_nc    = _avg("null_corrected_split_r2_b")
+        product    = _avg("joint_split_r2_geomean")
+        product_nc = _avg("joint_null_corrected_split_r2_geomean")
         log.info("  Averaged %d subjects.", R2_a.shape[0] if R2_a.ndim > 1 else 1)
 
-        suffix = "_avg" if args.mode == "per_subject" else ""
-        for name, arr in [
-            (f"R2_full{suffix}",          R2_full),
-            (f"R2_{roi_a}{suffix}",        R2_a),
-            (f"R2_{roi_b}{suffix}",        R2_b),
-            (f"R2_null_{roi_a}{suffix}",   R2_null_a),
-            (f"R2_null_{roi_b}{suffix}",   R2_null_b),
-            (f"R2_{roi_a}_nc{suffix}",     R2_a_nc),
-            (f"R2_{roi_b}_nc{suffix}",     R2_b_nc),
-            (f"product_map{suffix}",       product),
-            (f"product_map_nc{suffix}",    product_nc),
+        for key, arr in [
+            ("full_r2", R2_full),
+            ("split_r2_a", R2_a), ("split_r2_b", R2_b),
+            ("roi_mean_null_r2_a", R2_null_a),
+            ("roi_mean_null_r2_b", R2_null_b),
+            ("null_corrected_split_r2_a", R2_a_nc),
+            ("null_corrected_split_r2_b", R2_b_nc),
+            ("joint_split_r2_geomean", product),
+            ("joint_null_corrected_split_r2_geomean", product_nc),
         ]:
-            np.save(os.path.join(group_dir, f"{name}.npy"), arr)
+            np.save(os.path.join(group_dir, f"{per_subject_mean_stem(stems[key])}.npy"), arr)
 
     # ── Derived maps ──────────────────────────────────────────────────────────
     modality_balance = (
@@ -163,12 +179,13 @@ def main():
 
     # ── Single combined CIFTI with all maps ───────────────────────────────────
     map_names = [
-        "R2_full",
-        f"R2_{roi_a}",       f"R2_{roi_b}",
-        f"R2_null_{roi_a}",  f"R2_null_{roi_b}",
-        f"R2_{roi_a}_nc",    f"R2_{roi_b}_nc",
-        "product_map",       "product_map_nc",
-        "modality_balance"
+        stems["full_r2"],
+        stems["split_r2_a"], stems["split_r2_b"],
+        stems["roi_mean_null_r2_a"], stems["roi_mean_null_r2_b"],
+        stems["null_corrected_split_r2_a"], stems["null_corrected_split_r2_b"],
+        stems["joint_split_r2_geomean"],
+        stems["joint_null_corrected_split_r2_geomean"],
+        "cf_model_null_corrected_split_r2_balance"
     ]
     map_arrays = [
         R2_full,
@@ -179,8 +196,11 @@ def main():
         modality_balance
     ]
 
+    estimate = ("fit_to_group_mean_timeseries" if args.mode == "group_average"
+                else "mean_of_subject_maps")
     combined_path = os.path.join(
-        out_cifti_dir, f"cf_result_{roi_a.lower()}_{roi_b.lower()}.dscalar.nii")
+        out_cifti_dir,
+        f"cf_model_maps_{roi_a.lower()}_{roi_b.lower()}_{estimate}.dscalar.nii")
     save_cifti_multimap(
         np.vstack([a.reshape(1, -1) for a in map_arrays]),
         map_names,
@@ -191,6 +211,20 @@ def main():
     for name, arr in zip(map_names, map_arrays):
         log.info("  %-25s mean=%+.4f  frac>0=%.1f%%",
                  name, float(np.nanmean(arr)), 100.0 * float(np.mean(arr > 0)))
+
+    # Keep cifti_maps/ view-only: CIFTIs and legends, no JSON sidecars.
+    metadata_path = Path(out_cifti_dir).parent / (
+        f"cf_model_maps_{roi_a.lower()}_{roi_b.lower()}_{estimate}.json")
+    metadata_path.write_text(json.dumps({
+        "analysis": "connective_field_model_heldout_r2_maps",
+        "estimate": estimate,
+        "estimate_definition": (
+            "One CF model fit to the group-mean fMRI time series."
+            if args.mode == "group_average" else
+            "Arithmetic mean of independently fitted subject-level CF maps."),
+        "map_names": map_names,
+        "cifti": combined_path,
+    }, indent=2) + "\n")
 
     log.info("\nintegration_maps.py complete.")
 

@@ -225,23 +225,17 @@ bins.
 
 ### 2.7 Clustering: the k=2 bias, and how it was screened out
 
-The clustering selection score shared by `cluster/vertex_model_selection.py` and
-`cluster/channel_timeseries_model_selection.py`
-(`vertex_model_selection.py:642-644`, verified) is:
-
-```
-0.35·silhouette_unit + 0.20·(1/(1+davies_bouldin)) + 0.15·calinski_harabasz_unit
-+ 0.15·cluster_size_balance + 0.15·assigned_fraction
-```
-
-Silhouette dominates (35%) and silhouette rewards few, well-separated clusters, so the
-score is structurally biased toward k=2. On the **vertex side**, k=2 wins every
-selection role (display_2d 0.933, display_3d 0.922, latent_best 0.861 — all confirmed on
-disk), and its two cluster-mean time series correlate at r≈0.97 — near-total temporal
-redundancy, i.e. one shared stimulus-locked global signal split in two, not two
-functionally distinct networks. On the **channel side**, the bias appears for nemotron and
-topoomni but not for peav (peav's `latent_best` winner is k=16). Full tables:
-`cluster/RESULTS.md` §1.
+The clustering pipeline (`cluster/vertex_model_selection.py`, shared by
+`cluster/channel_timeseries_model_selection.py`) picks a winning configuration per
+selection role via an internal selection criterion (never reported here — see below).
+That criterion rewards few, well-separated clusters, so it is structurally biased
+toward k=2. On the **vertex side**, k=2 wins every
+selection role (silhouette 0.885, 0.865, 0.715 for display_2d/display_3d/latent_best —
+all confirmed on disk), and its two cluster-mean time series correlate at r≈0.97 —
+near-total temporal redundancy, i.e. one shared stimulus-locked global signal split in
+two, not two functionally distinct networks. On the **channel side**, the bias appears
+for nemotron and topoomni but not for peav (peav's `latent_best` winner is k=16). Full
+tables: `cluster/RESULTS.md` §1.
 
 **The fix applied:** `cluster/screen_temporal_differentiation.py` computes, for every
 candidate clustering, the mean |off-diagonal Pearson r| among that solution's own
@@ -252,8 +246,8 @@ its best (plateaus at 0.406–0.55, no k tested reaches full separation). Channe
 and nemotron reach 0.10–0.18 at k=12–44 (well-differentiated); **topoomni never drops below
 ≈0.27 at any k from 2 to 100** — no swept topoomni channel configuration is usable as a
 differentiated clustering (`outputs/cluster/_channel_vertex_alignment_screen.csv`, 216
-rows). **The top-`selection_score` row must never be taken as "the" clustering for a
-downstream analysis without this screen.**
+rows). **The top row of the pipeline's internal composite must never be taken as "the"
+clustering for a downstream analysis without this screen.**
 
 Visualized in `cluster/vertex_cluster_scatterplots.ipynb` (vertex side) and
 `cluster/channel_cluster_scatterplots.ipynb` (channel side, same six
@@ -310,11 +304,10 @@ sanity check, not wired into any `analysis.sh` or module).
 Every previous Topo-Omni result in this project used `topoomni_layer18_sheet_mp` — one
 thinker-stack layer, 4 of 304 rows of the sheet. This analysis covers all 304×512 = 155,648
 units, and is now a single consolidated script (`rsa/full_sheet_rsa.py`) rather than three
-overlapping ones: it replaces a layer-18-only raster-lattice driver (`cca_seed_sheet_rsa.py`,
-2,048 units = 1.3% of the sheet, plotted at the fallback lattice the checkpoint was not
-trained under) and a hand-picked-6-layer true-coordinate driver (`cca_seed_sheet_rsa_
-truecoords.py`); both are retired. Shared geometry/plotting/`characterize()` now live in
-`rsa/shared/sheet_rsa.py`.
+overlapping ones: it replaces a layer-18-only raster-lattice driver (2,048 units = 1.3% of the
+sheet, plotted at the fallback lattice the checkpoint was not trained under) and a
+hand-picked-6-layer true-coordinate driver; both retired scripts are gone from `rsa/`. Shared
+geometry/plotting/`characterize()` now live in `rsa/shared/sheet_rsa.py`.
 
 **Sheet geometry.** The model loaded is `Qwen2_5OmniThinkerForConditionalGeneration` — the
 Thinker only; the Talker (speech generation) is never instantiated, so **the whole sheet is
@@ -356,22 +349,44 @@ positive in only 31.16% of units — the audio tower is 26.3% of the sheet, whic
 reconciles a positive mean with a minority of positive units. Hotspots (top decile by rho) are
 almost entirely audio: cca_a 15,480/15,565 (99.5%), cca_p 15,255/15,565 (98.0%).
 
-**Topography control — does not pass.** True k=100 spatial neighbourhood vs. k=100 random
-units drawn uniformly from the same tower (coordinates ignored), 3 draws, folded into
-`rsa/full_sheet_rsa.py` rather than a separate follow-up script. Across all 8 combinations
-checked (2 seeds × {overall, vision, audio, thinker}), the true neighbourhood did **not**
-outperform the random same-tower sample — `true_beats_random=false` throughout, e.g. cca_a
-overall true mean 0.1157 vs. random mean 0.1697; cca_a audio tower true 0.2732 vs. random
-0.3966. Report this plainly: nothing here supports a claim that the k=100 searchlight is
-using genuine 2-D spatial topography within a tower, as opposed to sampling an arbitrary
-same-tower subset. The per-tower magnitude comparisons above do not depend on this control and
-are unaffected by it.
+**Topography control — does not test what it looks like it tests.** True k=100 spatial
+neighbourhood vs. k=100 random units drawn uniformly from the same tower (coordinates
+ignored), 3 draws, folded into `rsa/full_sheet_rsa.py` rather than a separate follow-up
+script. Across all 8 combinations checked (2 seeds × {overall, vision, audio, thinker}), the
+true neighbourhood scored *lower* than the random same-tower sample — `true_beats_random=false`
+throughout, e.g. cca_a overall true mean 0.1157 vs. random mean 0.1697; cca_a audio tower true
+0.2732 vs. random 0.3966. That result does **not** mean the true coordinates carry no
+topography: the regenerated sheet maps show obvious, strong spatial structure (smooth,
+labyrinthine, not scattered) across all three towers, and spatial smoothness is exactly what
+predicts a compact k=100 patch scoring lower than a scattered same-size draw — adjacent units
+in a smooth map are mutually redundant, so the patch spans fewer independent dimensions than
+an equally sized scattered sample. The control is uninformative about whether the topography
+is meaningful, in either direction — it neither confirms nor refutes it. A control that would
+bear on that question would compare against a sheet with the spatial-smoothness loss ablated,
+or against a spatially shuffled sheet that preserves the marginal rho distribution — neither
+has been run. The per-tower magnitude comparisons above do not depend on this control and are
+unaffected by it.
+
+**Per-unit inference on the difference (added).** The per-seed FDR tests above are each
+against zero; they say nothing about rho(cca_a) vs. rho(cca_p) directly. A paired two-sided
+permutation test now does: `perm_idx_all` is generated once in `full_sheet_rsa.py`'s `main()`
+and reused for both seeds, so permutation j is the identical within-run circular shift for
+both, making `null_diff_j(unit) = null_rho_a_j(unit) - null_rho_p_j(unit)` a genuine paired
+null (verified against an independently-shuffled/unpaired null in
+`tests/test_perm_searchlight.py`, which gives a different exceedance count on the same data).
+p(unit) = (1 + #{j : |null_diff_j| >= |observed_diff|}) / (1 + n_perm), BH-FDR across all
+155,648 units. See `metadata.json`'s `diff_inference` key for the exact fraction
+FDR-significant and its by-tower breakdown, and `rsa/README.md`'s "Full-sheet RSA" section for
+the same numbers narrated.
 
 **Caveats — limits, not findings:**
 
-- Cross-seed spatial Pearson r = 0.8639, top-decile hotspot Jaccard 0.7940. The two seed maps
-  are largely the same map; the A-P contrast is a residual on a large shared signal, not two
-  independent topographies.
+- Cross-seed spatial Pearson r = 0.8639, top-decile hotspot Jaccard 0.7940 — both high, so the
+  two seed maps largely coincide overall. That is not the whole picture: the difference map has
+  real structure concentrated in the audio tower (per-tower mean rho, cca_a/cca_p: vision
+  0.0395/0.0506, audio 0.2732/0.1439, thinker 0.0706/0.0931), so the A-P contrast is not spread
+  uniformly across a residual on an otherwise identical map — it is a specific, audio-tower
+  effect. Both facts hold at once.
 - The hotspot contiguity test is saturated and must not be cited as evidence:
   `observed_mean_nn_dist` 1.00232 (cca_a) / 1.00343 (cca_p) against an integer-grid floor of
   exactly 1.0, versus a null of ~1.7059, p = 0.0005 — exactly 1/2001, the smallest value 2000
@@ -383,9 +398,11 @@ are unaffected by it.
   preference analysis (unlike the retired layer-18/truecoords scripts) is possible here.
 
 **Artifacts:** `outputs/rsa/cca_seed_sheet_rsa/fullsheet_k100_truecoords/` — two `_rho.npy`,
-two `.csv`, three PNG sheet maps (`cca_a_av_rho_sheet_map.png`, `cca_p_av_rho_sheet_map.png`,
-`diff_rho_sheet_map.png`), `metadata.json`. See `rsa/README.md` for the full parameter and file
-listing.
+three `.csv` (`cca_a_av.csv`, `cca_p_av.csv`, `diff.csv`), the paired-difference `diff_p_perm.npy`
+and `diff_p_fdr.npy`, five PNG sheet maps (`cca_a_av_rho_sheet_map.png`,
+`cca_p_av_rho_sheet_map.png` sharing one colour scale, `diff_rho_sheet_map.png`,
+`diff_p_sheet_map.png`, `diff_fdr_sig_sheet_map.png`), `metadata.json`. See `rsa/README.md` for
+the full parameter and file listing.
 
 ## 3. Analysis graph
 
@@ -495,19 +512,14 @@ output location where the script writes.
 
 - `README.md` — new module documentation (the two independent pipelines, script reference,
   hyperparameter-selection workflow); see there for full usage.
-- `RESULTS.md` — the write-up of the clustering-selection pipeline's results, including the
-  k=2 bias, the temporal-differentiation screen, and the channel-vertex alignment findings
-  quoted throughout §2.7–2.8 above; also flags its own internal cross-check that one
-  upstream brief mislabeled channel-side scores as vertex-side (worth knowing if that
-  labeling resurfaces elsewhere).
+- `RESULTS.md` — the write-up of the clustering-selection pipeline's two retained
+  descriptive screens: selection-score bias toward $k=2$ and temporal differentiation
+  of the resulting cluster means.
 - `channel_timeseries_clustering.py` — channel analogue of `vertex_clustering.py`:
   reduces/clusters embedding channels (rows) across the 626 movie bins (columns); writes
   CSV labels (no grayordinate axis).
 - `channel_timeseries_model_selection.py` — channel analogue of
   `vertex_model_selection.py`; same sweep/selection-score math, CSV output.
-- `channel_vertex_alignment.py` — the channel↔vertex alignment test (§2.8); writes
-  `outputs/cluster/{family}/_channel_vertex_alignment/{config pair}/alignment_manifest.json`
-  + `alignment_long_globalctrl.csv`.
 - `consolidate_vertex_outputs.py` — merges selected vertex-clustering maps
   into six review CIFTIs under `review_ciftis/`, including the stable
   `best_vertex_clusterings.dlabel.nii`; `--delete-duplicates` removes superseded per-run
@@ -525,7 +537,7 @@ output location where the script writes.
   `outputs/cluster/group_average/_vertex/`.
 - `vertex_model_selection.py` — the two-stage hyperparameter-selection pipeline
   (reducer sweep via trustworthiness/continuity/rank agreement, then clustering sweep via
-  the silhouette-weighted score in §2.7); writes
+  an internal selection criterion, see §2.7); writes
   `outputs/cluster/group_average/_vertex/`.
 
 ### `rsa/`
@@ -594,10 +606,12 @@ and are not separately itemized here.
 - `outputs/cf_modeling/persubject_cca_1pct/` — §2.6's output tree.
 - `outputs/cf_modeling/channel_cca_preference/` — §2.6/channel-CCA notebook's full
   `results/{analyses,rsa,tables,figures}/` tree.
-- `outputs/cluster/{peav,nemotron_layer18_mp,topoomni_layer18_sheet_mp}/_channel_timeseries_model_selection/`
-  and `.../_channel_vertex_alignment/` — §2.7/2.8's per-family channel-side outputs.
-- `outputs/cluster/_channel_vertex_alignment_screen.csv` — the temporal-differentiation
-  screen output (§2.7).
+- `outputs/cluster/{peav,nemotron_layer18_mp}/_channel_timeseries_model_selection/` and
+  `outputs/cluster/group_average/_vertex/norm-zscore_raw/` — the selected channel and
+  vertex clustering candidates used by the two retained screens.
+- `outputs/cluster/_channel_vertex_alignment_screen.csv` — despite its legacy filename,
+  this is now the temporal-differentiation screen output; it contains no channel--vertex
+  alignment inference.
 - §2.5's three partial-RSA variants are consolidated into three 5-map CIFTIs under
   `outputs/rsa/raw/group_average/pe-av-small-16-frame_av/`:
   `rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_partial_corr_from_unimodals.dscalar.nii`
@@ -631,9 +645,12 @@ and are not separately itemized here.
   two-axis specification (§2.6).
 - **Sheet-RSA topography control, within-tower version.** Done as part of §2.11's
   consolidated `rsa/full_sheet_rsa.py` (`random_neighbors_within_tower`, grouped by
-  vision/audio/thinker instead of the old confounded whole-pool draw) — see §2.11 for the
-  result, which did not favour the true k-NN neighbourhood over the random same-tower
-  control for most seed/tower combinations.
+  vision/audio/thinker instead of the old confounded whole-pool draw) — see §2.11: the true
+  k-NN neighbourhood scored lower than the random same-tower control in every combination, but
+  that is what spatial smoothness predicts and is uninformative about whether the topography is
+  meaningful, not evidence against it (§2.11 explains why). A control that would actually bear
+  on that question (spatial-loss-ablated sheet, or marginal-preserving spatially shuffled sheet)
+  has not been run.
 
 ## Discrepancy notes (numbers that did not check out as originally stated, or needed correction)
 

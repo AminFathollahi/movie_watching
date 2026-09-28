@@ -21,6 +21,7 @@ lboe_count = NAMING.lboe_count
 qualify_lboe = NAMING.qualify_lboe
 strip_lboe_suffix = NAMING.strip_lboe_suffix
 persubject_output_root = NAMING.persubject_output_root
+validate_roi_mean_preprocessing = NAMING.validate_roi_mean_preprocessing
 apply_plan = MIGRATION.apply_plan
 plan_migration = MIGRATION.plan_migration
 
@@ -31,6 +32,13 @@ def test_lboe_names_are_terminal_and_idempotent():
     assert strip_lboe_suffix("cca_a_peav_1pct_lboe100") == "cca_a_peav_1pct"
     assert lboe_count("cca_a_peav_1pct_lboe100") == 100
     assert lboe_count("cca_a_peav_1pct") is None
+
+
+def test_roi_mean_preprocessing_labels_are_explicit_and_validated():
+    assert validate_roi_mean_preprocessing("sg_psc_per_run_zscore") == \
+        "sg_psc_per_run_zscore"
+    assert validate_roi_mean_preprocessing("raw_per_run_zscore") == \
+        "raw_per_run_zscore"
 
 
 def test_persubject_output_root_honours_override_and_default(monkeypatch, tmp_path: Path):

@@ -16,7 +16,7 @@ linear_residual()
     Ridge-regression residual of a joint (AV) embedding w.r.t. one or more
     nuisance embeddings, fit ACROSS ALL SAMPLES (one shared linear map,
     cross-validated regularization). Thin wrapper around
-    rsa.multimodal_decomposition.compute_interaction_residual_cv -- that
+    cka.multimodal_decomposition.compute_interaction_residual_cv -- that
     function already existed (built for encoding/variance_partition.py's
     Move-6 AVresid band); this module just gives RSA-side generation scripts
     the same import path so both sides share one implementation.
@@ -66,7 +66,7 @@ def linear_residual(
     ms_score   : float -- ||R||_F^2 / ||J||_F^2
     best_alpha : float -- selected ridge alpha
     """
-    from rsa.multimodal_decomposition import compute_interaction_residual_cv
+    from cka.multimodal_decomposition import compute_interaction_residual_cv
     return compute_interaction_residual_cv(
         J, nuisance_list, alpha_grid=alpha_grid, cv_folds=cv_folds
     )

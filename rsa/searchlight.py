@@ -84,6 +84,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+DISTANCE_LABELS = {"correlation": "corr", "euclidean": "euclid"}
+REPEATED_CLIPS = ("video5", "video9", "video14", "video18")
+
 # n_jobs for joblib parallelism inside each subject's searchlight.
 # Read from env var _RSA_N_JOBS (set by analysis.sh based on BATCH_SIZE).
 # Default -1 (all CPUs) is fine when running a single subject, but MUST be
@@ -206,6 +209,13 @@ def parse_args():
                         "for 60k vertices × ~1M pairs each. Use spearman for the searchlight; "
                         "rho_a is used at the parcel level (glasser.py) where it is feasible "
                         "and the noise-ceiling advantage matters most.")
+    p.add_argument("--distance", choices=list(DISTANCE_LABELS), default="correlation",
+                   help="Dissimilarity of window pairs, in the brain and the model RDM. "
+                        "euclidean = squared Euclidean distance. A non-default value or "
+                        "--drop-repeated-clips writes only a diagnostic map (see README).")
+    p.add_argument("--drop-repeated-clips", action="store_true", dest="drop_repeated_clips",
+                   help="Drop the windows of the repeated clips after per-run normalization "
+                        "(diagnostic map; group-average disk mode only).")
     p.add_argument("--n-blocks", type=int, default=4, dest="n_blocks",
                    help="Number of non-overlapping temporal blocks for the condition bootstrap "
                         "(Schütt et al. 2023, Eq. 5). Each block gets its own RSA map, saved as "
@@ -403,7 +413,8 @@ def get_neighbors(surface_path: str, workbench: str, subject: str,
 # =============================================================================
 
 def _precompute_model_rdm(emb: np.ndarray, n_bins: int,
-                           tril_idx: tuple, method: str) -> tuple:
+                           tril_idx: tuple, method: str,
+                           distance: str = "correlation") -> tuple:
     """Precompute model RDM condensed flat form + normalised ranks (once per hemisphere).
 
     Returns
@@ -415,13 +426,19 @@ def _precompute_model_rdm(emb: np.ndarray, n_bins: int,
     # Constant features become NaN during per-run z-scoring. Treat them as
     # zero-valued dimensions so a degenerate model RDM yields zero correlation.
     emb64 = np.nan_to_num(emb.astype(np.float64), copy=False)
-    mu = emb64.mean(axis=1, keepdims=True)
-    ec = emb64 - mu
-    norms = np.sqrt((ec ** 2).sum(axis=1, keepdims=True))
-    norms[norms < 1e-10] = 1.0
-    en = ec / norms
-    sim = en @ en.T                                     # (n_bins, n_bins)
-    model_flat = (1.0 - sim)[tril_idx].astype(np.float32)
+    if distance == "euclidean":
+        ec = emb64 - emb64.mean(axis=0, keepdims=True)
+        gram = ec @ ec.T
+        dg = np.diag(gram)
+        model_flat = (dg[:, None] + dg[None, :] - 2 * gram)[tril_idx].astype(np.float32)
+    else:
+        mu = emb64.mean(axis=1, keepdims=True)
+        ec = emb64 - mu
+        norms = np.sqrt((ec ** 2).sum(axis=1, keepdims=True))
+        norms[norms < 1e-10] = 1.0
+        en = ec / norms
+        sim = en @ en.T                                     # (n_bins, n_bins)
+        model_flat = (1.0 - sim)[tril_idx].astype(np.float32)
 
     if method == "spearman":
         ranks = rankdata(model_flat).astype(np.float32)
@@ -442,7 +459,8 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
                                neighbors: np.ndarray,
                                vertex_to_col: np.ndarray,
                                tril_idx: tuple,
-                               method: str) -> float:
+                               method: str,
+                               distance: str = "correlation") -> float:
     """Optimised per-vertex RSA: float32 matmul RDM + Spearman via argsort.
 
     Replaces squareform(pdist) + spearmanr with:
@@ -468,13 +486,19 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
 
     hood = fmri[:, neighbor_cols]   # float32, matching GPU path
 
-    # Row-normalise to get unit correlation vectors (fast RDM via matmul)
-    mu = hood.mean(axis=1, keepdims=True)
-    hc = hood - mu
-    norms = np.sqrt((hc ** 2).sum(axis=1, keepdims=True))
-    norms[norms < 1e-10] = 1.0
-    hn = hc / norms
-    fmri_flat = (1.0 - hn @ hn.T)[tril_idx]   # float32 condensed RDM
+    if distance == "euclidean":
+        hk = hood - hood.mean(axis=0, keepdims=True)
+        gram = hk @ hk.T
+        dg = np.diag(gram)
+        fmri_flat = (dg[:, None] + dg[None, :] - 2 * gram)[tril_idx]
+    else:
+        # Row-normalise to get unit correlation vectors (fast RDM via matmul)
+        mu = hood.mean(axis=1, keepdims=True)
+        hc = hood - mu
+        norms = np.sqrt((hc ** 2).sum(axis=1, keepdims=True))
+        norms[norms < 1e-10] = 1.0
+        hn = hc / norms
+        fmri_flat = (1.0 - hn @ hn.T)[tril_idx]   # float32 condensed RDM
 
     if method == "spearman":
         # Rank-order the fMRI distances; Pearson on ranks = Spearman
@@ -497,7 +521,8 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                     vertex_to_col: np.ndarray,
                     method: str = "spearman",
                     n_jobs: int = -1,
-                    batch_size: int = 512) -> np.ndarray:
+                    batch_size: int = 512,
+                    distance: str = "correlation") -> np.ndarray:
     """Searchlight RSA across all grayordinate vertices.
 
     GPU is attempted unconditionally when CUDA is available; CUDA OOM triggers
@@ -517,7 +542,7 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
     n_verts = fmri.shape[1]
     n_bins = fmri.shape[0]
     tril_idx = np.tril_indices(n_bins, k=-1)
-    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
+    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method, distance)
     if not np.any(model_norm):
         log.info("  Model RDM has no variance; returning a zero RSA map")
         return np.zeros(n_verts, dtype=np.float32)
@@ -539,6 +564,7 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                 return run_searchlight_gpu(
                     fmri, model_emb, neighbors, surface_indices,
                     vertex_to_col, method, batch_size=batch_size, device="cuda",
+                    distance=distance,
                 )
             except _oom_types as e:
                 log.warning(f"  GPU OOM ({type(e).__name__}) — falling back to CPU searchlight")
@@ -564,7 +590,7 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
         Parallel(n_jobs=n_jobs, prefer="threads")(
             delayed(_searchlight_vertex_fast)(
                 int(surface_indices[v]), fmri, model_norm,
-                neighbors, vertex_to_col, tril_idx, method
+                neighbors, vertex_to_col, tril_idx, method, distance
             )
             for v in range(n_verts)
         ),
@@ -582,6 +608,7 @@ def run_searchlight_gpu(
     method: str = "spearman",
     batch_size: int = 512,
     device: str = "cuda",
+    distance: str = "correlation",
 ) -> np.ndarray:
     """GPU-batched searchlight RSA.
 
@@ -614,7 +641,7 @@ def run_searchlight_gpu(
     n_pairs  = len(tril_idx[0])
 
     log.info(f"  [GPU] Precomputing model RDM ({method}) ...")
-    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
+    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method, distance)
     model_norm_t  = torch.from_numpy(model_norm).to(device)            # (n_pairs,)
     # fmri on GPU, transposed for fast column gather: (n_hem_verts, n_bins)
     fmri_t = torch.from_numpy(fmri.T.astype(np.float32)).to(device)   # (n_hem_verts, n_bins)
@@ -654,15 +681,19 @@ def run_searchlight_gpu(
         hood = fmri_t[batch_nc_t]                                       # (B, k, n_bins)
         hood = hood.permute(0, 2, 1).float()                            # (B, n_bins, k)
 
-        # Row-normalise each (n_bins, k) slice for cosine-based RDM
-        mu    = hood.mean(dim=2, keepdim=True)
-        hc    = hood - mu
-        norms = torch.linalg.norm(hc, dim=2, keepdim=True).clamp(min=1e-10)
-        hn    = hc / norms                                              # (B, n_bins, k)
-
-        # RDM via batched matmul: (B, n_bins, n_bins)
-        rdm_full  = torch.bmm(hn, hn.permute(0, 2, 1))
-        fmri_flat = (1.0 - rdm_full)[:, tril_row, tril_col]            # (B, n_pairs)
+        if distance == "euclidean":
+            hk   = hood - hood.mean(dim=1, keepdim=True)
+            gram = torch.bmm(hk, hk.permute(0, 2, 1))
+            dg   = gram.diagonal(dim1=1, dim2=2)
+            rdm_full = dg[:, :, None] + dg[:, None, :] - 2 * gram
+        else:
+            # Row-normalise each (n_bins, k) slice for cosine-based RDM
+            mu    = hood.mean(dim=2, keepdim=True)
+            hc    = hood - mu
+            norms = torch.linalg.norm(hc, dim=2, keepdim=True).clamp(min=1e-10)
+            hn    = hc / norms                                          # (B, n_bins, k)
+            rdm_full = 1.0 - torch.bmm(hn, hn.permute(0, 2, 1))        # (B, n_bins, n_bins)
+        fmri_flat = rdm_full[:, tril_row, tril_col]                    # (B, n_pairs)
 
         if method == "spearman":
             # Rank the fMRI distances (argsort of argsort = rank)
@@ -686,7 +717,7 @@ def run_searchlight_gpu(
         for v in partial_k_verts:
             sv = int(surf_verts_for_v[v])
             corr_map[v] = _searchlight_vertex_fast(
-                sv, fmri_cpu, model_norm, neighbors, vertex_to_col, tril_idx, method
+                sv, fmri_cpu, model_norm, neighbors, vertex_to_col, tril_idx, method, distance
             )
 
     return corr_map
@@ -783,6 +814,15 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
 
     bin_sec_int   = int(args.bin_sec)
     skip_int      = int(args.skip_sec)
+    diagnostic    = args.distance != "correlation" or args.drop_repeated_clips
+    if diagnostic:
+        label = f"{DISTANCE_LABELS[args.distance]}-{args.method}"
+        diag_stem = searchlight_stem(fmri_tag, args.k, args.delay_sec, args.bin_sec, args.skip_sec,
+                                     label, args.model_norm) + ("_norepeats" if args.drop_repeated_clips else "")
+        diag_path = out_root.parent / "diagnostics" / f"{diag_stem}_maps.dscalar.nii"
+        if diag_path.exists():
+            log.info(f"Output already exists — skipping: {diag_path.name}")
+            return
     stem          = _file_stem(args, fmri_tag)
     maps_out      = out_root / f"{stem}_searchlight.npy"
     map_name      = f"searchlight_{args.method}_rho"
@@ -852,6 +892,12 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
 
     # Enforce exact temporal alignment
     fmri_binned, emb = align_and_assert_bins(fmri_binned, emb)
+    if args.drop_repeated_clips:
+        from cka.shared.kernels import window_index
+        videos, _ = window_index(timing_df, run_trs, args.bin_sec, args.skip_sec, args.delay_sec, args.tr)
+        assert len(videos) == fmri_binned.shape[0], (len(videos), fmri_binned.shape)
+        keep = ~np.isin(videos, REPEATED_CLIPS)
+        fmri_binned, emb = fmri_binned[keep], emb[keep]
     n_bins = fmri_binned.shape[0]
     log.info(f"  n_bins={n_bins}  n_pairs={(n_bins*(n_bins-1)//2):,}")
 
@@ -892,7 +938,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
             surface_indices=surf_indices,
             vertex_to_col=vertex_to_col,
             method=args.method, n_jobs=N_JOBS,
-            batch_size=args.gpu_batch_size,
+            batch_size=args.gpu_batch_size, distance=args.distance,
         )
 
         n_hem = corr_hem.shape[0]
@@ -901,6 +947,12 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
 
         del neighbors, vertex_to_col, corr_hem
         gc.collect()
+
+    if diagnostic:
+        diag_path.parent.mkdir(parents=True, exist_ok=True)
+        save_cifti_map(corr_full, args.template_cifti, str(diag_path), label)
+        log.info(f"  Saved: {diag_path.name}  mean_r={corr_full.mean():.4f}  max_r={corr_full.max():.4f}")
+        return
 
     # ── Block RSA pass (Schütt et al. 2023, Eq. 5 condition bootstrap) ──────
     # Split the time series into n_blocks non-overlapping segments and compute
@@ -1108,6 +1160,10 @@ def main():
         sys.exit(1)
     if not args.preprocessed_dir and not args.raw_dir:
         log.error("Either --preprocessed-dir or --raw-dir is required.")
+        sys.exit(1)
+
+    if args.raw_dir and (args.distance != "correlation" or args.drop_repeated_clips):
+        log.error("--distance and --drop-repeated-clips need --preprocessed-dir.")
         sys.exit(1)
 
     if args.raw_dir:

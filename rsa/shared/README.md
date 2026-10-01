@@ -73,7 +73,7 @@ Embedding location convention: `{embeddings_dir}/{model}/bin{B}s_skip{S}s/{model
 
 | Function | What it computes |
 |---|---|
-| `linear_residual(J, nuisance_list, alpha_grid=None, cv_folds=5)` | Ridge-regression residual `R` of the joint embedding `J (n, d_J)` after regressing on the concatenated, z-scored nuisance embeddings, with one linear map fit across all samples and the ridge penalty chosen by `cv_folds`-fold cross-validation (`alpha_grid` default `logspace(0, 8, 30)`). Returns `(R, ms_score, best_alpha)` with `ms_score = ||R||_F^2 / ||J||_F^2`. Implemented by `rsa.multimodal_decomposition.compute_interaction_residual_cv` |
+| `linear_residual(J, nuisance_list, alpha_grid=None, cv_folds=5)` | Ridge-regression residual `R` of the joint embedding `J (n, d_J)` after regressing on the concatenated, z-scored nuisance embeddings, with one linear map fit across all samples and the ridge penalty chosen by `cv_folds`-fold cross-validation (`alpha_grid` default `logspace(0, 8, 30)`). Returns `(R, ms_score, best_alpha)` with `ms_score = ||R||_F^2 / ||J||_F^2`. Implemented by `cka.multimodal_decomposition.compute_interaction_residual_cv` |
 | `projection_residual(av, a, v, eps=1e-8)` | For each row `t` independently: Gram-Schmidt orthonormalize `(a_t, v_t)` into `u1, u2` (a vector with norm below `eps` is dropped), and return `av_t - (av_t . u1) u1 - (av_t . u2) u2`. `av`, `a`, `v` must have the same shape |
 
 The generator scripts save results as ordinary `{model}_{modality}.npy` embedding files, which `searchlight.py` and `partial_rsa.py` then read like any other model.

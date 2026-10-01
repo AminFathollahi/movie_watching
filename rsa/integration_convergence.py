@@ -9,7 +9,7 @@ that the integration territory is a property of the BRAIN, not an artifact
 of any one embedding. Tests the hypothesis that integration lives in the
 INFORMATION content, not the training objective, so it should be visible
 across architecturally distinct native-AV models (see
-rsa/multimodal_decomposition.py's docstring for the underlying decomposition).
+cka/multimodal_decomposition.py's docstring for the underlying decomposition).
 
 Two convergence layers, both saved and reported:
   convergence_mean_z    : per-vertex mean of z-scored (across-cortex)

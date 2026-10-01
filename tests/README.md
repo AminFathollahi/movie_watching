@@ -30,12 +30,19 @@ Some tests load scripts by file path (`importlib.util.spec_from_file_location`) 
 | `test_variance_partition.py` | Separate audio, video and joint embedding sources, tag placement in output names, per-clip R-squared, single-feature screening (`--subsets`), the ten partition maps including `j_minus_av` |
 | `test_no_leakage.py` | Fitted quantities unchanged when test features or test responses are perturbed, training-only standardization and centering, detection of residuals fitted before the split, rejection of global scramble models |
 
+### CKA
+
+| File | Guards |
+|---|---|
+| `test_cka.py` | `cka/`: likelihood identities of the CKA statistics, whitener, cross-validated Gram matrix, log-likelihoods, window indexing against `preprocess_fmri`, both searchlight passes against a direct per-vertex computation |
+
 ### RSA
 
 | File | Guards |
 |---|---|
 | `test_rsa.py` | `rsa/shared/rsa_utils.py`: RDM construction (correlation and cosine), RDM correlation (Spearman and Pearson, lower triangle), fMRI binning, z-scoring and delay |
 | `test_model_norm.py` | Model normalization variants `zscore` and `center` (per-run), the command-line default `center`, output names carrying the tag after the method, fMRI always z-scored |
+| `test_searchlight_distance.py` | `rsa/searchlight.py` `--distance`: the single-vertex and batched kernels against a direct `pdist` and Spearman computation for correlation and squared Euclidean distance |
 | `test_perm_searchlight.py` | `rsa/perm_searchlight.py`: paired null shares one permutation and matches the single-seed null |
 | `test_channel_subset_searchlight.py` | Column selection for cluster-channel searchlights and length-mismatch rejection |
 | `test_sheet_rsa.py` | `rsa/shared/sheet_rsa.py`: cortical-sheet tower boundaries, nearest-neighbor search on a lattice, within-tower random neighbors, per-tower summaries, robust color limits |
@@ -46,6 +53,12 @@ Some tests load scripts by file path (`importlib.util.spec_from_file_location`) 
 | `test_paired_bootstrap_resampling.py` | Joint (paired) block resampling in `corrected_2factor_bootstrap` versus independent resampling |
 | `test_av_pairing.py` | `notebooks/feature_extraction/av_pairing.py`: factorial contrast cancels additive components, fold-confined pairing is deterministic and rejects a single-clip pool |
 | `test_channel_class_rsa.py` | Input validation and inference bundle of the retired `rsa/channel_class_rsa.py` |
+
+### Reports
+
+| File | Guards |
+|---|---|
+| `test_measure_comparison.py` | `reports/measure_comparison/compare_measures.py`: neighbourhood homogeneity against a direct mean pairwise correlation, ring-diagnostic bins, map file names |
 
 ### CF modeling and connectivity
 

@@ -16,6 +16,7 @@ Analyses:
 |---|---|
 | [`rsa/`](rsa/README.md) | RSA pipeline (`analysis.sh`) and its validation, control and integration analyses |
 | [`encoding/`](encoding/README.md) | Banded ridge encoding and variance partition (`analysis.sh`) |
+| [`cka/`](cka/README.md) | Searchlight centered kernel alignment, cross-validated across subject groups (`analysis.sh`) |
 | [`cf_modeling/`](cf_modeling/README.md) | Connective-field models and ROI-mean connectivity maps (`run_analysis.sh`); retired analyses are in `cf_modeling/deprecated/` |
 | [`cluster/`](cluster/README.md) | Temporal-state and spatial-network clustering, vertex time-series clustering (`cluster.sh`, `run_vertex_clustering.sh`) |
 | [`connectivity/`](connectivity/README.md) | Seed-based whole-cortex connectivity from RSA-derived border ROIs (`seed_connectivity.py`) |
@@ -24,7 +25,7 @@ Analyses:
 | [`notebooks/visualization/`](notebooks/visualization/README.md) | Result-comparison and RDM notebooks |
 | [`notebooks/RidgeEncodingForSpeechEnvMusic_BrainModel/`](notebooks/RidgeEncodingForSpeechEnvMusic_BrainModel) | Exploratory vertexwise ridge-encoding notebook (not used by the pipeline) |
 | [`viz/`](viz/README.md) | Cortical map plotting, Workbench bundles, Lorax map conversion |
-| [`reports/`](reports/av_map_interpretation/README.md) | Lorax-map audit ([`av_map_interpretation`](reports/av_map_interpretation/README.md), [`lorax_reproduction`](reports/lorax_reproduction/README.md)) and a note on the scramble permutation test |
+| [`reports/`](reports/av_map_interpretation/README.md) | Lorax-map audit ([`av_map_interpretation`](reports/av_map_interpretation/README.md), [`lorax_reproduction`](reports/lorax_reproduction/README.md)), the RSA, CKA and encoding map comparison ([`measure_comparison`](reports/measure_comparison/README.md)) and a note on the scramble permutation test |
 | [`tests/`](tests/README.md) | Unit tests |
 | `preprocess_individual.py` | Per-run signal cleaning of raw CIFTIs; also importable for streaming use |
 | `official_timing.py` | Parser for the official HCP clip-timing sheet (run-local seconds to global seconds) |

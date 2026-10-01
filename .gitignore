@@ -35,9 +35,14 @@ __pycache__/
 
 # analysis-only visualizations and reports
 /viz/
-/reports/
+/reports/*
+!/reports/measure_comparison/
+/reports/measure_comparison/measure_comparison.md
 /graphify-out/
 /outputs_subcortical_selfcheck_cache/
+
+# notebook exports
+notebooks/visualization/rdm_outputs/
 
 # local scratch files, logs, and test artifacts
 prompt.text

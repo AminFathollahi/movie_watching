@@ -11,7 +11,7 @@ computed directly in embedding space here so the result is a normal
 consume unchanged).
 
 Uses rsa.shared.residuals.linear_residual() (thin wrapper around
-rsa.multimodal_decomposition.compute_interaction_residual_cv, the
+cka.multimodal_decomposition.compute_interaction_residual_cv, the
 cross-validated-ridge residual already relied on by
 encoding/variance_partition.py's Move-6 AVresid band).
 

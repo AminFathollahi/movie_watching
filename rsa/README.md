@@ -74,13 +74,14 @@ Analysis scripts:
 | `crossnobis_searchlight.py`, `noise_ceiling.py` | Crossnobis and noise ceiling |
 | `kreilability.py` | Split-half reliability of searchlight maps across neighborhood sizes |
 | `rdm_diagonal.py` | Within-clip and across-clip RDM masking, optional RSA on the masked RDMs |
-| `multimodal_decomposition.py` | Centered kernel alignment (CKA) interaction decomposition |
 | `draw_rsa_borders.py` | Workbench borders around top-RSA islands |
 | `scramble_paired_stats.py`, `scramble_diff_maps.py`, `dummy_diff_maps.py`, `temporal_scramble_binding.py`, `integration_convergence.py`, `av_scramble_permutation_inference.py` | Scramble / dummy / integration analyses |
 | `topoomni_sheet_localizer.py`, `topoomni_av_separability_localizer.py`, `label_sheet_localizer_maps.py`, `label_av_separability_maps.py`, `localizer_naming.py`, `spatial_stats.py` | Topo-Omni sheet localizers |
 | `full_sheet_rsa.py`, `shared/sheet_rsa.py` | Seed-region RSA against the full Topo-Omni cortical sheet |
 | `channel_subset_searchlight.py` | Searchlight on a channel subset of the PE-AV embedding |
 | `channel_class_rsa.py`, `run_channel_class_rsa.sh` | Retired (depend on the removed four-class channel labelling); `run_channel_class_rsa.sh` exits immediately |
+
+Searchlight centered kernel alignment (non-cross-validated, cross-validated and whitened) is not RSA and lives in [`cka/`](../cka/README.md).
 
 ## Inputs
 
@@ -237,6 +238,20 @@ python rsa/searchlight.py \
 ```
 
 Flags: input is either `--preprocessed-dir` and `--fmri-suffix` (disk) or `--raw-dir` with `--sg-filter`, `--psc`, `--gsr`/`--no-gsr` (streaming; the two inputs are mutually exclusive). `--delay-sec` default 5.0; `--skip-sec` default `bin-sec`; `--n-blocks` default 4 (1 disables blocks); `--gpu-batch-size` default 512; `--model-norm {zscore,center}` default `center`; `--method {spearman,pearson}` (required); `--modality` one of `v a av at vt avt t caption_t transcript_t event_t transcript_avt event_avt`. The environment variable `_RSA_N_JOBS` sets the joblib worker count (set by `analysis.sh`). `glasser.py` takes the same input, timing, delay, binning and `--model-norm` flags plus `--glasser-dlabel`, and `--method {spearman,pearson,rho_a}`.
+
+**Diagnostic maps.** Two options of `searchlight.py` give variants of the group-average map for comparison with CKA and encoding (`reports/measure_comparison/`). Either one (disk mode, `--preprocessed-dir`, only) makes the run write a single map and nothing else (no `.npy`, significance maps, borders, blocks or combined-map entries):
+
+| Option | Effect |
+|---|---|
+| `--distance euclidean` | Squared Euclidean distance between windows instead of correlation distance, in the brain RDM (window vectors over the `k` neighbors, mean over windows removed) and in the model RDM (normalized embeddings); `--distance correlation` is the default. Name label `euclid-{method}` (`corr-{method}` for the default distance) |
+| `--drop-repeated-clips` | Drops the windows of `video5`, `video9`, `video14`, `video18` (the clip shown once per run) after the per-run normalization of responses and embeddings, so the RDMs are those of the remaining windows. Adds `_norepeats` to the name |
+
+Output: `{OUTPUT_DIR}/group_average/{model}_{modality}/diagnostics/rsa_59k_{tag}_k{K}_delay{D}s_bin{B}s_skip{S}s_{label}_{model_norm}[_norepeats]_maps.dscalar.nii`, one map named `{label}`. Example, the two diagnostic maps of one model (arguments as above, `--n-blocks 1`; they are not part of `analysis.sh`):
+
+```bash
+python rsa/searchlight.py <arguments as above> --distance euclidean            # ..._euclid-spearman_center_maps
+python rsa/searchlight.py <arguments as above> --drop-repeated-clips           # ..._corr-spearman_center_norepeats_maps
+```
 
 ### Permutation test, spin test
 
@@ -402,7 +417,6 @@ Outputs in `--output-dir`: `{seed}_av.csv` and `{seed}_av_rho.npy` per seed (col
 - `python rsa/draw_rsa_borders.py --rsa-npy <searchlight.npy> --threshold-mode percentile --top-pct 5 --min-verts 10 [--out-dir <dir>]`: thresholds a searchlight array (`percentile`: top `--top-pct` percent of cortex jointly over both hemispheres; `sd`: `mean + --n-sd * SD`, default 2), removes connected islands smaller than `--min-verts` (default 10), and writes `{stem}_{top5pct|2sd}_{lh,rh}.border` with `wb_command -metric-rois-to-border`. Defaults point to the PE-AV group-average searchlight array.
 - `python rsa/kreilability.py --subjects-list data/subjects.txt --timing-csv data/movie_timing.csv --embeddings-dir outputs/model_embeddings --template-cifti <template> --model pe-av-small-16-frame --modality av --k 100 150 200 --n-splits 50`: random split-half of subjects; per split and per `k`, searchlight on each half-average and the Pearson correlation of the two maps plus the Dice overlap of their top-10% masks; results in `{--outdir}/split_half_reliability_results.json` (resumable). Uses a per-half average midthickness surface (`--indiv-surf-template`), `--bin-sec` default 2.0, embeddings z-scored per dimension.
 - `python rsa/rdm_diagonal.py --embeddings-dir ... --timing-csv ... --output-dir ... --model M --modality av`: within-clip (block-diagonal) and across-clip (off-diagonal) masks of the model RDM, written as `{stem}_rdm_{full,offdiag,blockdiag}.npy`, `_segment_labels.npy`, `_rdm_summary.json`; with the fMRI arguments (`--preprocessed-dir`, `--template-cifti`, `--glasser-dlabel`, surfaces, `--workbench`) it also writes `{stem}_rsa_diagonal_maps.dscalar.nii` with `glasser_{method}_rho_{offdiag,blockdiag}` and `searchlight_{method}_rho_{offdiag,blockdiag}`.
-- `python rsa/multimodal_decomposition.py --embeddings-dir ... --timing-csv ... --fmri-cifti ... --run-trs ... --template-cifti ... --output-dir ... [--method glasser|searchlight|both] [--glasser-dlabel ...]`: with joint embedding `J` and unimodal `[A | V]`, interaction residual `R = J - [A|V] ([A|V]^T [A|V])^-1 [A|V]^T J`, multimodality score `||R||_F^2 / ||J||_F^2`, and linear centered kernel alignment (CKA) between the brain Gram matrix and the Gram matrices of `J`, `[A|V]` and `R`; specificity index `CKA(brain, R) / (CKA(brain, J) + eps)`. Output `cka_decomp_{target}.dscalar.nii`, `parcel_cka_{target}.csv`, `interaction_score_{target}.json`.
 - `python rsa/channel_subset_searchlight.py [--output-dir <dir>] [--gpu-batch-size 512]`: writes the columns of the PE-AV `av` embedding belonging to one channel cluster as a standalone embedding and runs `searchlight.py` on it. Cluster, labels file and all other paths are constants at the top of the file.
 
 ## Tests

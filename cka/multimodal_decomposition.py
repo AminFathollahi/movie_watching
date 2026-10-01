@@ -1,5 +1,5 @@
 """
-rsa/multimodal_decomposition.py
+cka/multimodal_decomposition.py
 =====================================
 CKA-based Multimodal Interaction Decomposition.
 
@@ -49,8 +49,8 @@ Outputs (all saved to a single cka_decomp_{target}.dscalar.nii)
     {method}_specificity_index_{target}
 
   Additional files:
-    {output_dir}/parcel_cka_{target}.csv      — per-parcel table (glasser only)
-    {output_dir}/interaction_score_{target}.json — global scores + summary
+    {output_dir}/cka_decomp_parcels_{target}.csv      — per-parcel table (glasser only)
+    {output_dir}/cka_decomp_summary_{target}.json — global scores + summary
 
 References
 ----------
@@ -154,9 +154,9 @@ def parse_args():
     p.add_argument("--target-modality",  default="av", dest="target_modality",
                    choices=["av", "a", "v"])
     p.add_argument("--unimodal-models",  nargs="+",
-                   default=["audiomae:a", "videomaev2-large:v"],
+                   default=None,
                    dest="unimodal_models",
-                   help="Space-separated list of model:modality strings.")
+                   help="Space-separated list of model:modality strings; default: the target model's own a and v.")
     p.add_argument("--bin-sec",   type=float, default=BIN_SEC_DEFAULT)
     p.add_argument("--delay-sec", type=float, default=DELAY_SEC_DEFAULT)
     p.add_argument("--tr",        type=float, default=TR_DEFAULT)
@@ -654,6 +654,8 @@ def main():
     log.info("=" * 70)
     log.info("Multimodal Interaction Decomposition (CKA)")
     log.info(f"  Target      : {args.target_model}/{args.target_modality}")
+    if args.unimodal_models is None:
+        args.unimodal_models = [f"{args.target_model}:a", f"{args.target_model}:v"]
     log.info(f"  Unimodal    : {args.unimodal_models}")
     log.info(f"  Method      : {args.method}")
     log.info(f"  bin_sec={args.bin_sec}  delay_sec={args.delay_sec}  tr={args.tr}")
@@ -696,7 +698,8 @@ def main():
 
     # ── Interaction residual ─────────────────────────────────────────────────
     log.info("  Computing interaction residual ...")
-    R, ms_score = compute_interaction_residual(J, unimodal_embs)
+    R, ms_score, alpha = compute_interaction_residual_cv(J, unimodal_embs)
+    log.info(f"  Ridge penalty of the residual: {alpha:.3g}")
     log.info(f"  Global multimodality score (MS): {ms_score:.4f}")
 
     # ── Model Gram matrices (computed once; shared across all vertices) ───────
@@ -758,7 +761,7 @@ def main():
     # ── Save Glasser CSV ─────────────────────────────────────────────────────
     if glasser_results:
         import csv
-        csv_path = out_dir / f"parcel_cka_{target_short}.csv"
+        csv_path = out_dir / f"cka_decomp_parcels_{target_short}.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(glasser_results[0].keys()))
             writer.writeheader()
@@ -797,7 +800,7 @@ def main():
         )
         summary["top10_parcels_by_SI"]  = [r["parcel_id"] for r in glasser_results[:10]]
 
-    summary_path = out_dir / f"interaction_score_{target_short}.json"
+    summary_path = out_dir / f"cka_decomp_summary_{target_short}.json"
     summary_path.write_text(json.dumps(summary, indent=2))
     log.info(f"  Saved global summary: {summary_path.name}")
     log.info(f"  Global multimodality score (MS = ||R||²/||J||²): {ms_score:.4f}")

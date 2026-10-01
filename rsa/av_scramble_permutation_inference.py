@@ -12,6 +12,7 @@ from scipy import stats
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cifti_io import save_cifti_map, save_cifti_multimap  # noqa: E402
+from rsa.shared.naming import add_model_norm_arg, method_label  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ def parse_args():
     p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec")
     p.add_argument("--delay-sec", type=float, default=5.0)
     p.add_argument("--method", required=True)
+    add_model_norm_arg(p)
     p.add_argument("--fmri-tag", required=True)
     p.add_argument("--template-cifti", required=True)
     p.add_argument("--alpha", type=float, default=0.01,
@@ -131,12 +133,13 @@ def main():
     if args.skip_sec is None:
         args.skip_sec = args.bin_sec
     bin_sec_int, skip_int = int(args.bin_sec), int(args.skip_sec)
-    config = f"k{args.k}_delay{int(args.delay_sec)}s_bin{bin_sec_int}s_skip{skip_int}s_{args.method}"
+    method = method_label(args.method, args.model_norm)
+    config = f"k{args.k}_delay{int(args.delay_sec)}s_bin{bin_sec_int}s_skip{skip_int}s_{method}"
     output_dir = Path(args.output_dir)
 
     def load(model):
         path = _rho_path(output_dir, model, args.modality, config, args.fmri_tag,
-                          args.k, args.delay_sec, bin_sec_int, skip_int, args.method)
+                          args.k, args.delay_sec, bin_sec_int, skip_int, method)
         return np.load(str(path)).astype(np.float32) if path.exists() else None
 
     intact_rho = load(args.intact_model)

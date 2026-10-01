@@ -74,6 +74,8 @@ BIN_SEC=5.0
 SKIP_SEC=5.0
 DELAY_SEC=5.0
 METHOD="spearman"
+MODEL_NORM="${MODEL_NORM:-center}"
+export MODEL_NORM
 TR=1.0
 GPU_BATCH_SIZE=512
 
@@ -136,10 +138,10 @@ run_diff_study_plain() {
     done
     MODELS_STR="${MODELS_STR%;}"
     log "=== Diff-study PLAIN RSA: ${#BASE_MODELS[@]} models x ${#CONDITIONS[@]} conditions ==="
-    BIN_SECS="$BIN_SEC" RSA_MODELS_OVERRIDE="$MODELS_STR" \
+    BIN_SECS="$BIN_SEC" MODEL_NORMS="$MODEL_NORM" RSA_MODELS_OVERRIDE="$MODELS_STR" \
         SKIP_NOISE_CEILING=true SKIP_CROSSNOBIS=true \
         bash "${SCRIPT_DIR}/analysis.sh" persubject
-    BIN_SECS="$BIN_SEC" RSA_MODELS_OVERRIDE="$MODELS_STR" \
+    BIN_SECS="$BIN_SEC" MODEL_NORMS="$MODEL_NORM" RSA_MODELS_OVERRIDE="$MODELS_STR" \
         bash "${SCRIPT_DIR}/analysis.sh" avg
     log "=== Diff-study plain RSA complete ==="
 }
@@ -161,7 +163,7 @@ run_diff_study_partial() {
                 --output-dir "$OUTPUT_DIR" \
                 --subject group_average \
                 --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" --tr "$TR" \
-                --k "$K" --method "$METHOD" \
+                --k "$K" --method "$METHOD" --model-norm "$MODEL_NORM" \
                 --left-surface "$LEFT_SURFACE" --right-surface "$RIGHT_SURFACE" \
                 --workbench "$WORKBENCH" \
                 --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
@@ -183,7 +185,7 @@ run_diff_study_paired_stats() {
                 --intact-model "$BASE" \
                 --scrambled-model "${BASE}_${COND}" \
                 --modality av --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" \
-                --delay-sec "$DELAY_SEC" --method "$METHOD" --fmri-tag "$FMRI_SUFFIX" \
+                --delay-sec "$DELAY_SEC" --method "$METHOD" --model-norm "$MODEL_NORM" --fmri-tag "$FMRI_SUFFIX" \
                 --template-cifti "$TEMPLATE_CIFTI" \
                 || log "  SKIP ${BASE}_${COND}: paired stats failed (per-subject maps missing?)"
         done

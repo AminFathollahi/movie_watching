@@ -1,55 +1,40 @@
 #!/usr/bin/env bash
 # encoding/analysis.sh
 # ==========================
-# Master runner for ridge encoding model analyses.
-# Supports group-average and per-subject modes with GNU parallel.
+# Master runner for the banded-ridge encoding analyses (group-average data).
 #
 # Usage
 # -----
-#   bash encoding/analysis.sh [MODE] [BATCH_SIZE] [START_FROM]
-#
-#   MODE        preprocess   Preprocess all 175 subjects from SUBJECTS_LIST:
-#                            per-subject CIFTIs → PREPROCESSED_INDIV_DIR
-#                            group-average CIFTI → PREPROCESSED_DIR
-#                            Respects SG_FILTER/PSC/GSR flags and resumes.
-#               avg          Group-average encoding model (default)
-#               persubject   Per-subject encoding
-#               groupstats   Group-level statistics: t-test + TFCE + FDR on
-#                            per-subject r maps → groupstats/ subdir
-#               incremental_av  Run-wise A+V versus A+V+J and compression
-#                               comparisons for the configured AV models
-#               factorial_interaction  Crossed-pair interaction representation
-#               all          avg + persubject + groupstats
-#
-#   BATCH_SIZE  N            Parallel subjects (default 8)
-#   START_FROM  SUBID        Resume per-subject from this subject ID
-#
-# Recommended workflow
-#   # 0. Preprocess all 175 subjects (skip if using streaming mode)
 #   bash encoding/analysis.sh preprocess
+#   bash encoding/analysis.sh variance_partition [--models M...] [--bins B...]
+#                             [--variants split:scaling...] [--controls SET...|none|all]
+#   bash encoding/analysis.sh screen [--audio-models M...] [--video-models M...]
+#                             [--bins B...] [--variants split:scaling...]
+#   bash encoding/analysis.sh factorial_interaction [--models M...] [--bins 5]
 #
-#   # 1. Group-average encoding
-#   bash encoding/analysis.sh avg
+#   preprocess           Preprocess all 175 subjects from SUBJECTS_LIST:
+#                        per-subject CIFTIs → PREPROCESSED_INDIV_DIR
+#                        group-average CIFTI → PREPROCESSED_DIR
+#                        Respects SG_FILTER/PSC/GSR flags and resumes.
+#   variance_partition   Seven banded-ridge models and the A/V/J variance
+#                        partition for each model: once with A, V, J from the
+#                        model itself (tag unimodal_own), once per entry of
+#                        OWN_SETS (A and V from the entry's models, tagged with
+#                        the entry's tag), and once per control set in
+#                        CONTROL_SETS (A and V from the set's models, tagged
+#                        with the set name); J is always the model's.
+#   screen               Single-feature ridge (tag "screen") for each audio
+#                        and video model, in that model's own directory.
+#   factorial_interaction  Crossed-pair interaction representation
 #
-#   # 2. Per-subject encoding
-#   bash encoding/analysis.sh persubject 8
-#
-# Streaming vs disk mode
-#   STREAM=true  — raw 7T CIFTIs preprocessed on-the-fly (SG→PSC→GSR→zscore)
-#   STREAM=false — reads pre-saved CIFTIs from PREPROCESSED_INDIV_DIR
+# Defaults: --models pe-av-small-16-frame nemotron_layer18_mp, --bins 5 2 1,
+# --variants fixed:center, --controls all.
 #
 # Excluded subjects
 #   Subjects without individual midthickness surfaces are listed in
 #   data/excluded.txt and have been removed from data/subjects.txt.
 #   175 subjects remain.
 #
-# Resume / skip
-#   persubject: skips any subject/model whose output map already exists.
-#   Delete the output file to force a rerun.
-#
-# Silence GNU parallel citation notice (run once)
-#   parallel --citation
-
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -57,25 +42,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # CONFIG — all paths and analysis parameters defined here
 # =============================================================================
 DATA_BASE="/home/amin/Research/Representation/Movie/data"
-HCP_DIR="${MOVIE_HCP_DIR:-/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
 OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
 
-# Raw 7T CIFTI files (used in streaming mode — preprocess on-the-fly)
+# Raw 7T CIFTI files (input to the preprocess mode)
 CIFTI_DIR="/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/individual-59k"
-
-# ── Streaming toggle ──────────────────────────────────────────────────────────
-# false → disk mode (read pre-saved preprocessed CIFTIs from PREPROCESSED_INDIV_DIR)
-# true  → streaming mode (preprocess raw CIFTIs from CIFTI_DIR on-the-fly)
-STREAM=false
 
 # Preprocessing flags
 SG_FILTER=false   # Savitzky-Golay high-pass filter
 PSC=false         # Percent signal change normalization
 GSR=false         # Global signal regression
-Z_SCORE=true      # Z-score per vertex (applied inside encoding.py; not by preprocess_individual.py)
 
 # Automatically build PREPROCESSING_FLAG from SG_FILTER/PSC/GSR
-# (Z_SCORE is NOT included — it is applied inside the Python analysis script)
 PREP_PARTS=()
 [ "$SG_FILTER" = "true" ] && PREP_PARTS+=("sg")
 [ "$PSC"       = "true" ] && PREP_PARTS+=("psc")
@@ -120,135 +97,70 @@ OUTPUT_DIR="${OUTPUTS_BASE}/encoding"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
-# BIN_SECS: list of window durations (seconds) to sweep in one invocation.
-# SKIP_SEC = BIN_SEC for each (no overlap), matching the project convention.
-# Override: BIN_SECS="2.0 5.0 10.0" bash encoding/analysis.sh avg  (space-separated)
-# or the single-value form still works: BIN_SEC=5.0 bash encoding/analysis.sh avg
-read -ra BIN_SECS <<< "${BIN_SECS:-${BIN_SEC:-2.0}}"
-HRF=false       # true → SPM HRF convolution; false → boxcar delay
-NORMALIZE=true  # per-run z-score normalization of embeddings
-
-# Ridge regularisation search
-ALPHA_MIN=-2
-ALPHA_MAX=9
-N_ALPHAS=23
+# Window durations (seconds) are swept per invocation with SKIP_SEC = BIN_SEC
+# (no overlap), matching the project convention.
 
 # ── Backend ───────────────────────────────────────────────────────────────
 # torch_cuda: GPU-accelerated (requires himalaya ≥0.4.11 — older versions
 # have a device-mismatch bug when n_samples < n_features)
 BACKEND="torch_cuda"
 
-TEST_VIDEO_IDS="video5,video9,video14,video18"
+PARTITION_N_ITER=20
+PARTITION_MODEL_RANDOM_STATE=0
 
-INCREMENTAL_OUTPUT_DIR="${OUTPUT_DIR}/incremental_av"
-INCREMENTAL_MODELS=("pe-av-small-16-frame" "nemotron_layer18_mp")
-if [ -n "${INCREMENTAL_MODELS_OVERRIDE:-}" ]; then
-    IFS=';' read -ra INCREMENTAL_MODELS <<< "$INCREMENTAL_MODELS_OVERRIDE"
-fi
-INCREMENTAL_METHODS=(full pca random_projection cluster_mean cluster_pc1)
-INCREMENTAL_DIMENSIONS=(2 4 8 16 32 64)
-INCREMENTAL_RANDOM_SEEDS=(0 1 2 3 4)
-INCREMENTAL_N_ITER=20
-INCREMENTAL_MODEL_RANDOM_STATE=0
+# Control sets: "name audio_model video_model"; the name is the output tag.
+CONTROL_SETS=(
+    "mae dasheng-0.6b-d75 videomaev2-large-d75"
+    "mae-large dasheng-1.2b-d75 videomaev2-giant-d50"
+    "latent openbeats-large-i2-d75 vjepa2-vitl"
+    "large-mixed dasheng-1.2b-d75 vjepa2-vitg"
+    "speech-wavlm wavlm-large-d75 vjepa2-vitl"
+    "speech-w2vbert w2v-bert-2.0-d75 vjepa2-vitl"
+    "text-contrastive clap-larger pe-core-l14"
+    "text-asr whisper-large-v3 pe-core-l14"
+)
+
+# Further own sets beyond unimodal_own: "model tag audio_model video_model".
+OWN_SETS=(
+    "pe-av-small-16-frame dummy_av pe-av-small-16-frame_dummy_av pe-av-small-16-frame_dummy_av"
+)
+
+MODELS=(pe-av-small-16-frame nemotron_layer18_mp)
+BINS=(5 2 1)
+VARIANTS=(fixed:center)
+CONTROLS=(all)
+AUDIO_MODELS=()
+VIDEO_MODELS=()
 read -ra PAIRING_SEEDS <<< "${PAIRING_SEEDS:-0}"
-INCREMENTAL_FORCE_ARGS=()
-[ "${INCREMENTAL_FORCE:-0}" = "1" ] && INCREMENTAL_FORCE_ARGS=(--force)
 SEGMENTED_DIR="${MOVIE_SEGMENTED_DIR:-/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered}"
-GLASSER_DLABEL="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
-CF_MASKS_DIR="${OUTPUTS_BASE}/cf_modeling/masks"
 
-# ROI set shared by incremental_av and factorial_interaction: auditory/
-# posterior_temporal parcels plus the CCA-derived anterior/posterior temporal
-# masks and their unimodal Glasser reference regions (A5 auditory, FFC visual).
-INCREMENTAL_ROI_ARGS=(
-    --parcel-roi "auditory=A1,MBelt,LBelt,PBelt,RI,A4,A5"
-    --parcel-roi "posterior_temporal=STGa,STSda,STSdp,STSva,STSvp,STV,TA2,TPOJ1,TPOJ2,TPOJ3"
-    --roi-mask "cca_a=${CF_MASKS_DIR}/cca_a_mask.dscalar.nii"
-    --roi-mask "cca_p=${CF_MASKS_DIR}/cca_p_mask.dscalar.nii"
-    --parcel-roi "a5=A5"
-    --parcel-roi "ffc=FFC"
-)
-
-# ── Model registry ─────────────────────────────────────────────────────────
-# Format: "model_name:modalities"
-MODELS=(
-    "pe-av-small-16-frame:a,v,av,caption_t,transcript_t,event_t,transcript_avt,event_avt"
-    "cav-mae-sync:a,v,av"
-    "imagebind:av"
-    "audiomae:a"
-    "videomaev2-large:v"
-    "wavlm-large:a"
-    "whisper-large-v3:a"
-    "pe-core-l14:v"
-)
-
-# omni3b / topoomni layer sweep — add a layer index here to wire it into every
-# analysis.sh run; no need to hand-write new MODELS entries per layer.
-# BUG FIX: layers 9/18/27 need the "_mp" (mean-pool) suffix -- since the
-# mp/lt naming migration, "omni3b_layer9" (no suffix) has no embeddings on
-# disk at all (only "_mp"/"_lt" exist), so those three layers were silently
-# no-ops in every past encoding run. Only layers 1/35 have no suffix (no
-# lasttoken counterpart exists for them) -- same rule as rsa/analysis.sh.
-# Layer 34 (penultimate of 36) is a genuine "_mp" probe, same as 9/18/27 --
-# NOT the same layer as the pre-existing stale bare "35" (that's the FINAL
-# layer under this family's 0-indexed convention; see model_registry.py).
-LAYERS=(35 34 27 18 9 1)
-OMNI3B_MODALITIES="a,v,av"
-TOPOOMNI_MODALITIES="a,v,av"
-
-for L in "${LAYERS[@]}"; do
-    case "$L" in
-        9|18|27|34) SUFFIX="_mp" ;;
-        *)          SUFFIX="" ;;
-    esac
-    MODELS+=("omni3b_layer${L}${SUFFIX}:${OMNI3B_MODALITIES}")
-    MODELS+=("topoomni_layer${L}${SUFFIX}:${TOPOOMNI_MODALITIES}")
-    MODELS+=("topoomni_layer${L}_sheet${SUFFIX}:${TOPOOMNI_MODALITIES}")
-done
-
-# nemotron (omni-embed-nemotron-3b): no bare layer1/2/4/35-style probes on
-# disk -- only 9/18/27/36 plus 35 (penultimate of 36; its own 1-indexed
-# hidden_states convention already matches "layer35" directly), all
-# "_mp"-suffixed (see rsa/analysis.sh's identical sweep and model_registry.py's
-# docstring on why nemotron needs no "_lt").
-NEMOTRON_MODALITIES="a,v,av"
-for L in 9 18 27 35 36; do
-    MODELS+=("nemotron_layer${L}_mp:${NEMOTRON_MODALITIES}")
-done
-# Nemotron's penultimate last-token probe also has genuine separate-pass A/V
-# embeddings and therefore supports the same three-modality encoding contrast.
-MODELS+=("nemotron_layer35_lt:${NEMOTRON_MODALITIES}")
-
-# Own-encoder (audio_tower/visual, pre-thinker-fusion) penultimate-layer
-# probes -- no "av" readout (see model_registry.py).
-MODELS+=("omni3b_encoder_penultimate:a,v")
-MODELS+=("topoomni_encoder_penultimate:a,v")
-MODELS+=("nemotron_encoder_penultimate:a,v")
-
-# ── Scramble/dummy diff-study models: own registry, not swept into the
-# general MODELS array above (same reasoning as rsa/run_diff_study.sh --
-# these are control CONDITIONS paired against a native-AV baseline, not
-# independent models). Populated by encoding/run_diff_study.sh via
-# ENCODING_MODELS_OVERRIDE; left empty here so default runs are unaffected.
-if [ -n "${ENCODING_MODELS_OVERRIDE:-}" ]; then
-    IFS=';' read -ra MODELS <<< "$ENCODING_MODELS_OVERRIDE"
-fi
-
-# ── Parallelisation ─────────────────────────────────────────────────────────
 CONDA_ENV="movie"
-DEFAULT_BATCH_SIZE=8
 # =============================================================================
 
-MODE=${1:-avg}
-BATCH_SIZE=${2:-$DEFAULT_BATCH_SIZE}
-START_FROM=${3:-""}
+MODE=${1:-variance_partition}
+shift || true
 
-# BIN_SEC/SKIP_SEC/BIN_SEC_INT/SKIP_INT are set per-iteration in the BIN_SECS
-# sweep loop around DISPATCH below.
+parse_options() {
+    local target=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --models) MODELS=(); target=MODELS ;;
+            --bins) BINS=(); target=BINS ;;
+            --variants) VARIANTS=(); target=VARIANTS ;;
+            --controls) CONTROLS=(); target=CONTROLS ;;
+            --audio-models) AUDIO_MODELS=(); target=AUDIO_MODELS ;;
+            --video-models) VIDEO_MODELS=(); target=VIDEO_MODELS ;;
+            --*) echo "Unknown option: $1" >&2; exit 1 ;;
+            *)
+                [ -n "$target" ] || { echo "Unexpected argument: $1" >&2; exit 1; }
+                eval "$target+=(\"\$1\")" ;;
+        esac
+        shift
+    done
+}
+parse_options "$@"
 
-N_CPUS=$(nproc 2>/dev/null || echo 8)
-N_JOBS_PER_SUBJECT=$(( N_CPUS / BATCH_SIZE ))
-[ "$N_JOBS_PER_SUBJECT" -lt 1 ] && N_JOBS_PER_SUBJECT=1
+# BIN_SEC/SKIP_SEC are set per iteration of the BINS sweep in DISPATCH below.
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
@@ -263,21 +175,12 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 run_python() { conda run -n "$CONDA_ENV" python "$@"; }
 
-_hrf_flag()       { [ "$HRF"       = "true" ] && echo "--hrf"       || echo ""; }
-_normalize_flag() { [ "$NORMALIZE" = "true" ] && echo "--normalize" || echo ""; }
-
-_emb_exists() {
-    local MODEL_NAME="$1" MOD="$2"
-    [ -f "${EMBEDDINGS_DIR}/${MODEL_NAME}/bin${BIN_SEC_INT}s_skip${SKIP_INT}s/${MODEL_NAME}_${MOD}.npy" ]
-}
-
 # =============================================================================
 # PREPROCESSING PIPELINE
 # =============================================================================
 run_preprocess() {
     log "=== Preprocessing n=$(grep -cv '^\s*#' "$SUBJECTS_LIST") subjects → ${PREPROCESSED_INDIV_DIR} ==="
     log "  Flags: SG_FILTER=${SG_FILTER}  PSC=${PSC}  GSR=${GSR}  (${PREPROCESSING_FLAG})"
-    log "  Note: Z_SCORE is applied inside encoding.py, not during preprocessing"
     log "  Subjects: ${SUBJECTS_LIST}"
     log "  Raw CIFTI dir: ${CIFTI_DIR}"
 
@@ -295,7 +198,7 @@ run_preprocess() {
         --save-individual \
         --save-average
 
-    # Move group average to PREPROCESSED_DIR so disk-mode avg encoding finds it
+    # Move group average to PREPROCESSED_DIR so the group-average fits find it
     local GA_SRC="${PREPROCESSED_INDIV_DIR}/group_average_${PREPROCESSING_FLAG}_cortex_59k.dtseries.nii"
     local GA_TRS_SRC="${PREPROCESSED_INDIV_DIR}/group_average_${PREPROCESSING_FLAG}_run_trs.npy"
     if [ -f "$GA_SRC" ]; then
@@ -308,289 +211,80 @@ run_preprocess() {
     log "=== Preprocessing complete ==="
 }
 
-# =============================================================================
-# GROUP-AVERAGE PIPELINE
-# =============================================================================
-run_avg() {
-    log "=== Group-average encoding (${#MODELS[@]} models) ==="
+FAILURES=0
 
-    local LEFT_SURF="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
-    local RIGHT_SURF="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
-    local WORKBENCH="/opt/workbench/bin_linux64/wb_command"
-    [ ! -f "$WORKBENCH" ] && WORKBENCH=""
-
-    for MODEL_ENTRY in "${MODELS[@]}"; do
-        IFS=':' read -r MODEL_NAME MODALITIES_STR <<< "$MODEL_ENTRY"
-        IFS=',' read -ra MODS <<< "$MODALITIES_STR"
-
-        for MOD in "${MODS[@]}"; do
-            if ! _emb_exists "$MODEL_NAME" "$MOD"; then
-                log "  SKIP ${MODEL_NAME}/${MOD} — embedding not found"
-                continue
-            fi
-            log "  ${MODEL_NAME} / ${MOD}"
-
-            run_python "${SCRIPT_DIR}/encoding.py" \
-                --preprocessed-dir "$PREPROCESSED_DIR" \
-                --fmri-suffix      "$FMRI_SUFFIX" \
-                --timing-csv       "$TIMING_CSV" \
-                --embeddings-dir   "$EMBEDDINGS_DIR" \
-                --template-cifti   "$TEMPLATE_CIFTI" \
-                --output-dir       "$OUTPUT_DIR" \
-                --subject          "group_average" \
-                --model            "$MODEL_NAME" \
-                --modality         "$MOD" \
-                --bin-sec          "$BIN_SEC" \
-                --skip-sec         "$SKIP_SEC" \
-                --delay-sec        "$DELAY_SEC" \
-                --tr               "$TR" \
-                --alpha-min        "$ALPHA_MIN" \
-                --alpha-max        "$ALPHA_MAX" \
-                --n-alphas         "$N_ALPHAS" \
-                --backend          "$BACKEND" \
-                --test-video-ids   "$TEST_VIDEO_IDS" \
-                --left-surface     "$LEFT_SURF" \
-                --right-surface    "$RIGHT_SURF" \
-                ${WORKBENCH:+--workbench "$WORKBENCH"} \
-                $(_hrf_flag) $(_normalize_flag)
-        done
-    done
-
-    local CONFIG_LABEL
-    local NORM_LABEL="demean"
-    [ "$NORMALIZE" = "true" ] && NORM_LABEL="norm"
-    if [ "$HRF" = "true" ]; then
-        CONFIG_LABEL="hrf_${NORM_LABEL}_bin${BIN_SEC_INT}s_skip${SKIP_INT}s"
-    else
-        CONFIG_LABEL="delay${DELAY_SEC%.*}s_${NORM_LABEL}_bin${BIN_SEC_INT}s_skip${SKIP_INT}s"
-    fi
-    run_python "${SCRIPT_DIR}/av_derived_maps.py" \
-        --encoding-root "${OUTPUT_DIR}/group_average" \
-        --all-existing \
-        --config "$CONFIG_LABEL"
-
-    log "=== Group-average encoding done ==="
-}
-
-# =============================================================================
-# PER-SUBJECT PIPELINE
-# =============================================================================
-
-# Worker function — exported for GNU parallel.
-# All config is read from exported _ENC_-prefixed env vars so paths with
-# spaces are never mishandled by parallel's argument tokenisation.
-# Only the subject ID is passed as a positional argument.
-_run_one_subject() {
-    local SUB="$1"
-
-    local BIN_SEC_INT="${_ENC_BIN_SEC%.*}"
-    local SKIP_INT="${_ENC_SKIP_SEC%.*}"
-    local LOG_DIR="${_ENC_OUTPUT_DIR}/${SUB}"
-    mkdir -p "$LOG_DIR"
-    local LOG="${LOG_DIR}/pipeline.log"
-
-    local HRF_FLAG="";  [ "$_ENC_HRF"       = "true" ] && HRF_FLAG="--hrf"
-    local NORM_FLAG=""; [ "$_ENC_NORMALIZE"  = "true" ] && NORM_FLAG="--normalize"
-
-    # Build fMRI input flags based on mode
-    local FMRI_FLAGS
-    if [ "$_ENC_STREAM" = "true" ]; then
-        local SG_FLAG="";   [ "$_ENC_SG_FILTER" = "true" ] && SG_FLAG="--sg-filter"
-        local PSC_FLAG="";  [ "$_ENC_PSC"       = "true" ] && PSC_FLAG="--psc"
-        local GSR_FLAG="--gsr";     [ "$_ENC_GSR"     = "false" ] && GSR_FLAG="--no-gsr"
-        local ZSC_FLAG="--z-score"; [ "$_ENC_Z_SCORE" = "false" ] && ZSC_FLAG="--no-z-score"
-        FMRI_FLAGS="--raw-dir ${_ENC_CIFTI_DIR} $SG_FLAG $PSC_FLAG $GSR_FLAG $ZSC_FLAG"
-    else
-        local FMRI_PATH="${_ENC_PREPROCESSED_INDIV_DIR}/${SUB}_${_ENC_FMRI_SUFFIX}_cortex_59k.dtseries.nii"
-        if [ ! -f "$FMRI_PATH" ]; then
-            echo "[$(date +%H:%M:%S)] ${SUB}: no preprocessed CIFTI — run preprocess mode first" \
-                | tee -a "$LOG"
-            return 1
-        fi
-        FMRI_FLAGS="--preprocessed-dir ${_ENC_PREPROCESSED_INDIV_DIR} --fmri-suffix ${_ENC_FMRI_SUFFIX}"
-    fi
-
-    echo "[$(date +%H:%M:%S)] Starting ${SUB} (stream=${_ENC_STREAM})" | tee -a "$LOG"
-
-    local STATUS=0
-    IFS=';' read -ra MODEL_ENTRIES <<< "$_ENC_MODELS_STR"
-    for MODEL_ENTRY in "${MODEL_ENTRIES[@]}"; do
-        IFS=':' read -r MODEL_NAME MODALITIES_ENTRY <<< "$MODEL_ENTRY"
-        IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
-
-        for MOD in "${MODS[@]}"; do
-            local EMB="${_ENC_EMBEDDINGS_DIR}/${MODEL_NAME}/bin${BIN_SEC_INT}s_skip${SKIP_INT}s/${MODEL_NAME}_${MOD}.npy"
-            if [ ! -f "$EMB" ]; then
-                echo "[$(date +%H:%M:%S)] ${SUB}: SKIP ${MODEL_NAME}/${MOD} — no embedding" \
-                    | tee -a "$LOG"
-                continue
-            fi
-
-            # shellcheck disable=SC2086
-            conda run --no-capture-output -n "$_ENC_CONDA_ENV" python \
-                "${_ENC_SCRIPT_DIR}/encoding.py" \
-                $FMRI_FLAGS \
-                --timing-csv     "$_ENC_TIMING_CSV" \
-                --embeddings-dir "$_ENC_EMBEDDINGS_DIR" \
-                --template-cifti "$_ENC_TEMPLATE_CIFTI" \
-                --output-dir     "$_ENC_OUTPUT_DIR" \
-                --subject        "$SUB" \
-                --model          "$MODEL_NAME" \
-                --modality       "$MOD" \
-                --bin-sec        "$_ENC_BIN_SEC" \
-                --skip-sec       "$_ENC_SKIP_SEC" \
-                --delay-sec      "$_ENC_DELAY_SEC" \
-                --tr             "$_ENC_TR" \
-                --alpha-min      "$_ENC_ALPHA_MIN" \
-                --alpha-max      "$_ENC_ALPHA_MAX" \
-                --n-alphas       "$_ENC_N_ALPHAS" \
-                --backend        "$_ENC_BACKEND" \
-                --test-video-ids "$_ENC_TEST_VIDEO_IDS" \
-                $HRF_FLAG $NORM_FLAG \
-                >> "$LOG" 2>&1 || STATUS=$?
-        done
-    done
-
-    if [ $STATUS -eq 0 ]; then
-        echo "[$(date +%H:%M:%S)] ${SUB} DONE" | tee -a "$LOG"
-    else
-        echo "[$(date +%H:%M:%S)] ${SUB} FAILED (exit $STATUS)" | tee -a "$LOG"
-        return $STATUS
-    fi
-}
-export -f _run_one_subject
-
-run_persubject() {
-    local MODE_TAG
-    [ "$STREAM" = "true" ] && MODE_TAG="streaming" || MODE_TAG="disk"
-    log "=== Per-subject encoding (${MODE_TAG}, ${BATCH_SIZE} parallel jobs, ${#MODELS[@]} models) ==="
-
-    local SUBJECTS
-    SUBJECTS=$(grep -v '^\s*#' "$SUBJECTS_LIST" \
-               | sed 's/#.*//' \
-               | awk '{print $1}' \
-               | grep -v '^$')
-    if [ -n "$START_FROM" ]; then
-        SUBJECTS=$(echo "$SUBJECTS" | awk "/$START_FROM/{found=1} found{print}")
-    fi
-    local N_TOTAL
-    N_TOTAL=$(echo "$SUBJECTS" | wc -l)
-    log "  Processing ${N_TOTAL} subjects from ${SUBJECTS_LIST} ..."
-
-    local MODELS_STR
-    MODELS_STR=$(IFS=';'; echo "${MODELS[*]}")
-
-    export _ENC_SCRIPT_DIR="$SCRIPT_DIR"
-    export _ENC_CONDA_ENV="$CONDA_ENV"
-    export _ENC_PREPROCESSED_INDIV_DIR="$PREPROCESSED_INDIV_DIR"
-    export _ENC_FMRI_SUFFIX="$FMRI_SUFFIX"
-    export _ENC_OUTPUT_DIR="$OUTPUT_DIR"
-    export _ENC_TIMING_CSV="$TIMING_CSV"
-    export _ENC_EMBEDDINGS_DIR="$EMBEDDINGS_DIR"
-    export _ENC_TEMPLATE_CIFTI="$TEMPLATE_CIFTI"
-    export _ENC_MODELS_STR="$MODELS_STR"
-    export _ENC_BIN_SEC="$BIN_SEC"
-    export _ENC_SKIP_SEC="$SKIP_SEC"
-    export _ENC_DELAY_SEC="$DELAY_SEC"
-    export _ENC_TR="$TR"
-    export _ENC_ALPHA_MIN="$ALPHA_MIN"
-    export _ENC_ALPHA_MAX="$ALPHA_MAX"
-    export _ENC_N_ALPHAS="$N_ALPHAS"
-    export _ENC_TEST_VIDEO_IDS="$TEST_VIDEO_IDS"
-    export _ENC_HRF="$HRF"
-    export _ENC_NORMALIZE="$NORMALIZE"
-    export _ENC_BACKEND="$BACKEND"
-    export _ENC_STREAM="$STREAM"
-    export _ENC_CIFTI_DIR="$CIFTI_DIR"
-    export _ENC_SG_FILTER="$SG_FILTER"
-    export _ENC_PSC="$PSC"
-    export _ENC_GSR="$GSR"
-    export _ENC_Z_SCORE="$Z_SCORE"
-
-    if command -v parallel &>/dev/null; then
-        echo "$SUBJECTS" | parallel --jobs "$BATCH_SIZE" --line-buffer \
-            _run_one_subject {}
-    else
-        log "GNU parallel not found — running sequentially"
-        log "  (install with: conda install -c conda-forge parallel)"
-        for SUB in $SUBJECTS; do
-            _run_one_subject "$SUB"
-        done
-    fi
-
-    log "=== Per-subject encoding complete ==="
-}
-
-# =============================================================================
-# GROUP STATS PIPELINE
-# =============================================================================
-run_groupstats() {
-    log "=== Group-level encoding statistics (${#MODELS[@]} models) ==="
-
-    local LEFT_SURF="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
-    local RIGHT_SURF="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
-    local WORKBENCH="/opt/workbench/bin_linux64/wb_command"
-    [ ! -f "$WORKBENCH" ] && WORKBENCH=""
-
-    local HRF_FLAG="";  [ "$HRF"       = "true" ] && HRF_FLAG="--hrf"
-    local NORM_FLAG=""; [ "$NORMALIZE" = "true" ] && NORM_FLAG="--normalize"
-
-    for MODEL_ENTRY in "${MODELS[@]}"; do
-        IFS=':' read -r MODEL_NAME MODALITIES_STR <<< "$MODEL_ENTRY"
-        IFS=',' read -ra MODS <<< "$MODALITIES_STR"
-
-        for MOD in "${MODS[@]}"; do
-            log "  Group stats: ${MODEL_NAME} / ${MOD}"
-
-            run_python "${SCRIPT_DIR}/group_stats.py" \
-                --output-dir      "$OUTPUT_DIR" \
-                --model           "$MODEL_NAME" \
-                --modality        "$MOD" \
-                --bin-sec         "$BIN_SEC" \
-                --skip-sec        "$SKIP_SEC" \
-                --delay-sec       "$DELAY_SEC" \
-                --template-cifti  "$TEMPLATE_CIFTI" \
-                --left-surface    "$LEFT_SURF" \
-                --right-surface   "$RIGHT_SURF" \
-                ${WORKBENCH:+--workbench "$WORKBENCH"} \
-                --n-permutations  5000 \
-                --n-jobs          -1 \
-                $HRF_FLAG $NORM_FLAG
-        done
-    done
-
-    log "=== Group-level encoding statistics done ==="
-}
-
-run_incremental_av() {
-    if [ ! -f "$GLASSER_DLABEL" ]; then
-        log "Missing Glasser dlabel: $GLASSER_DLABEL"
-        return 1
-    fi
-    for MODEL_NAME in "${INCREMENTAL_MODELS[@]}"; do
-        log "Incremental AV encoding: ${MODEL_NAME}"
-        run_python "${SCRIPT_DIR}/incremental_av.py" \
+# Fit every variant with the given extra variance_partition.py arguments; a
+# failed fit is logged and the remaining fits continue.
+fit_variants() {
+    local VARIANT
+    for VARIANT in "${VARIANTS[@]}"; do
+        log "Fit (${VARIANT%%:*}, ${VARIANT##*:}) $*"
+        run_python "${SCRIPT_DIR}/variance_partition.py" \
+            --split "${VARIANT%%:*}" --feature-scaling "${VARIANT##*:}" \
             --preprocessed-dir "$PREPROCESSED_DIR" \
             --fmri-suffix "$FMRI_SUFFIX" \
             --subject group_average \
             --timing-csv "$TIMING_CSV" \
             --embeddings-dir "$EMBEDDINGS_DIR" \
-            --model "$MODEL_NAME" \
-            --output-dir "$INCREMENTAL_OUTPUT_DIR" \
+            --output-dir "$OUTPUT_DIR" \
+            --template-cifti "$TEMPLATE_CIFTI" \
             --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" \
             --delay-sec "$DELAY_SEC" --tr "$TR" \
-            --methods "${INCREMENTAL_METHODS[@]}" \
-            --dimensions "${INCREMENTAL_DIMENSIONS[@]}" \
-            --random-seeds "${INCREMENTAL_RANDOM_SEEDS[@]}" \
-            --n-iter "$INCREMENTAL_N_ITER" \
-            --model-random-state "$INCREMENTAL_MODEL_RANDOM_STATE" \
-            --compression-efficiency \
-            --glasser-dlabel "$GLASSER_DLABEL" \
-            "${INCREMENTAL_ROI_ARGS[@]}"
+            --n-iter "$PARTITION_N_ITER" \
+            --model-random-state "$PARTITION_MODEL_RANDOM_STATE" \
+            "$@" || { log "FAILED: $*"; FAILURES=$((FAILURES + 1)); }
     done
 }
 
-run_incremental_control_fit() {
+run_variance_partition() {
+    local MODEL_NAME NAME ENTRY OWN_MODEL SET AUDIO_MODEL VIDEO_MODEL TAGGED
+    local SETS=()
+    for NAME in "${CONTROLS[@]}"; do
+        case "$NAME" in
+            none) ;;
+            all) SETS=("${CONTROL_SETS[@]}") ;;
+            *)
+                for ENTRY in "${CONTROL_SETS[@]}"; do
+                    [ "${ENTRY%% *}" = "$NAME" ] && { SETS+=("$ENTRY"); continue 2; }
+                done
+                echo "Unknown control set: $NAME" >&2; exit 1 ;;
+        esac
+    done
+    for MODEL_NAME in "${MODELS[@]}"; do
+        fit_variants --model "$MODEL_NAME" --tag unimodal_own
+        for ENTRY in "${OWN_SETS[@]}"; do
+            read -r OWN_MODEL SET AUDIO_MODEL VIDEO_MODEL <<< "$ENTRY"
+            [ "$OWN_MODEL" = "$MODEL_NAME" ] || continue
+            fit_variants --model "$MODEL_NAME" --tag "$SET" \
+                --audio-model "$AUDIO_MODEL" --video-model "$VIDEO_MODEL"
+        done
+        for ENTRY in "${SETS[@]}"; do
+            read -r SET AUDIO_MODEL VIDEO_MODEL <<< "$ENTRY"
+            fit_variants --model "$MODEL_NAME" --tag "$SET" \
+                --audio-model "$AUDIO_MODEL" --video-model "$VIDEO_MODEL"
+        done
+    done
+}
+
+run_screen() {
+    local BAND FLAG NAMES MODEL_NAME BIN_DIR="bin${BIN_SEC%.*}s_skip${SKIP_SEC%.*}s"
+    for BAND in a v; do
+        if [ "$BAND" = a ]; then
+            FLAG=--audio-model; NAMES=("${AUDIO_MODELS[@]}")
+        else
+            FLAG=--video-model; NAMES=("${VIDEO_MODELS[@]}")
+        fi
+        for MODEL_NAME in "${NAMES[@]}"; do
+            if [ ! -f "${EMBEDDINGS_DIR}/${MODEL_NAME}/${BIN_DIR}/${MODEL_NAME}_${BAND}.npy" ]; then
+                log "SKIP ${MODEL_NAME}: no ${BAND} embeddings at ${BIN_DIR}"
+                continue
+            fi
+            fit_variants --subsets "$BAND" --tag screen "$FLAG" "$MODEL_NAME"
+        done
+    done
+}
+
+run_interaction_control_fit() {
     local MODEL_NAME="$1"
     local OUTPUT_NAME="$2"
     local RESULT_DIR="$3"
@@ -599,24 +293,21 @@ run_incremental_control_fit() {
     if [ -n "$JOINT_TEMPLATE" ]; then
         TEMPLATE_ARGS=(--joint-model-template "$JOINT_TEMPLATE")
     fi
-    run_python "${SCRIPT_DIR}/incremental_av.py" \
+    run_python "${SCRIPT_DIR}/variance_partition.py" \
+        --split runwise --feature-scaling zscore \
         --preprocessed-dir "$PREPROCESSED_DIR" \
         --fmri-suffix "$FMRI_SUFFIX" \
         --subject group_average \
         --timing-csv "$TIMING_CSV" \
         --embeddings-dir "$EMBEDDINGS_DIR" \
-        --model "$MODEL_NAME" \
-        --unimodal-model "$MODEL_NAME" \
+        --model "$MODEL_NAME" --tag unimodal_own \
         --output-name "$OUTPUT_NAME" \
         --output-dir "$RESULT_DIR" \
         --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" \
         --delay-sec "$DELAY_SEC" --tr "$TR" \
-        --methods full \
-        --n-iter "$INCREMENTAL_N_ITER" \
-        --model-random-state "$INCREMENTAL_MODEL_RANDOM_STATE" \
-        --glasser-dlabel "$GLASSER_DLABEL" \
-        "${INCREMENTAL_ROI_ARGS[@]}" \
-        "${INCREMENTAL_FORCE_ARGS[@]}" \
+        --n-iter "$PARTITION_N_ITER" \
+        --model-random-state "$PARTITION_MODEL_RANDOM_STATE" \
+        --template-cifti "$TEMPLATE_CIFTI" \
         "${TEMPLATE_ARGS[@]}"
 }
 
@@ -625,13 +316,9 @@ run_factorial_interaction() {
         log "Factorial interaction currently requires 5-second segments"
         return 1
     fi
-    if [ ! -f "$GLASSER_DLABEL" ]; then
-        log "Missing Glasser dlabel: $GLASSER_DLABEL"
-        return 1
-    fi
     export MOVIE_SEGMENTED_DIR="$SEGMENTED_DIR"
     local MODEL_NAME SEED RUN OUTPUT_NAME TEMPLATE
-    for MODEL_NAME in "${INCREMENTAL_MODELS[@]}"; do
+    for MODEL_NAME in "${MODELS[@]}"; do
         for SEED in "${PAIRING_SEEDS[@]}"; do
             for RUN in 1 2 3 4; do
                 if [ "$MODEL_NAME" = "pe-av-small-16-frame" ]; then
@@ -646,7 +333,7 @@ run_factorial_interaction() {
             done
             OUTPUT_NAME="${MODEL_NAME}_interaction_seed${SEED}"
             TEMPLATE="${MODEL_NAME}_interaction_run{run}_seed${SEED}"
-            run_incremental_control_fit \
+            run_interaction_control_fit \
                 "$MODEL_NAME" "$OUTPUT_NAME" "${OUTPUT_DIR}/factorial_interaction" "$TEMPLATE"
         done
     done
@@ -657,29 +344,22 @@ run_factorial_interaction() {
 # =============================================================================
 case "$MODE" in
     preprocess) run_preprocess ;;
-    avg|persubject|groupstats|incremental_av|factorial_interaction|all)
-        # These modes read binned embeddings/fMRI, so they sweep BIN_SECS.
-        # preprocess above doesn't depend on bin duration and runs once
-        # regardless of how many entries are in BIN_SECS.
-        for BIN_SEC in "${BIN_SECS[@]}"; do
+    variance_partition|screen|factorial_interaction)
+        for BIN_SEC in "${BINS[@]}"; do
             SKIP_SEC="$BIN_SEC"
-            BIN_SEC_INT="${BIN_SEC%.*}"
-            SKIP_INT="${SKIP_SEC%.*}"
             log "=== BIN_SEC=${BIN_SEC}s SKIP_SEC=${SKIP_SEC}s ==="
             case "$MODE" in
-                avg)        run_avg ;;
-                persubject) run_persubject ;;
-                groupstats) run_groupstats ;;
-                incremental_av) run_incremental_av ;;
+                variance_partition) run_variance_partition ;;
+                screen) run_screen ;;
                 factorial_interaction) run_factorial_interaction ;;
-                all)        run_avg; run_persubject; run_groupstats ;;
             esac
         done
         ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Use: preprocess | avg | persubject | groupstats | incremental_av | factorial_interaction | all" >&2
+        echo "Use: preprocess | variance_partition | screen | factorial_interaction" >&2
         exit 1 ;;
 esac
 
 log "All encoding analyses complete."
+[ "$FAILURES" -eq 0 ] || { log "${FAILURES} fit(s) failed"; exit 1; }

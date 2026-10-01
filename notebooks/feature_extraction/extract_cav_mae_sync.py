@@ -39,12 +39,12 @@ import torchaudio
 # CONFIG
 # ---------------------------------------------------------------------------
 REPO_ROOT      = Path("/home/amin/Research/Representation/Movie/Model Repos/cav-mae-sync")
-DATA_ROOT      = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
+DATA_ROOT      = Path(os.environ.get("STIMULUS_DIR", "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered"))
 MODEL_PATH     = REPO_ROOT / "pretrained_models" / "cav_mae_sync.pth"
 SCRAMBLE_AV    = bool(int(os.environ.get("CAV_MAE_SCRAMBLE_AV", "0")))
 SCRAMBLE_SEED  = 42
 _MODEL_NAME    = "cav-mae-sync_avscramble" if SCRAMBLE_AV else "cav-mae-sync"
-OUTPUT_ROOT    = Path(f"/home/amin/Research/Representation/Movie/outputs/model_embeddings/{_MODEL_NAME}")
+OUTPUT_ROOT    = Path(os.environ.get("EMBEDDINGS_BASE", "/home/amin/Research/Representation/Movie/outputs/model_embeddings")) / _MODEL_NAME
 
 AUDIO_MEAN     = -5.081
 AUDIO_STD      = 4.4849
@@ -52,10 +52,11 @@ TOTAL_FRAMES   = 16
 BATCH_SIZE     = 4
 CLIP_SR        = 16000    # target sample rate for fbank
 
-SEGMENT_DURATIONS = [5.0] if SCRAMBLE_AV else [5.0, 10.0]  # scramble control only needs 5s (the primary config)
+SEGMENT_DURATIONS = ([float(os.environ["BIN_SEC"])] if "BIN_SEC" in os.environ
+                     else [5.0] if SCRAMBLE_AV else [5.0, 10.0])
 
 # Mel time-frames — must be a multiple of 16 for the patch embedding.
-TARGET_LENGTHS = {5.0: 496, 10.0: 992}
+TARGET_LENGTHS = {1.0: 96, 2.0: 192, 5.0: 496, 10.0: 992}
 
 DEVICE = torch.device("cpu")
 

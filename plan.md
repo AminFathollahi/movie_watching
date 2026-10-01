@@ -403,7 +403,7 @@ Unimodal controls: Glasser `A5` (auditory) and `FFC` (visual).
 
 Two independent measurements, all label-free:
 
-1. **Unique variance and synergy** (`encoding/roi_av_profile.py`). Per ROI, held-out
+1. **Unique variance and synergy** (`encoding/roi_av_profile.py`, retired 2026-09). Per ROI, held-out
    `R2_A`, `R2_V`, `R2_additive`, `R2_joint`; `synergy = R2_joint - R2_additive`
    retaining sign; the participation ratio of the audio- and
    video-predicted ROI timecourses; and unique$_A$/unique$_V$ as genuine partial

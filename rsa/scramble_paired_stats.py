@@ -62,6 +62,7 @@ from scipy import stats
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cifti_io import save_cifti_map, save_cifti_multimap  # noqa: E402
+from rsa.shared.naming import add_model_norm_arg, method_label  # noqa: E402
 from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -82,6 +83,7 @@ def parse_args():
     p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec")
     p.add_argument("--delay-sec", type=float, default=5.0)
     p.add_argument("--method", required=True, choices=["spearman", "pearson", "rho_a"])
+    add_model_norm_arg(p)
     p.add_argument("--fmri-tag", required=True)
     p.add_argument("--template-cifti", required=True)
     p.add_argument("--alpha", type=float, default=0.05)
@@ -167,14 +169,15 @@ def main():
         args.skip_sec = args.bin_sec
     bin_sec_int, skip_int = int(args.bin_sec), int(args.skip_sec)
     delay_tag = f"delay{int(args.delay_sec)}s"
-    config = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}"
+    method = method_label(args.method, args.model_norm)
+    config = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{method}"
 
     output_dir = Path(args.output_dir)
     if args.method == "rho_a":
         fname_pattern = f"crossnobis_rho_a_k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s.npy"
     else:
         fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
-                          f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy")
+                          f"_bin{bin_sec_int}s_skip{skip_int}s_{method}_searchlight.npy")
 
     intact_stack, intact_files = _load_subject_stack(
         output_dir, args.intact_model, args.modality, config, fname_pattern)

@@ -139,7 +139,7 @@ def build_model_rdm(
     """Full-movie model correlation-distance RDM, shape (K, K) float64."""
     emb = process_model_embeddings(
         emb_path, timing_df, bin_sec, tr, run_trs,
-        delay_sec=delay_sec, hrf=hrf, skip_sec=skip_sec, normalize=True,
+        delay_sec=delay_sec, hrf=hrf, skip_sec=skip_sec, model_norm="zscore",
     ).astype(np.float64)
     mu   = emb.mean(axis=1, keepdims=True)
     ec   = emb - mu

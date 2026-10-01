@@ -290,7 +290,7 @@ def main() -> None:
         embedding = process_model_embeddings(
             str(analysis["embedding"]), timing, args.bin_sec, args.tr, run_trs,
             delay_sec=args.delay_sec, hrf=False, skip_sec=args.skip_sec,
-            normalize=True)
+            model_norm="zscore")
         _, embedding = align_and_assert_bins(fmri, embedding)
         embedding = np.nan_to_num(embedding, copy=False)
 

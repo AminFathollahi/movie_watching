@@ -171,7 +171,7 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
                              run_trs: np.ndarray, delay_sec: float = 0.0,
                              hrf: bool = False,
                              skip_sec: float = None,
-                             normalize: bool = True) -> np.ndarray:
+                             model_norm: str = "zscore") -> np.ndarray:
     """Load and align model embeddings to the fMRI binning scheme.
 
     Parameters
@@ -190,7 +190,8 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
     skip_sec  : window stride in seconds (default: bin_sec, i.e., no overlap).
                 Must match the skip_sec used to segment the stimulus and passed
                 to preprocess_fmri so brain and model window counts stay aligned.
-    normalize : if True (default) z-score per run; if False demean only.
+    model_norm : per-run normalization of each embedding dimension: "zscore"
+                 (default) or "center" (subtract the mean, keep the scale).
 
     Returns
     -------
@@ -252,10 +253,12 @@ def process_model_embeddings(emb_path: str, timing_df: pd.DataFrame,
 
         if run_segments:
             run_emb_concat = np.concatenate(run_segments, axis=0)
-            if normalize:
+            if model_norm == "zscore":
                 run_normed = zscore(run_emb_concat, axis=0, nan_policy='omit')
-            else:
+            elif model_norm == "center":
                 run_normed = run_emb_concat - run_emb_concat.mean(axis=0, keepdims=True)
+            else:
+                raise ValueError(f"model_norm must be 'zscore' or 'center', got {model_norm!r}")
             processed_runs.append(run_normed)
 
     return np.concatenate(processed_runs, axis=0).astype(np.float32)

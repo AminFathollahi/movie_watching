@@ -55,8 +55,8 @@ from models.qwen2_5_omni import Qwen2_5OmniThinkerForConditionalGeneration, Cort
 from qwen_vl_utils import process_vision_info
 
 TOPO_MODEL_ID   = "epfl-neuroai/topo-omni"
-DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+DATA_BASE       = Path(os.environ.get("STIMULUS_DIR", "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered"))
+EMBEDDINGS_BASE = Path(os.environ.get("EMBEDDINGS_BASE", "/home/amin/Research/Representation/Movie/outputs/model_embeddings"))
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
 BIN_SEC = float(os.environ.get("BIN_SEC", "2.0"))

@@ -63,6 +63,7 @@ from cifti_io import (
     save_cifti_map,
     save_cifti_multimap,
 )
+from rsa.shared.naming import add_model_norm_arg, method_label
 from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap
 
 logging.basicConfig(
@@ -95,6 +96,7 @@ def parse_args():
                    help="Window stride in seconds (default: bin-sec).")
     p.add_argument("--delay-sec",        type=float, default=5.0)
     p.add_argument("--method",           required=True, choices=["spearman", "pearson", "rho_a"])
+    add_model_norm_arg(p)
     p.add_argument("--fmri-tag",         required=True,
                    help="Preprocessing tag in per-subject CIFTI filenames.")
     p.add_argument("--fname-prefix",     default="rsa_59k", dest="fname_prefix",
@@ -238,7 +240,8 @@ def main():
     bin_sec_int  = int(args.bin_sec)
     skip_int     = int(args.skip_sec)
     delay_tag    = f"delay{int(args.delay_sec)}s"
-    config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}"
+    method       = method_label(args.method, args.model_norm)
+    config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{method}"
 
     analysis_label = args.analysis_label or f"{args.model}_{args.modality}"
     out_dir = Path(args.output_dir) / "groupstats" / analysis_label / config
@@ -249,7 +252,7 @@ def main():
                          f"_bin{bin_sec_int}s_skip{skip_int}s.npy")
     else:
         fname_pattern = (f"{args.fname_prefix}_{args.fmri_tag}_k{args.k}_{delay_tag}"
-                         f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy")
+                         f"_bin{bin_sec_int}s_skip{skip_int}s_{method}_searchlight.npy")
 
     model_mod_dir = analysis_label
     subject_rho_files = sorted(

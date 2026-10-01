@@ -52,6 +52,7 @@ Run with:
     conda run -n movie python rsa/dummy_diff_maps.py
 """
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -59,12 +60,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cifti_io import load_named_map, load_single_map, merge_into_combined  # noqa: E402
+from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
 log = logging.getLogger(__name__)
 
 GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average")
-CONFIG = "k100_delay5s_bin5s_skip5s_spearman"
+CONFIG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 
 # Same model families and layers as rsa/scramble_diff_maps.py's MODELS list.
 MODELS = [

@@ -4,8 +4,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from encoding.shared.compression import FittedCompression, fit_compression
-
 
 def _to_numpy(array) -> np.ndarray:
     if hasattr(array, "cpu"):
@@ -39,7 +37,7 @@ def run_splitter(groups: np.ndarray):
 
 
 def standardize_bands(
-    train_bands: list[np.ndarray], test_bands: list[np.ndarray]
+    train_bands: list[np.ndarray], test_bands: list[np.ndarray], scale: bool = True
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[dict[str, np.ndarray]]]:
     if len(train_bands) != len(test_bands) or not train_bands:
         raise ValueError("train_bands and test_bands must be nonempty and matched")
@@ -50,11 +48,11 @@ def standardize_bands(
         if train.ndim != 2 or test.ndim != 2 or train.shape[1] != test.shape[1]:
             raise ValueError("each train/test band must be 2D with matching features")
         mean = train.mean(axis=0, keepdims=True)
-        scale = train.std(axis=0, keepdims=True)
-        scale[scale < 1e-12] = 1.0
-        train_out.append(((train - mean) / scale).astype(np.float32))
-        test_out.append(((test - mean) / scale).astype(np.float32))
-        stats.append({"mean": mean, "scale": scale})
+        spread = train.std(axis=0, keepdims=True) if scale else np.ones_like(mean)
+        spread[spread < 1e-12] = 1.0
+        train_out.append(((train - mean) / spread).astype(np.float32))
+        test_out.append(((test - mean) / spread).astype(np.float32))
+        stats.append({"mean": mean, "scale": spread})
     return train_out, test_out, stats
 
 
@@ -99,313 +97,133 @@ def fit_group_ridge(
     return prediction, model, selected_backend, y_mean
 
 
+def _pearson_per_target(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+    y_true = y_true - y_true.mean(axis=0)
+    y_pred = y_pred - y_pred.mean(axis=0)
+    denominator = np.sqrt(np.square(y_true).sum(axis=0) * np.square(y_pred).sum(axis=0))
+    score = np.full(denominator.shape, np.nan)
+    np.divide((y_true * y_pred).sum(axis=0), denominator, out=score, where=denominator > 1e-12)
+    return score
+
+
+FEATURE_SCALINGS = ("zscore", "center")
+BANDS = ("a", "v", "j")
+ALL_SUBSETS = ("a", "v", "j", "av", "aj", "vj", "avj")
+
+
+def partition_variance(r2: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Gallant-lab variance partition of three feature spaces (A, V, J).
+
+    Input: held-out R2 of the seven banded-ridge models fitted on every nonempty
+    subset of {A, V, J}, keyed "a","v","j","av","aj","vj","avj".  Each model's R2
+    is treated as the size of the union of the variance sets its bands explain
+    (Lescroart 2015; Deniz 2019), and the seven Venn regions follow from
+    inclusion-exclusion.  Negative values are retained; regions sum to R2(avj).
+    """
+    missing = set(ALL_SUBSETS) - set(r2)
+    if missing:
+        raise ValueError(f"partition_variance needs all seven subsets; missing {sorted(missing)}")
+    a, v, j, av, aj, vj, avj = (np.asarray(r2[key], dtype=np.float64) for key in ALL_SUBSETS)
+    pair_a_v, pair_a_j, pair_v_j = a + v - av, a + j - aj, v + j - vj
+    triple = avj - a - v - j + pair_a_v + pair_a_j + pair_v_j
+    return {
+        "unique_a": avj - vj,
+        "unique_v": avj - aj,
+        "unique_j": avj - av,
+        "shared_av_only": pair_a_v - triple,
+        "shared_aj_only": pair_a_j - triple,
+        "shared_vj_only": pair_v_j - triple,
+        "shared_avj": triple,
+    }
+
+
 @dataclass
 class FoldResult:
     test_indices: np.ndarray
-    baseline_prediction: np.ndarray
-    extended_prediction: np.ndarray
-    baseline_r2: np.ndarray
-    extended_r2: np.ndarray
-    delta_r2: np.ndarray
-    compression: FittedCompression
+    y_test: np.ndarray
+    predictions: dict[str, np.ndarray]
+    r2: dict[str, np.ndarray]
     provenance: dict
     arrays: dict[str, np.ndarray]
 
 
-@dataclass
-class EfficiencyFoldResult:
-    test_indices: np.ndarray
-    additive_prediction: np.ndarray
-    joint_prediction: np.ndarray
-    additive_r2: np.ndarray
-    joint_r2: np.ndarray
-    joint_minus_additive_r2: np.ndarray
-    compressions: dict[str, FittedCompression]
-    provenance: dict
-    arrays: dict[str, np.ndarray]
-
-
-def evaluate_outer_fold(
-    audio: np.ndarray,
-    video: np.ndarray,
-    joint: np.ndarray,
+def evaluate_split(
+    audio: np.ndarray | None,
+    video: np.ndarray | None,
+    joint: np.ndarray | None,
     targets: np.ndarray,
     run_ids: np.ndarray,
-    test_run,
+    train_mask: np.ndarray,
+    test_mask: np.ndarray,
     alphas: np.ndarray,
-    method: str = "full",
-    dimension: int | None = None,
+    label: str = "fold",
+    subsets: tuple[str, ...] = ("av", "avj"),
     n_iter: int = 20,
     backend: str = "torch_cuda",
-    random_state: int = 0,
     model_random_state: int = 0,
-    baseline_cache: dict | None = None,
+    feature_scaling: str = "zscore",
 ) -> FoldResult:
-    """Evaluate A+V and A+V+J on one unseen run."""
-    arrays = [np.asarray(value) for value in (audio, video, joint, targets)]
+    if feature_scaling not in FEATURE_SCALINGS:
+        raise ValueError(f"Unknown feature_scaling {feature_scaling!r}; use {FEATURE_SCALINGS}")
+    bad = set(subsets) - set(ALL_SUBSETS)
+    if bad:
+        raise ValueError(f"Unknown band subsets {sorted(bad)}; use {ALL_SUBSETS}")
+    needed = set("".join(subsets))
+    raw = {band: value for band, value in zip(BANDS, (audio, video, joint)) if band in needed}
+    if len(raw) != len(needed):
+        raise ValueError(f"subsets {subsets} need bands {sorted(needed)}; got {sorted(raw)}")
+    arrays = [np.asarray(value) for value in (*raw.values(), targets)]
     if any(value.ndim != 2 for value in arrays):
         raise ValueError("audio, video, joint, and targets must be 2D arrays")
-    if len({value.shape[0] for value in arrays} | {len(run_ids)}) != 1:
+    train_mask, test_mask = np.asarray(train_mask, bool), np.asarray(test_mask, bool)
+    if len({value.shape[0] for value in arrays} | {len(run_ids), len(train_mask), len(test_mask)}) != 1:
         raise ValueError("all inputs must have the same sample count")
+    if (train_mask & test_mask).any() or not test_mask.any():
+        raise ValueError("train and test rows must be disjoint and test nonempty")
     run_ids = np.asarray(run_ids)
-    test_mask = run_ids == test_run
-    train_mask = ~test_mask
-    if not test_mask.any() or np.unique(run_ids[train_mask]).size < 2:
-        raise ValueError("Each outer fold needs a test run and at least two training runs")
+    train_runs = run_ids[train_mask]
+    if np.unique(train_runs).size < 2:
+        raise ValueError("Inner run-wise CV needs at least two training runs")
 
-    base_train, base_test, base_stats = standardize_bands(
-        [audio[train_mask], video[train_mask]],
-        [audio[test_mask], video[test_mask]],
+    train_bands, test_bands, _ = standardize_bands(
+        [band[train_mask] for band in raw.values()], [band[test_mask] for band in raw.values()],
+        scale=feature_scaling == "zscore",
     )
-    compression = fit_compression(
-        joint[train_mask], joint[test_mask], method, dimension, random_state
-    )
+    train_z, test_z = dict(zip(raw, train_bands)), dict(zip(raw, test_bands))
     y_train = np.asarray(targets[train_mask], dtype=np.float32)
     y_test = np.asarray(targets[test_mask], dtype=np.float32)
-    train_runs = run_ids[train_mask]
 
-    if baseline_cache is None:
-        baseline_prediction, baseline_model, selected_backend, _ = fit_group_ridge(
-            base_train, y_train, base_test, train_runs, alphas,
+    predictions, r2, fitted_arrays = {}, {}, {}
+    selected_backend = backend
+    for subset in subsets:
+        prediction, model, selected_backend, _ = fit_group_ridge(
+            [train_z[band] for band in subset], y_train,
+            [test_z[band] for band in subset], train_runs, alphas,
             n_iter=n_iter, backend=backend, random_state=model_random_state,
         )
-        baseline_cache = {
-            "prediction": baseline_prediction,
-            "best_alphas": _to_numpy(baseline_model.best_alphas_),
-            "deltas": _to_numpy(baseline_model.deltas_),
-            "backend": selected_backend,
-        }
-    else:
-        baseline_prediction = baseline_cache["prediction"]
-
-    extended_prediction, extended_model, selected_backend, _ = fit_group_ridge(
-        [*base_train, compression.train],
-        y_train,
-        [*base_test, compression.test],
-        train_runs,
-        alphas,
-        n_iter=n_iter,
-        backend=backend,
-        random_state=model_random_state,
-    )
-    baseline_r2 = _r2_per_target(y_test, baseline_prediction)
-    extended_r2 = _r2_per_target(y_test, extended_prediction)
-    fitted_arrays = {
-        "baseline_best_alphas": np.asarray(baseline_cache["best_alphas"]),
-        "baseline_deltas": np.asarray(baseline_cache["deltas"]),
-        "extended_best_alphas": _to_numpy(extended_model.best_alphas_),
-        "extended_deltas": _to_numpy(extended_model.deltas_),
-    }
-    for band, stat in zip(("audio", "video"), base_stats):
-        fitted_arrays[f"{band}_mean"] = stat["mean"]
-        fitted_arrays[f"{band}_scale"] = stat["scale"]
+        predictions[subset] = prediction
+        r2[subset] = _r2_per_target(y_test, prediction).astype(np.float32)
+        fitted_arrays[f"{subset}_best_alphas"] = _to_numpy(model.best_alphas_)
+        fitted_arrays[f"{subset}_deltas"] = _to_numpy(model.deltas_)
 
     return FoldResult(
         test_indices=np.flatnonzero(test_mask),
-        baseline_prediction=baseline_prediction,
-        extended_prediction=extended_prediction,
-        baseline_r2=baseline_r2.astype(np.float32),
-        extended_r2=extended_r2.astype(np.float32),
-        delta_r2=(extended_r2 - baseline_r2).astype(np.float32),
-        compression=compression,
+        y_test=y_test,
+        predictions=predictions,
+        r2=r2,
         provenance={
-            "test_run": str(test_run),
+            "fold": str(label),
             "n_train": int(train_mask.sum()),
             "n_test": int(test_mask.sum()),
             "train_runs": [str(run) for run in np.unique(train_runs)],
+            "subsets": list(subsets),
             "backend": selected_backend,
             "n_iter": int(n_iter),
             "alphas": np.asarray(alphas).tolist(),
-            "compression": compression.provenance,
             "model_random_state": int(model_random_state),
+            "feature_scaling": feature_scaling,
         },
         arrays=fitted_arrays,
     )
-
-
-def evaluate_compression_efficiency_fold(
-    audio: np.ndarray,
-    video: np.ndarray,
-    joint: np.ndarray,
-    targets: np.ndarray,
-    run_ids: np.ndarray,
-    test_run,
-    alphas: np.ndarray,
-    method: str,
-    total_dimension: int,
-    n_iter: int = 20,
-    backend: str = "torch_cuda",
-    random_state: int = 0,
-    model_random_state: int = 0,
-) -> EfficiencyFoldResult:
-    """Compare compressed J with equally budgeted compressed A and V."""
-    if method == "full" or total_dimension < 2:
-        raise ValueError("efficiency comparison needs a compressed method and dimension >= 2")
-    arrays = [np.asarray(value) for value in (audio, video, joint, targets)]
-    if any(value.ndim != 2 for value in arrays):
-        raise ValueError("audio, video, joint, and targets must be 2D arrays")
-    if len({value.shape[0] for value in arrays} | {len(run_ids)}) != 1:
-        raise ValueError("all inputs must have the same sample count")
-
-    run_ids = np.asarray(run_ids)
-    test_mask = run_ids == test_run
-    train_mask = ~test_mask
-    if not test_mask.any() or np.unique(run_ids[train_mask]).size < 2:
-        raise ValueError("Each outer fold needs a test run and at least two training runs")
-    audio_dimension = total_dimension // 2
-    video_dimension = total_dimension - audio_dimension
-    compressions = {
-        "audio": fit_compression(
-            audio[train_mask], audio[test_mask], method, audio_dimension, random_state
-        ),
-        "video": fit_compression(
-            video[train_mask], video[test_mask], method, video_dimension, random_state
-        ),
-        "joint": fit_compression(
-            joint[train_mask], joint[test_mask], method, total_dimension, random_state
-        ),
-    }
-    y_train = np.asarray(targets[train_mask], dtype=np.float32)
-    y_test = np.asarray(targets[test_mask], dtype=np.float32)
-    train_runs = run_ids[train_mask]
-    additive_prediction, additive_model, selected_backend, _ = fit_group_ridge(
-        [compressions["audio"].train, compressions["video"].train],
-        y_train,
-        [compressions["audio"].test, compressions["video"].test],
-        train_runs,
-        alphas,
-        n_iter=n_iter,
-        backend=backend,
-        random_state=model_random_state,
-    )
-    joint_prediction, joint_model, _, _ = fit_group_ridge(
-        [compressions["joint"].train],
-        y_train,
-        [compressions["joint"].test],
-        train_runs,
-        alphas,
-        n_iter=n_iter,
-        backend=backend,
-        random_state=model_random_state,
-    )
-    additive_r2 = _r2_per_target(y_test, additive_prediction)
-    joint_r2 = _r2_per_target(y_test, joint_prediction)
-    fitted_arrays = {
-        "additive_best_alphas": _to_numpy(additive_model.best_alphas_),
-        "additive_deltas": _to_numpy(additive_model.deltas_),
-        "joint_best_alphas": _to_numpy(joint_model.best_alphas_),
-        "joint_deltas": _to_numpy(joint_model.deltas_),
-    }
-    for name, compression in compressions.items():
-        for key, value in compression.arrays.items():
-            fitted_arrays[f"{name}_{key}"] = value
-    return EfficiencyFoldResult(
-        test_indices=np.flatnonzero(test_mask),
-        additive_prediction=additive_prediction,
-        joint_prediction=joint_prediction,
-        additive_r2=additive_r2.astype(np.float32),
-        joint_r2=joint_r2.astype(np.float32),
-        joint_minus_additive_r2=(joint_r2 - additive_r2).astype(np.float32),
-        compressions=compressions,
-        provenance={
-            "test_run": str(test_run),
-            "train_runs": [str(run) for run in np.unique(train_runs)],
-            "n_train": int(train_mask.sum()),
-            "n_test": int(test_mask.sum()),
-            "backend": selected_backend,
-            "method": method,
-            "total_dimension": int(total_dimension),
-            "audio_dimension": int(audio_dimension),
-            "video_dimension": int(video_dimension),
-            "random_state": int(random_state),
-            "model_random_state": int(model_random_state),
-            "alphas": np.asarray(alphas).tolist(),
-            "n_iter": int(n_iter),
-        },
-        arrays=fitted_arrays,
-    )
-
-
-def clip_metrics(
-    y_true: np.ndarray,
-    baseline_prediction: np.ndarray,
-    extended_prediction: np.ndarray,
-    clip_ids: np.ndarray,
-) -> list[dict]:
-    rows = []
-    for clip in np.unique(clip_ids):
-        mask = clip_ids == clip
-        base_r2 = _r2_per_target(y_true[mask], baseline_prediction[mask])
-        ext_r2 = _r2_per_target(y_true[mask], extended_prediction[mask])
-        rows.append({
-            "clip_id": str(clip),
-            "n_samples": int(mask.sum()),
-            "baseline_r2_mean": float(np.nanmean(base_r2)),
-            "extended_r2_mean": float(np.nanmean(ext_r2)),
-            "delta_r2_mean": float(np.nanmean(ext_r2 - base_r2)),
-            "baseline_sse": float(np.square(y_true[mask] - baseline_prediction[mask]).sum()),
-            "extended_sse": float(np.square(y_true[mask] - extended_prediction[mask]).sum()),
-        })
-    return rows
-
-
-def clip_error_metrics(
-    y_true: np.ndarray,
-    baseline_prediction: np.ndarray,
-    extended_prediction: np.ndarray,
-    clip_ids: np.ndarray,
-) -> list[dict]:
-    rows = []
-    for clip in np.unique(clip_ids):
-        mask = clip_ids == clip
-        baseline_mse = float(np.square(
-            y_true[mask] - baseline_prediction[mask]
-        ).mean())
-        extended_mse = float(np.square(
-            y_true[mask] - extended_prediction[mask]
-        ).mean())
-        rows.append({
-            "clip_id": str(clip),
-            "n_samples": int(mask.sum()),
-            "baseline_mse": baseline_mse,
-            "extended_mse": extended_mse,
-            "mse_reduction": baseline_mse - extended_mse,
-        })
-    return rows
-
-
-def paired_clip_inference(
-    y_true: np.ndarray,
-    baseline_prediction: np.ndarray,
-    extended_prediction: np.ndarray,
-    clip_ids: np.ndarray,
-    n_bootstrap: int = 10000,
-    n_permutations: int = 10000,
-    random_state: int = 0,
-) -> dict:
-    """Estimate uncertainty for paired held-out error reduction by clip."""
-    if n_bootstrap < 1 or n_permutations < 1:
-        raise ValueError("n_bootstrap and n_permutations must be positive")
-    clip_ids = np.asarray(clip_ids)
-    squared_error_gain = (
-        np.square(y_true - baseline_prediction)
-        - np.square(y_true - extended_prediction)
-    )
-    effects = np.array([
-        squared_error_gain[clip_ids == clip].mean()
-        for clip in np.unique(clip_ids)
-    ])
-    if len(effects) < 2:
-        raise ValueError("At least two held-out clips are required for inference")
-    rng = np.random.default_rng(random_state)
-    bootstrap = effects[rng.integers(0, len(effects), (n_bootstrap, len(effects)))].mean(axis=1)
-    signs = rng.choice((-1.0, 1.0), size=(n_permutations, len(effects)))
-    null = (signs * effects).mean(axis=1)
-    observed = float(effects.mean())
-    return {
-        "n_clips": int(len(effects)),
-        "mean_mse_reduction": observed,
-        "bootstrap_ci_low": float(np.quantile(bootstrap, 0.025)),
-        "bootstrap_ci_high": float(np.quantile(bootstrap, 0.975)),
-        "sign_flip_p_greater": float((1 + np.sum(null >= observed)) / (n_permutations + 1)),
-    }

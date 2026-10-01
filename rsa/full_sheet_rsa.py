@@ -245,7 +245,7 @@ def main() -> None:
     sheet_emb = process_model_embeddings(
         str(emb_path), timing_df, bin_sec=args.bin_sec, tr=args.tr,
         run_trs=run_trs, delay_sec=args.delay_sec, skip_sec=args.skip_sec,
-        normalize=True,
+        model_norm="zscore",
     )
     assert sheet_emb.shape[1] == N_UNITS, f"expected {N_UNITS} units, got {sheet_emb.shape[1]}"
     log.info(f"  sheet embeddings: {sheet_emb.shape}")

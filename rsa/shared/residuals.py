@@ -7,7 +7,7 @@ notebooks/feature_extraction/compute_linear_residual_embeddings.py,
 compute_projection_residual_embeddings.py) call these once per model, save
 the result as a normal {model}_{modality}.npy file under the standard
 embeddings_dir convention (see rsa/shared/model_registry.py::emb_path), and
-from then on rsa/searchlight.py, rsa/partial_rsa.py, and encoding/encoding.py
+from then on rsa/searchlight.py and rsa/partial_rsa.py
 consume it like any other model -- no pipeline changes needed.
 
 Two residual types

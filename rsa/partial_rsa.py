@@ -47,6 +47,7 @@ from rsa.shared.rsa_utils import (
 # Reuse the established geodesic-neighbour cache implementation.
 sys.path.insert(0, str(Path(__file__).parent))
 from searchlight import get_neighbors  # noqa: E402
+from rsa.shared.naming import add_model_norm_arg, searchlight_config, searchlight_stem  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ def parse_args():
     p.add_argument("--delay-sec", type=float, default=DELAY_SEC_DEFAULT)
     p.add_argument("--tr", type=float, default=TR_DEFAULT)
     p.add_argument("--k", type=int, required=True)
+    add_model_norm_arg(p)
     p.add_argument("--method", default="spearman", choices=["spearman", "pearson"],
                    help="Partial Spearman ranks all RDM vectors; Pearson uses raw distances.")
     p.add_argument("--left-surface", required=True)
@@ -349,10 +351,8 @@ def run_analysis(args):
     cfg = validate_run(args.run)
     timing_df = pd.read_csv(args.timing_csv)
     fmri_tag = _fmri_tag(args)
-    bin_int, skip_int, delay_int = map(
-        int, (args.bin_sec, args.skip_sec, args.delay_sec)
-    )
-    config = f"k{args.k}_delay{delay_int}s_bin{bin_int}s_skip{skip_int}s_{args.method}"
+    config = searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec,
+                                args.method, args.model_norm)
     subject_root = (
         Path(args.output_dir) / "group_average"
         if args.subject == "group_average"
@@ -360,8 +360,8 @@ def run_analysis(args):
     )
     out_dir = subject_root / cfg.label / config
     full_npy = out_dir / (
-        f"rsa_59k_{fmri_tag}_k{args.k}_delay{delay_int}s_bin{bin_int}s_"
-        f"skip{skip_int}s_{args.method}_searchlight.npy"
+        searchlight_stem(fmri_tag, args.k, args.delay_sec, args.bin_sec, args.skip_sec,
+                         args.method, args.model_norm) + "_searchlight.npy"
     )
     blocks_npy = full_npy.with_name(
         full_npy.name.replace("_searchlight.npy", f"_searchlight_nblocks{args.n_blocks}.npy")
@@ -388,6 +388,7 @@ def run_analysis(args):
         embedding = process_model_embeddings(
             str(path), timing_df, bin_sec=args.bin_sec, tr=args.tr,
             run_trs=run_trs, delay_sec=args.delay_sec, skip_sec=args.skip_sec,
+            model_norm=args.model_norm,
         )
         _, embedding = align_and_assert_bins(fmri_binned, embedding)
         return embedding

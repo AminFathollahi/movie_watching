@@ -22,14 +22,14 @@ disappeared input must never silently degrade into a skipped subject.
 
 Usage
 -----
-python cf_modeling/persubject_cca_maps.py \
+python cf_modeling/deprecated/persubject_cca_maps.py \
     --searchlight-root outputs/rsa/raw/subject_data \
     --persubject-out outputs/cf_modeling/persubject_cca_1pct/persubject
 
 Export one subject's map on demand from the compact stacked arrays (works even
 after --persubject-out has been moved off the SSD, since the stacked arrays
 are the ones kept on the SSD):
-    python cf_modeling/persubject_cca_maps.py --export-subject 100610
+    python cf_modeling/deprecated/persubject_cca_maps.py --export-subject 100610
 """
 from __future__ import annotations
 
@@ -45,12 +45,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-import cf_modeling.persubject_cca_channel_1pct as pcca1pct  # noqa: E402
+import cf_modeling.deprecated.persubject_cca_channel_1pct as pcca1pct  # noqa: E402
 from cf_modeling.cf_naming import persubject_output_root  # noqa: E402
-from cf_modeling.run_cca_islands import DEFAULT_TEMPLATE  # noqa: E402
+from cf_modeling.deprecated.run_cca_islands import DEFAULT_TEMPLATE  # noqa: E402
 from cifti_io import save_cifti_map, save_cifti_multimap, get_bm_axis  # noqa: E402
 from connectivity.seed_connectivity import compute_seed_connectivity  # noqa: E402
 from preprocess_individual import preprocess_subject  # noqa: E402

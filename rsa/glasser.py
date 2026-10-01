@@ -48,6 +48,7 @@ from rsa.shared.rsa_utils import (
     process_model_embeddings, compute_rdm, correlate_rdms,
     align_and_assert_bins, assert_segment_timing,
 )
+from rsa.shared.naming import add_model_norm_arg
 from cifti_io import (
     get_bm_axis,
     get_combined_map_names, merge_into_combined,
@@ -102,6 +103,7 @@ def parse_args():
                    help="Temporal bin size in seconds.")
     p.add_argument("--delay-sec", type=float, default=5.0,
                    help="Hemodynamic delay applied when slicing stimulus blocks.")
+    add_model_norm_arg(p)
     p.add_argument("--hrf", action="store_true",
                    help="Convolve embeddings with SPM HRF.")
     p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec",
@@ -216,6 +218,7 @@ def _config_label(args) -> str:
         "hrf" if args.hrf else f"delay{args.delay_sec:.0f}s",
         f"bin{args.bin_sec:.0f}s_skip{args.skip_sec:.0f}s",
         args.method,
+        args.model_norm,
     ]
     return "_".join(parts)
 
@@ -265,7 +268,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
         bin_sec=args.bin_sec,
         tr=args.tr, run_trs=run_trs,
         delay_sec=args.delay_sec, hrf=args.hrf,
-        skip_sec=args.skip_sec,
+        skip_sec=args.skip_sec, model_norm=args.model_norm,
     )
 
     # Enforce exact temporal alignment

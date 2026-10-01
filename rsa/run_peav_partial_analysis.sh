@@ -43,6 +43,7 @@ SKIP_SEC=5.0
 DELAY_SEC=5.0
 TR=1.0
 METHOD="spearman"
+MODEL_NORM="${MODEL_NORM:-center}"
 N_BLOCKS=16
 BLOCKS_SWEEP=(4 8 16)
 N_BOOTSTRAP=2000
@@ -81,6 +82,7 @@ common_args() {
         --tr "$TR" \
         --k "$K" \
         --method "$METHOD" \
+        --model-norm "$MODEL_NORM" \
         --left-surface "$LEFT_SURFACE" \
         --right-surface "$RIGHT_SURFACE" \
         --workbench "$WORKBENCH" \
@@ -132,6 +134,7 @@ _run_partial_subject() {
         --tr "$_PEAV_TR" \
         --k "$_PEAV_K" \
         --method "$_PEAV_METHOD" \
+        --model-norm "$_PEAV_MODEL_NORM" \
         --left-surface "$left_surface" \
         --right-surface "$right_surface" \
         --workbench "$_PEAV_WORKBENCH" \
@@ -169,6 +172,7 @@ run_persubject() {
     export _PEAV_TR="$TR"
     export _PEAV_K="$K"
     export _PEAV_METHOD="$METHOD"
+    export _PEAV_MODEL_NORM="$MODEL_NORM"
     export _PEAV_LEFT_SURFACE="$LEFT_SURFACE"
     export _PEAV_RIGHT_SURFACE="$RIGHT_SURFACE"
     export _PEAV_MIDTHICKNESS_DIR="$MIDTHICKNESS_DIR"
@@ -199,6 +203,7 @@ stats_common_args() {
         --skip-sec "$SKIP_SEC" \
         --delay-sec "$DELAY_SEC" \
         --method "$METHOD" \
+        --model-norm "$MODEL_NORM" \
         --fmri-tag "$FMRI_TAG" \
         --template-cifti "$TEMPLATE_CIFTI" \
         --left-surface "$LEFT_SURFACE" \

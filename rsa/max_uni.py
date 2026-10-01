@@ -65,6 +65,7 @@ from cifti_io import (
     save_cifti_map,
     save_cifti_multimap,
 )
+from rsa.shared.naming import add_model_norm_arg, method_label
 from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap
 
 logging.basicConfig(
@@ -144,6 +145,7 @@ def parse_args():
     p.add_argument("--delay-sec",     type=float, default=5.0)
     p.add_argument("--method",        default="spearman",
                    choices=["spearman", "pearson", "rho_a"])
+    add_model_norm_arg(p)
     p.add_argument("--fmri-tag",      required=True, dest="fmri_tag")
     p.add_argument("--template-cifti", required=True, dest="template_cifti")
     p.add_argument("--out-dir",       required=True, dest="out_dir")
@@ -199,7 +201,7 @@ def load_rho_stack(
     bin_sec: float,
     skip_sec: float,
     delay_sec: float,
-    method: str,
+    method: str,  # comparator label incl. model norm, e.g. spearman_center
     fmri_tag: str,
 ) -> tuple[np.ndarray, list[str]]:
     """Load per-subject rho .npy files for one model/modality.
@@ -240,7 +242,7 @@ def load_block_stack(
     bin_sec: float,
     skip_sec: float,
     delay_sec: float,
-    method: str,
+    method: str,  # comparator label incl. model norm, e.g. spearman_center
     fmri_tag: str,
     n_blocks: int,
 ) -> tuple[np.ndarray, list[str]]:
@@ -428,6 +430,7 @@ def main():
     if args.skip_sec is None:
         args.skip_sec = args.bin_sec
 
+    method          = method_label(args.method, args.model_norm)
     baseline_pairs  = _parse_baseline_pairs(args.baselines)
     baseline_labels = [f"{m}/{mod}" for m, mod in baseline_pairs]
     target_label    = f"{args.target[0]}/{args.target[1]}"
@@ -449,7 +452,7 @@ def main():
     bin_int   = int(args.bin_sec)
     skip_int  = int(args.skip_sec)
     delay_tag = f"delay{int(args.delay_sec)}s"
-    config    = f"k{args.k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{args.method}"
+    config    = f"k{args.k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{method}"
 
     # Placeholder n_subs name — resolved once stacks loaded
     out_stem = f"max_uni_{tgt_slug}_vs_{base_slug}_{config}"
@@ -460,7 +463,7 @@ def main():
     target_stack, target_subs = load_rho_stack(
         args.output_dir, args.target[0], args.target[1],
         args.k, args.bin_sec, args.skip_sec, args.delay_sec,
-        args.method, args.fmri_tag,
+        method, args.fmri_tag,
     )
 
     log.info("Loading baseline rho maps ...")
@@ -470,7 +473,7 @@ def main():
         bs, subs = load_rho_stack(
             args.output_dir, model, modality,
             args.k, args.bin_sec, args.skip_sec, args.delay_sec,
-            args.method, args.fmri_tag,
+            method, args.fmri_tag,
         )
         baseline_stacks.append(bs)
         baseline_sub_lists.append(subs)
@@ -497,14 +500,14 @@ def main():
             target_block_stack, tgt_blk_subs = load_block_stack(
                 args.output_dir, args.target[0], args.target[1],
                 args.k, args.bin_sec, args.skip_sec, args.delay_sec,
-                args.method, args.fmri_tag, args.n_blocks,
+                method, args.fmri_tag, args.n_blocks,
             )
             baseline_block_stacks = []
             for model, modality in baseline_pairs:
                 bs_blk, _ = load_block_stack(
                     args.output_dir, model, modality,
                     args.k, args.bin_sec, args.skip_sec, args.delay_sec,
-                    args.method, args.fmri_tag, args.n_blocks,
+                    method, args.fmri_tag, args.n_blocks,
                 )
                 baseline_block_stacks.append(bs_blk)
             # Align block stacks to the same subject set as the full-series stacks

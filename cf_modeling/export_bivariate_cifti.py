@@ -53,8 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Export a quantized Hedger/Pycortex 2-D CF map for wb_view."
     )
-    parser.add_argument("--roi-a", required=True, help="dim2/red-axis ROI, e.g. cca_a")
-    parser.add_argument("--roi-b", required=True, help="dim1/blue-axis ROI, e.g. cca_p")
+    parser.add_argument("--roi-a", required=True, help="dim2/red-axis ROI, e.g. A1")
+    parser.add_argument("--roi-b", required=True, help="dim1/blue-axis ROI, e.g. V1")
     parser.add_argument(
         "--mode", choices=("group_average", "per_subject"), default="group_average"
     )

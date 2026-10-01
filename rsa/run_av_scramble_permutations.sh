@@ -46,6 +46,7 @@ K=100
 BIN_SEC=5.0
 DELAY_SEC=5.0
 METHOD="spearman"
+export MODEL_NORM="${MODEL_NORM:-center}"
 
 ALPHA=0.01
 TOTAL_PERMUTATIONS=500
@@ -100,7 +101,7 @@ model_for_seed() {
 rho_path_for_seed() {
     local model
     model="$(model_for_seed "$1")"
-    echo "${OUTPUT_DIR}/group_average/${model}_${MODALITY}/k${K}_delay5s_bin5s_skip5s_${METHOD}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay5s_bin5s_skip5s_${METHOD}_searchlight.npy"
+    echo "${OUTPUT_DIR}/group_average/${model}_${MODALITY}/k${K}_delay5s_bin5s_skip5s_${METHOD}_${MODEL_NORM}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay5s_bin5s_skip5s_${METHOD}_${MODEL_NORM}_searchlight.npy"
 }
 
 if [ -n "$BATCH_SIZE" ]; then
@@ -145,7 +146,7 @@ for SEED in "${SEEDS[@]}"; do
     fi
 
     log "seed=${SEED}: running group-average searchlight RSA."
-    BIN_SECS="$BIN_SEC" DELAY_SEC="$DELAY_SEC" K="$K" METHOD="$METHOD" \
+    BIN_SECS="$BIN_SEC" DELAY_SEC="$DELAY_SEC" K="$K" METHOD="$METHOD" MODEL_NORMS="$MODEL_NORM" \
         RSA_MODELS_OVERRIDE="${MODEL}:${MODALITY}" \
         bash "${SCRIPT_DIR}/analysis.sh" avg searchlight
 done
@@ -162,6 +163,7 @@ if [ "$DO_AGGREGATE" = true ]; then
         --bin-sec "$BIN_SEC"
         --delay-sec "$DELAY_SEC"
         --method "$METHOD"
+        --model-norm "$MODEL_NORM"
         --fmri-tag "$FMRI_SUFFIX"
         --template-cifti "$TEMPLATE_CIFTI"
         --alpha "$ALPHA"

@@ -16,7 +16,7 @@ modes.  Borders are written per hemisphere using wb_command
 Usage
 -----
 python rsa/draw_rsa_borders.py \
-    --rsa-npy  <path>/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy \
+    --rsa-npy  <path>/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_searchlight.npy \
     --out-dir  <same dir or other> \
     --threshold-mode percentile --top-pct 5 \
     --min-verts 10
@@ -48,8 +48,8 @@ log = logging.getLogger(__name__)
 # ── defaults ─────────────────────────────────────────────────────────────────
 _BASE = Path("/home/amin/Research/Representation/Movie")
 _RSA_NPY = (_BASE / "outputs/rsa/raw/group_average/pe-av-small-16-frame_av"
-             "/k100_delay5s_bin5s_skip5s_spearman"
-             "/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy")
+             "/k100_delay5s_bin5s_skip5s_spearman_center"
+             "/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_searchlight.npy")
 _TEMPLATE = (_BASE / "data/preprocessed/average_sub/raw"
              "/group_average_raw_cortex_59k.dtseries.nii")
 _L_SURF = (_BASE / "data/HCP_S1200_GroupAvg_v1/GroupAverage_59k"

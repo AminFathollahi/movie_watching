@@ -58,8 +58,8 @@ for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy"):
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_PATH      = "Qwen/Qwen2.5-Omni-3B"
-DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+DATA_BASE       = Path(os.environ.get("STIMULUS_DIR", "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered"))
+EMBEDDINGS_BASE = Path(os.environ.get("EMBEDDINGS_BASE", "/home/amin/Research/Representation/Movie/outputs/model_embeddings"))
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
 BIN_SEC = float(os.environ.get("BIN_SEC", "5.0"))

@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -58,6 +59,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
 from cifti_io import (  # noqa: E402
     get_combined_map_names,
     load_single_map,
@@ -67,7 +69,7 @@ from cifti_io import (  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-CONFIG = "k100_delay5s_bin5s_skip5s_spearman"
+CONFIG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 SEARCHLIGHT_FILENAME = "partial_corr_r_searchlight.dscalar.nii"
 # kind="integration" runs (rsa/partial_rsa.py) save under this filename instead;
 # only the reused peav_av_given_both layer of own_unimodal needs it.

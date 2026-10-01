@@ -9,7 +9,7 @@ defaults), and ROI-mean fMRI timecourses come from in-memory SG->PSC streaming
 preprocessing (preprocess_individual.preprocess_subject) so no per-subject
 CIFTI is written to disk.
 
-Rebuilt 2026-09-02 around ``cf_modeling.channel_cca_analysis``'s two-axis
+Rebuilt 2026-09-02 around ``cf_modeling.deprecated.channel_cca_analysis``'s two-axis
 framework (see that module's docstring): the MODALITY axis (audio-minus-video
 sufficiency, per channel) depends only on PE-AV's model embeddings, never on
 fMRI, so it is identical for every subject and computed exactly ONCE here from
@@ -54,12 +54,12 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from cf_modeling.cf_naming import persubject_output_root  # noqa: E402
 from cf_modeling.roi_mean_partial_connectivity import _load_mask  # noqa: E402
-from cf_modeling.channel_cca_analysis import (  # noqa: E402
+from cf_modeling.deprecated.channel_cca_analysis import (  # noqa: E402
     MODEL_CONFIGS, VARIANTS, _model_files, _processed_embedding, cca_axis,
     modality_axis,
 )
@@ -78,7 +78,7 @@ RAW_DIR = Path(os.environ.get(
 ))
 SUBJECTS_LIST = DATA / "subjects.txt"
 TIMING_CSV = DATA / "movie_timing.csv"
-ROI_CONFIG = ROOT / "cf_modeling" / "roi_definitions.json"
+ROI_CONFIG = ROOT / "cf_modeling" / "deprecated" / "roi_definitions.json"
 GLASSER_DLABEL = (
     Path(os.environ.get(
         "MOVIE_HCP_DIR",
@@ -136,7 +136,7 @@ def subject_mask(sub: str, tmp_base: Path) -> dict | None:
     out_base = tmp_base / sub
     out_base.mkdir(parents=True, exist_ok=True)
     cmd = [
-        sys.executable, str(ROOT / "cf_modeling/run_cca_islands.py"),
+        sys.executable, str(ROOT / "cf_modeling/deprecated/run_cca_islands.py"),
         "--map", str(map_path), "--top-percent", "1",
         "--roi-suffix", tag, "--roi-config", str(ROI_CONFIG),
         "--glasser-dlabel", str(GLASSER_DLABEL),

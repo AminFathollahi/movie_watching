@@ -31,7 +31,7 @@ else is computed here -- no permutation testing, no null distributions, no
 significance counts, no FDR/BH, no winner-take-all group test, no 4-class
 sensitivity scheme, no reliability/disattenuation/split-half machinery. All
 of that previously lived in this module and has been deleted; see
-``cf_modeling/persubject_cca_channel_1pct.py`` and
+``cf_modeling/deprecated/persubject_cca_channel_1pct.py`` and
 ``rsa/channel_class_rsa.py`` for the two downstream consumers that had to be
 updated (the latter is deprecated, not deleted, and now defines its own
 local ``CLASS_ORDER`` rather than importing it from here).
@@ -51,7 +51,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from cf_modeling.roi_mean_partial_connectivity import (  # noqa: E402

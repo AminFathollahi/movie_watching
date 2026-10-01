@@ -292,10 +292,6 @@ Two minor, unresolved naming issues, confirmed on disk, left as-is pending a dec
 
 - `rsa/channel_class_rsa.py` writes its output CIFTI into
   `outputs/cf_modeling/channel_cca_preference/results/rsa/`, not under `outputs/rsa/`.
-- `encoding/av_derived_maps.py` and `rsa/av_derived_maps.py` are two different scripts
-  (different derived-map families — encoding r vs. RSA rho, and different reference-model
-  sets) that happen to share a filename.
-
 One genuinely orphaned file: root-level `verify_subjects.py` (a standalone subject-list
 sanity check, not wired into any `analysis.sh` or module).
 
@@ -422,7 +418,7 @@ flowchart TD
     EMB --> TL
 
     TL --> RSA["rsa/\nsearchlight + Glasser RSA\nPRIMARY ENGINE"]
-    TL --> ENC["encoding/\nhimalaya ridge encoding\nnested incremental AV + compression"]
+    TL --> ENC["encoding/\nhimalaya ridge encoding\nseven-model variance partition"]
     TL --> CF["cf_modeling/\nconnective-field modeling\n(Hedger et al. 2025)"]
     TL --> CLU["cluster/\ntemporal-state / vertex / channel\nclustering"]
 
@@ -573,16 +569,13 @@ output location where the script writes.
 
 ### `encoding/`
 
-- `av_derived_maps.py` — encoding-currency analogue of `rsa/av_derived_maps.py`: appends
-  `av_superadditivity`/`av_conjunction` (+ stimulus-regressor-masked variants) to a
-  group-average `encoding_pearson_r_audiovisual.dscalar.nii`. Same filename as, but
-  functionally distinct from, `rsa/av_derived_maps.py` (§2.10).
-- `migrate_encoding_output_names.py` — collision-safe renamer mapping legacy encoding
-  artifact stems (`encoding_r2_unique_av`, `encoding_r_av`, …) to the current explicit
-  naming schema, in both filenames and CIFTI map labels.
-- `run_native_av_group_average.sh` — driver that reruns the canonical 5 s group-average
-  encoding analysis for every native-AV model with matched A/V/AV embeddings, then appends
-  the derived maps above.
+- `variance_partition.py` — seven banded-ridge models (every non-empty subset of A, V, J) and
+  the Gallant-lab variance partition, for `fixed` and `runwise` splits and `zscore` and `center`
+  feature scaling; single-band models are the plain encoding results. See `encoding/README.md`.
+- `diff_maps.py`, `run_diff_study.sh` — intact-versus-dummy contrasts on the same maps.
+- The earlier plain per-vertex encoding (`encoding.py`), its group statistics, derived maps,
+  ROI profile analysis and their outputs were retired in 2026-09 (other normalization and
+  timing; they matched none of the four variants).
 
 ### `tests/`
 

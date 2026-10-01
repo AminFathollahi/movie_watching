@@ -4,7 +4,7 @@ Channel analogue of ``vertex_clustering.py``: instead of one row
 per cortical grayordinate and one column per fMRI TR, each row here is one
 embedding channel (1,024 for PE-AV; 2,048 for each Omni-family layer-18
 mean-pooled model) and each column is one of the 626 aligned 5-second movie
-bins used throughout ``cf_modeling/channel_cca_analysis.py``. All
+bins used throughout ``cf_modeling/deprecated/channel_cca_analysis.py``. All
 reduction/clustering math (PCA, MDS, Isomap, t-SNE, FastICA, UMAP,
 k-means/HDBSCAN/BIRCH) is imported unchanged from ``vertex_clustering.py``.
 The only differences are the input load (channel embeddings, not a CIFTI
@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from cf_modeling.channel_cca_analysis import MODEL_CONFIGS, _model_files  # noqa: E402
+from cf_modeling.deprecated.channel_cca_analysis import MODEL_CONFIGS, _model_files  # noqa: E402
 from rsa.shared.rsa_utils import process_model_embeddings  # noqa: E402
 from io_cluster import write_channel_labels_csv  # noqa: E402
 from vertex_clustering import (  # noqa: E402

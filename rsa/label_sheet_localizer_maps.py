@@ -34,6 +34,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cifti_io import merge_into_combined  # noqa: E402
+from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
 from rsa.localizer_naming import base_name as loc_base_name, summary_json_name  # noqa: E402
 
 EMBEDDINGS_DIR = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
@@ -44,7 +45,8 @@ GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/rsa/raw/group
 # run actually wrote.
 _BIN_SEC = float(os.environ.get("BIN_SEC", "5.0"))
 _SKIP_SEC = float(os.environ.get("SKIP_SEC", "5.0"))
-CONFIG = f"k100_delay5s_bin{_BIN_SEC:g}s_skip{_SKIP_SEC:g}s_spearman"
+CONFIG = (f"k100_delay5s_bin{_BIN_SEC:g}s_skip{_SKIP_SEC:g}s_spearman_"
+          f"{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}")
 
 SRC_MAPS = {
     "searchlight_spearman_rho": "rho",

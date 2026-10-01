@@ -25,7 +25,6 @@ which regresses out the target model's own a/v streams instead -- see
 
 Once saved, run e.g.:
     python rsa/searchlight.py --model {model}_av_linear_resid_unimodal --modality av ...
-    python encoding/encoding.py --model {model}_av_linear_resid_unimodal --modality av ...
 
 Usage
 -----

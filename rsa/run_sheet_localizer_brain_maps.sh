@@ -52,6 +52,7 @@ BIN_SEC="${BIN_SEC:-5.0}"
 SKIP_SEC="${SKIP_SEC:-5.0}"
 DELAY_SEC=5.0
 METHOD="spearman"
+export MODEL_NORM="${MODEL_NORM:-center}"
 TR=1.0
 GPU_BATCH_SIZE=512
 
@@ -79,7 +80,7 @@ echo "Models to run ($KIND, drv=$DRIVER, sheet=$SHEET): $MODELS"
 
 for MODEL_NAME in $MODELS; do
     echo "=== searchlight: ${MODEL_NAME} / av ==="
-    COMBINED_OUT="${ANALYSIS_DIR}/raw/${MODEL_NAME}_av/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_SEC%.*}s_bin${BIN_SEC%.*}s_skip${SKIP_SEC%.*}s_${METHOD}_maps.dscalar.nii"
+    COMBINED_OUT="${ANALYSIS_DIR}/raw/${MODEL_NAME}_av/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_SEC%.*}s_bin${BIN_SEC%.*}s_skip${SKIP_SEC%.*}s_${METHOD}_${MODEL_NORM}_maps.dscalar.nii"
     CUDA_VISIBLE_DEVICES="" conda run --no-capture-output -n movie python "${SCRIPT_DIR}/searchlight.py" \
         --preprocessed-dir   "$PREPROCESSED_DIR" \
         --fmri-suffix        "$FMRI_SUFFIX" \
@@ -103,7 +104,7 @@ for MODEL_NAME in $MODELS; do
         --combined-output    "$COMBINED_OUT" \
         --gpu-batch-size     "$GPU_BATCH_SIZE" \
         --n-blocks           1 \
-        --normalize
+        --model-norm         "$MODEL_NORM"
 done
 
 echo "=== Merging all maps into one combined CIFTI ==="

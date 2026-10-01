@@ -3,14 +3,14 @@ subcortical/subcortical_partial_rsa.py
 =========================================
 Subcortical analogue of rsa/partial_rsa.py -- the Move-1 "integration"
 best-additive contrast (target AV joint embedding, controlling for its own
-audio-only/video-only unimodal RDMs via banded-ridge nuisance projection),
+audio-only/video-only unimodal RDMs via an ordinary-least-squares nuisance projection),
 run on subcortical structures instead of cortical surface vertices.
 
 Did NOT exist before this pass: subcortical/ had zero partial-RSA
 infrastructure, so scramble/dummy diff analyses there had nothing to
 consolidate against (see subcortical/diff_maps.py).
 
-Everything geometry-agnostic (RDM construction, banded-ridge projection,
+Everything geometry-agnostic (RDM construction, nuisance projection,
 the residualized searchlight kernel) is reused VERBATIM from rsa/partial_rsa.py
 -- those functions operate on RDM vectors and neighbor-index arrays, with no
 cortical-specific assumption. Everything subcortical-specific (fMRI source,
@@ -64,7 +64,7 @@ from rsa.shared.model_registry import (  # noqa: E402
     check_embeddings_exist, validate_run,
 )
 from rsa.partial_rsa import (  # noqa: E402
-    _rdm_lower_tri, fit_banded_projection, residualize, run_partial_searchlight,
+    _prepare_model_partial, run_partial_searchlight,
 )
 from cifti_io import save_cifti_multimap  # noqa: E402
 from subcortical_io import (  # noqa: E402
@@ -100,8 +100,6 @@ def parse_args():
     p.add_argument("--delay-sec", type=float, default=5.0)
     p.add_argument("--method", default="spearman", choices=["spearman", "pearson"])
     p.add_argument("--tr", type=float, default=1.0)
-    p.add_argument("--n-alphas", type=int, default=30, dest="n_alphas")
-    p.add_argument("--cv-folds", type=int, default=5, dest="cv_folds")
     p.add_argument("--neighbor-cache-dir", default=None)
     p.add_argument("--workbench", default="/opt/workbench/bin_linux64/wb_command")
     p.add_argument("--gpu-batch-size", type=int, default=512)
@@ -209,20 +207,11 @@ def main():
     n_total = fmri_binned.shape[1]
     nuis_embs = [e[:n_bins] for e in nuis_embs]
 
-    # ── RDMs + banded-ridge nuisance projection (verbatim from rsa/partial_rsa.py) ──
-    log.info("  Computing model RDMs ...")
-    y_target = _rdm_lower_tri(target_emb)
-    nuis_vecs = [_rdm_lower_tri(e) for e in nuis_embs]
-    X_nuis = np.column_stack(nuis_vecs).astype(np.float32)
-    log.info(f"  RDM shapes: y_target={y_target.shape}  X_nuis={X_nuis.shape}")
+    log.info("  Computing model RDMs and the nuisance projection ...")
+    design, projection, e_target = _prepare_model_partial(target_emb, nuis_embs, args.method)
+    log.info(f"  design={design.shape}  e_target: mean={e_target.mean():.4f}  std={e_target.std():.4f}")
     del target_emb, nuis_embs
     gc.collect()
-
-    log.info("  Fitting banded ridge (per-band alpha via RidgeCV) ...")
-    C, best_alphas = fit_banded_projection(X_nuis, y_target, n_alphas=args.n_alphas, cv_folds=args.cv_folds)
-    log.info(f"  Per-band alphas: {[f'{a:.2e}' for a in best_alphas]}")
-    e_target = residualize(y_target, X_nuis, C)
-    log.info(f"  e_target: mean={e_target.mean():.4f}  std={e_target.std():.4f}")
 
     # ── Per-structure partial searchlight (mirrors subcortical_rsa.py's loop) ──
     slices = struct_slices_from_template(args.template_cifti)
@@ -246,7 +235,7 @@ def main():
 
         idx = np.arange(n_struct, dtype=np.int32)
         corr_struct = run_partial_searchlight(
-            fmri_struct, X_nuis, C, e_target, neighbors,
+            fmri_struct, design, projection, e_target, neighbors,
             surface_indices=idx, vertex_to_col=idx,
             method=args.method, batch_size=args.gpu_batch_size,
         )

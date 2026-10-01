@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cf_modeling.migrate_cca_artifacts import (
+from cf_modeling.deprecated.migrate_cca_artifacts import (
     apply_in_place,
     apply_migration,
     cca_name,

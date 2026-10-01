@@ -127,9 +127,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtseries", type=Path, required=True)
     parser.add_argument("--run-trs", type=Path, required=True)
     parser.add_argument("--roi-a", required=True,
-                        help="Anterior CCA ROI name (or generic first ROI)")
+                        help="First ROI name")
     parser.add_argument("--roi-p", required=True,
-                        help="Posterior CCA ROI name (or generic second ROI)")
+                        help="Second ROI name (the other ROI controlled for)")
     parser.add_argument("--mask-a", type=Path, required=True)
     parser.add_argument("--mask-p", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)

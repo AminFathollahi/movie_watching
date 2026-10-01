@@ -27,7 +27,7 @@
 # Usage
 #   bash subcortical/run_diff_study.sh [STAGE]
 #
-# Env overrides (partial stage; this is real compute -- banded ridge + a
+# Env overrides (partial stage; this is real compute -- a nuisance projection and a
 # 19-structure searchlight per run):
 #   DIFF_STUDY_MODELS       space-separated subset of BASE_MODELS.
 #   DIFF_STUDY_CONDITIONS   space-separated subset of {intact,avscramble,clsav_from_a,clsav_from_v}.

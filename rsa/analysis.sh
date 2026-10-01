@@ -189,7 +189,15 @@ TR=1.0
 # or the single-value form still works: BIN_SEC=5.0 bash rsa/analysis.sh avg
 read -ra BIN_SECS <<< "${BIN_SECS:-${BIN_SEC:-2.0}}"
 HRF=false
-NORMALIZE=true  # true → per-run z-score; false → demean only (adds _demean suffix to outputs)
+# MODEL_NORMS: model-embedding normalization variants to run, per run and per dimension.
+#   center  subtract the mean only (default)
+#   zscore  z-score
+# fMRI is always z-scored. The variant is part of every output name (..._{method}_{model_norm}...).
+# Override: MODEL_NORMS="center zscore" bash rsa/analysis.sh avg
+read -ra MODEL_NORMS <<< "${MODEL_NORMS:-center}"
+for _MN in "${MODEL_NORMS[@]}"; do
+    case "$_MN" in center|zscore) ;; *) echo "Unknown model norm: $_MN (use center or zscore)" >&2; exit 1 ;; esac
+done
 METHOD="spearman"       # searchlight comparator
 GLASSER_METHOD="spearman"  # parcel comparator: rho_a recommended (Schütt et al. 2023 )
 K=100
@@ -348,8 +356,6 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 
 _hrf_flag()       { [ "$HRF"       = "true" ] && echo "--hrf"          || echo ""; }
-_normalize_flag() { [ "$NORMALIZE" = "true" ] && echo "--normalize"    || echo "--no-normalize"; }
-_norm_label()     { [ "$NORMALIZE" = "true" ] && echo ""               || echo "_demean"; }
 
 _emb_exists() {
     local MODEL_NAME="$1" MOD="$2"
@@ -413,7 +419,7 @@ _run_avg_one_model() {
     IFS=',' read -ra MODS <<< "$MODALITIES_STR"
 
     local DELAY_INT="${DELAY_SEC%.*}"
-    local SL_CONFIG="k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}"
+    local SL_CONFIG="k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_${MODEL_NORM}"
 
     for MOD in "${MODS[@]}"; do
         if ! _emb_exists "$MODEL_NAME" "$MOD"; then
@@ -422,9 +428,8 @@ _run_avg_one_model() {
         fi
         log "  ${MODEL_NAME} / ${MOD}"
 
-        local NORM_LBL; NORM_LBL=$(_norm_label)
-        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}${NORM_LBL}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_maps.dscalar.nii"
-        local RHO_FILENAME="rsa_59k_${FMRI_SUFFIX}${NORM_LBL}_k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_searchlight.npy"
+        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}_${SL_CONFIG}_maps.dscalar.nii"
+        local RHO_FILENAME="rsa_59k_${FMRI_SUFFIX}_${SL_CONFIG}_searchlight.npy"
 
         # Natural joint-AV maps use three matched A/V reference pairs. Compute
         # missing group-average dependency maps before the target AV map.
@@ -473,7 +478,8 @@ _run_avg_one_model() {
                 --combined-output    "$COMBINED_OUT" \
                 --gpu-batch-size "$GPU_BATCH_SIZE" \
                 --n-blocks           1 \
-                $(_hrf_flag) $(_normalize_flag)
+                --model-norm         "$MODEL_NORM" \
+                $(_hrf_flag)
 
             if [ "$RUN_PERM" = "true" ]; then
                 # Permutation test on group-average result (skip logic inside script)
@@ -499,7 +505,8 @@ _run_avg_one_model() {
                     --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
                     --combined-output    "$COMBINED_OUT" \
                     --gpu-batch-size     "$GPU_BATCH_SIZE" \
-                    $(_hrf_flag) $(_normalize_flag)
+                    --model-norm         "$MODEL_NORM" \
+                    $(_hrf_flag)
             fi
         fi
 
@@ -521,6 +528,7 @@ _run_avg_one_model() {
                 --tr               "$TR" \
                 --glasser-dlabel   "$GLASSER_DLABEL" \
                 --combined-output  "$COMBINED_OUT" \
+                --model-norm       "$MODEL_NORM" \
                 $(_hrf_flag)
         fi
 
@@ -581,8 +589,8 @@ _run_one_subject() {
     [ "$_RSA_STREAM" = "false" ] && FMRI_TAG_LOCAL="$_RSA_FMRI_SUFFIX"
 
     local DELAY_INT="${_RSA_DELAY_SEC%.*}"
-    local SL_CONFIG="k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}"
-    local GL_CONFIG="delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}"
+    local SL_CONFIG="k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}_${_RSA_MODEL_NORM}"
+    local GL_CONFIG="delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_GLASSER_METHOD}_${_RSA_MODEL_NORM}"
 
     # Per-subject midthickness (fall back to group-average if unavailable).
     local LEFT_SURF="$_RSA_LEFT_SURFACE"
@@ -634,10 +642,10 @@ _run_one_subject() {
                 continue
             fi
 
-            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}_maps.dscalar.nii"
+            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_TAG_LOCAL}_${SL_CONFIG}_maps.dscalar.nii"
 
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "searchlight" ]; then
-                local SL_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}_searchlight.npy"
+                local SL_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_${SL_CONFIG}_searchlight.npy"
                 if [ -f "$SL_OUT" ] && [ -f "$COMBINED_OUT" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: searchlight ${MODEL_NAME}/${MOD} already complete; skipping" \
                         | tee -a "$LOG"
@@ -666,6 +674,7 @@ _run_one_subject() {
                         --combined-output    "$COMBINED_OUT" \
                         --gpu-batch-size 512 \
                         --n-blocks           "$_RSA_N_BLOCKS" \
+                        --model-norm         "$_RSA_MODEL_NORM" \
                         $HRF_FLAG \
                         >> "$LOG" 2>&1 || STATUS=$?
                 fi
@@ -695,6 +704,7 @@ _run_one_subject() {
                         --tr               "$_RSA_TR" \
                         --glasser-dlabel   "$_RSA_GLASSER_DLABEL" \
                         --combined-output  "$COMBINED_OUT" \
+                        --model-norm       "$_RSA_MODEL_NORM" \
                         $HRF_FLAG \
                         >> "$LOG" 2>&1 || STATUS=$?
                 fi
@@ -1082,6 +1092,7 @@ run_persubject() {
     export _RSA_TR="$TR"
     export _RSA_K="$K"
     export _RSA_METHOD="$METHOD"
+    export _RSA_MODEL_NORM="$MODEL_NORM"
     export _RSA_HRF="$HRF"
     export _RSA_METHOD_ARG="$METHOD_ARG"
     export _RSA_STREAM="$STREAM"
@@ -1194,6 +1205,7 @@ run_group_stats() {
                     --skip-sec        "$SKIP_SEC" \
                     --delay-sec       "$DELAY_SEC" \
                     --method          "$METHOD" \
+                    --model-norm      "$MODEL_NORM" \
                     --fmri-tag        "$PREPROCESSING_FLAG" \
                     --template-cifti  "$TEMPLATE_CIFTI" \
                     --left-surface    "$LEFT_SURFACE" \
@@ -1338,23 +1350,26 @@ case "$MODE" in
             # (loads every subject's raw CIFTI at once) -- run_diff_study.sh sets
             # both to true so its scramble/dummy sweep doesn't redundantly redo
             # either when the main pipeline has already produced them.
-            case "$MODE" in
-                avg)        run_avg ;;
-                persubject) run_persubject
-                            run_group_stats
-                            [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
-                groupstats) if [ "${SKIP_CROSSNOBIS:-false}" != "true" ]; then
-                                run_crossnobis_isub; run_crossnobis_persubject
-                            fi
-                            run_group_stats
-                            [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
-                all)        run_avg; run_persubject
-                            if [ "${SKIP_CROSSNOBIS:-false}" != "true" ]; then
-                                run_crossnobis_isub; run_crossnobis_persubject
-                            fi
-                            run_group_stats
-                            [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
-            esac
+            for MODEL_NORM in "${MODEL_NORMS[@]}"; do
+                log "--- model-norm=${MODEL_NORM} ---"
+                case "$MODE" in
+                    avg)        run_avg ;;
+                    persubject) run_persubject
+                                run_group_stats
+                                [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
+                    groupstats) if [ "${SKIP_CROSSNOBIS:-false}" != "true" ]; then
+                                    run_crossnobis_isub; run_crossnobis_persubject
+                                fi
+                                run_group_stats
+                                [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
+                    all)        run_avg; run_persubject
+                                if [ "${SKIP_CROSSNOBIS:-false}" != "true" ]; then
+                                    run_crossnobis_isub; run_crossnobis_persubject
+                                fi
+                                run_group_stats
+                                [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
+                esac
+            done
         done
         ;;
     *)

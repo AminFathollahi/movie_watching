@@ -2,7 +2,7 @@
 Validate our CF model pipeline using Hedger's subject 999999 data.
 
 Concatenates Hedger's 4 per-run sg_psc CIFTIs (cortex only),
-runs our 02_fit_cf_model.py, and compares R² maps.
+runs our 01_extract_geometry.py and 02_fit_cf_model.py, and compares R² maps.
 
 Usage:
     conda run -n movie python cf_modeling/validate_hedger_data.py
@@ -11,6 +11,9 @@ import os, sys, subprocess
 from pathlib import Path
 import numpy as np
 import nibabel as nib
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cf_naming import cf_model_map_stems
 
 MOVIE_ROOT    = Path("/home/amin/Research/Representation/Movie")
 REPO_ROOT     = MOVIE_ROOT / "movie_watching"
@@ -29,6 +32,7 @@ GLASSER_DLABEL = str(
 )
 PYCORTEX_STORE = str(MOVIE_ROOT / "data/hedger2026")
 MASKS_DIR      = str(OUTPUT_BASE / "masks")
+N_LBOE         = 200
 
 # Hedger's run filenames in order (MOVIE1=run1, …, MOVIE4=run4)
 RUN_FILES = [
@@ -91,54 +95,59 @@ else:
     print(f"Concatenated CIFTI already exists. run_trs: {run_trs}")
 
 # =============================================================================
-# Step 2: Run CF model on Hedger's data (3b x V1)
+# Step 2: Build the geometry, then fit the CF model on Hedger's data (3b x V1)
 # =============================================================================
-validate_output = VALIDATE_DIR / "group_average" / "3b_V1"
-validate_output.mkdir(parents=True, exist_ok=True)
-
-cmd = [
-    "conda", "run", "--no-capture-output", "-n", "movie",
-    "python", str(CF_DIR / "02_fit_cf_model.py"),
-    "--mode",             "group_average",
-    "--roi-a",            "3b",
-    "--roi-b",            "V1",
-    "--preprocessed-dir", str(VALIDATE_DIR),
-    "--fmri-suffix",      "hedger_999999_sg_psc",
-    "--template-cifti",   str(out_cifti),
-    "--output-base",      str(VALIDATE_DIR),
-    "--glasser-dlabel",   GLASSER_DLABEL,
-    "--pycortex-store",   PYCORTEX_STORE,
-    "--masks-dir",        MASKS_DIR,
-    "--vicsompy-repo",    str(VICSOMPY_REPO),
-    "--backend",          "torch_cuda",
-    "--n-lboe",           "200",
+ROI_A, ROI_B = f"3b_lboe{N_LBOE}", f"V1_lboe{N_LBOE}"
+PAIR = f"{ROI_A}_{ROI_B}"
+PYTHON = ["conda", "run", "--no-capture-output", "-n", "movie", "python"]
+COMMON = [
+    "--mode",          "group_average",
+    "--roi-a",         ROI_A,
+    "--roi-b",         ROI_B,
+    "--output-base",   str(VALIDATE_DIR),
+    "--vicsompy-repo", str(VICSOMPY_REPO),
 ]
-print("\nRunning CF model on Hedger's data ...")
-print("Command:\n  " + " \\\n  ".join(cmd[5:]))
-result = subprocess.run(cmd, capture_output=False, text=True)
-if result.returncode != 0:
-    print("CF model failed — check output above")
-    sys.exit(1)
+STEPS = {
+    "01_extract_geometry.py": [
+        "--n-lboe",         str(N_LBOE),
+        "--glasser-dlabel", GLASSER_DLABEL,
+        "--pycortex-store", PYCORTEX_STORE,
+        "--masks-dir",      MASKS_DIR,
+    ],
+    "02_fit_cf_model.py": [
+        "--preprocessed-dir", str(VALIDATE_DIR),
+        "--fmri-suffix",      "hedger_999999_sg_psc",
+        "--template-cifti",   str(out_cifti),
+        "--backend",          "torch_cuda",
+    ],
+}
+for script, extra in STEPS.items():
+    cmd = PYTHON + [str(CF_DIR / script)] + COMMON + extra
+    print(f"\nRunning {script} on Hedger's data ...")
+    print("Command:\n  " + " \\\n  ".join(cmd[5:]))
+    if subprocess.run(cmd, text=True).returncode != 0:
+        print(f"{script} failed; check output above")
+        sys.exit(1)
 
 # =============================================================================
 # Step 3: Compare R² maps
 # =============================================================================
-import glob
-our_prep  = OUTPUT_BASE / "group_average" / "3b_V1" / "prep"
-hed_prep  = VALIDATE_DIR / "group_average" / "3b_V1" / "prep"
+our_prep = OUTPUT_BASE / "group_average" / PAIR / "prep"
+hed_prep = VALIDATE_DIR / "group_average" / PAIR / "prep"
+stems = cf_model_map_stems(ROI_A, ROI_B)
 
-print("\n=== R² comparison: our corrupted data vs Hedger's data ===")
-print(f"{'Map':<20}  {'Our mean':>9}  {'Our f>0':>8}  {'Hed mean':>9}  {'Hed f>0':>8}")
-print("-" * 62)
-for key in ["R2_3b", "R2_V1", "R2_3b_nc", "R2_V1_nc", "R2_full"]:
-    our_f = our_prep / f"{key}.npy"
-    hed_f = hed_prep / f"{key}.npy"
+print("\n=== R² comparison: our group average vs Hedger's subject 999999 ===")
+print(f"{'Map':<50}  {'Our mean':>9}  {'Our f>0':>8}  {'Hed mean':>9}  {'Hed f>0':>8}")
+print("-" * 92)
+for key in ["split_r2_a", "split_r2_b", "null_corrected_split_r2_a", "null_corrected_split_r2_b", "full_r2"]:
+    our_f = our_prep / f"{stems[key]}.npy"
+    hed_f = hed_prep / f"{stems[key]}.npy"
     if our_f.exists() and hed_f.exists():
         our_a = np.load(str(our_f))
         hed_a = np.load(str(hed_f))
-        print(f"{key:<20}  {our_a.mean():>9.4f}  {np.mean(our_a>0):>8.1%}"
+        print(f"{stems[key]:<50}  {our_a.mean():>9.4f}  {np.mean(our_a>0):>8.1%}"
               f"  {hed_a.mean():>9.4f}  {np.mean(hed_a>0):>8.1%}")
     else:
-        print(f"{key:<20}  (missing)")
+        print(f"{stems[key]:<50}  (missing)")
 
 print("\nDone. Hedger validation results in:", hed_prep)

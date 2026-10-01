@@ -56,7 +56,8 @@ if str(_CF_DIR) not in sys.path:
 
 from lib.data_adapter import grayord_to_sphere_space, N_VERTS_PER_HEM
 from cf_naming import (
-    cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
+    cf_model_map_stems, legacy_cf_model_map_stems, per_subject_mean_stem,
+    resolve_cf_model_map_path,
 )
 
 logging.basicConfig(
@@ -86,7 +87,11 @@ def _load_r2_maps(output_base: str, mode: str, src_a: str, src_b: str) -> tuple:
     required = ("full_r2", "null_corrected_split_r2_a", "null_corrected_split_r2_b")
     paths = {}
     for key in required:
-        path = resolve_cf_model_map_path(prep_dir, stems[key], legacy_stems[key])
+        if mode == "group_average":
+            path = resolve_cf_model_map_path(prep_dir, stems[key], legacy_stems[key])
+        else:
+            path = resolve_cf_model_map_path(
+                prep_dir, per_subject_mean_stem(stems[key]), f"{legacy_stems[key]}_avg")
         paths[key] = path
         if not os.path.exists(path):
             raise FileNotFoundError(

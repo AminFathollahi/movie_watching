@@ -81,6 +81,7 @@ from scipy.sparse.csgraph import connected_components
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from rsa.shared.naming import add_model_norm_arg, method_label
 from cifti_io import (
     get_bm_axis,
     get_combined_map_names,
@@ -120,6 +121,7 @@ def parse_args():
                    help="Window stride in seconds (default: bin-sec, i.e. no overlap).")
     p.add_argument("--delay-sec",        type=float, default=5.0)
     p.add_argument("--method",           required=True, choices=["spearman", "pearson"])
+    add_model_norm_arg(p)
     p.add_argument("--fmri-tag",         required=True,
                    help="Preprocessing tag in per-subject CIFTI filenames "
                         "(e.g. sg_psc_gsr).")
@@ -451,7 +453,8 @@ def main():
     bin_sec_int  = int(args.bin_sec)
     skip_int     = int(args.skip_sec)
     delay_tag    = f"delay{int(args.delay_sec)}s"
-    config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}"
+    method       = method_label(args.method, args.model_norm)
+    config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{method}"
 
     analysis_label = args.analysis_label or f"{args.model}_{args.modality}"
     out_dir = Path(args.output_dir) / "groupstats" / analysis_label / config
@@ -459,7 +462,7 @@ def main():
 
     # ── Collect per-subject ρ maps ────────────────────────────────────────────
     fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
-                     f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}_searchlight.npy")
+                     f"_bin{bin_sec_int}s_skip{skip_int}s_{method}_searchlight.npy")
 
     model_mod_dir = analysis_label
     subject_rho_files = sorted(

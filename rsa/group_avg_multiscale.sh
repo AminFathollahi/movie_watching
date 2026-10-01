@@ -46,6 +46,7 @@ K=100
 DELAY_SEC=5.0
 TR=1.0
 METHOD="spearman"
+export MODEL_NORM="${MODEL_NORM:-center}"
 CONDA_ENV="analysis"
 # =============================================================================
 
@@ -89,7 +90,8 @@ for BIN_SEC in 1 2  ; do
         --tr               "$TR" \
         --left-surface     "$LEFT_SURFACE" \
         --right-surface    "$RIGHT_SURFACE" \
-        --workbench        "$WORKBENCH"
+        --workbench        "$WORKBENCH" \
+        --model-norm       "$MODEL_NORM"
     log "--- bin_sec=${BIN_SEC}s done ---"
 done
 

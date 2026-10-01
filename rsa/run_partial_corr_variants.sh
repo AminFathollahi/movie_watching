@@ -38,6 +38,7 @@ SKIP_SEC=5.0
 DELAY_SEC=5.0
 TR=1.0
 METHOD="spearman"
+export MODEL_NORM="${MODEL_NORM:-center}"
 GPU_BATCH_SIZE=384
 
 RUN_KEYS=(
@@ -77,6 +78,7 @@ common_args() {
         --tr "$TR" \
         --k "$K" \
         --method "$METHOD" \
+        --model-norm "$MODEL_NORM" \
         --left-surface "$LEFT_SURFACE" \
         --right-surface "$RIGHT_SURFACE" \
         --workbench "$WORKBENCH" \

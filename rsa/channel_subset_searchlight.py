@@ -8,7 +8,7 @@ standalone embedding file, then calls ``searchlight.py`` unchanged as the
 RSA engine. Same fMRI/searchlight configuration as the primary group-average
 AV run in ``rsa/analysis.sh`` (k=100, bin5s/skip5s, delay5s, spearman,
 raw preprocessing), so the output map is directly comparable to
-``rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii``.
+``rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_maps.dscalar.nii``.
 """
 
 from __future__ import annotations

@@ -33,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from rsa.run_searchlight import get_neighbors   # noqa: E402 — after sys.path patch
+from rsa.searchlight import get_neighbors   # noqa: E402 — after sys.path patch
 
 logging.basicConfig(
     level=logging.INFO,

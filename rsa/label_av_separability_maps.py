@@ -25,6 +25,7 @@ Run with:
     design: optional, "dummy" (default) or "scramble".
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -33,11 +34,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cifti_io import merge_into_combined  # noqa: E402
+from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
 from rsa.localizer_naming import base_name as loc_base_name, summary_json_name  # noqa: E402
 
 EMBEDDINGS_DIR = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
 GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average")
-CONFIG = "k100_delay5s_bin5s_skip5s_spearman"
+CONFIG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 
 SRC_MAPS = {
     "searchlight_spearman_rho": "rho",

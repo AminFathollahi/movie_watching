@@ -1,40 +1,31 @@
 #!/usr/bin/env bash
 # encoding/run_diff_study.sh
 # ============================
-# Encoding-currency analogue of rsa/run_diff_study.sh. Same reasoning: scramble
-# (avscramble) and dummy (clsav_from_a/_v) are CONTROL CONDITIONS paired
-# against a native-AV baseline, not independent models, so they get their own
-# model list and runner instead of encoding/analysis.sh's general MODELS sweep.
+# Encoding-currency analogue of rsa/run_diff_study.sh. The dummy conditions
+# (clsav_from_a, clsav_from_v) are CONTROLS paired against a native-AV
+# baseline, not independent models, so they have their own model list.
+# The global temporal scramble is not run: its embeddings mix training and
+# held-out clips and variance_partition.py rejects them.
 #
-# Hypothesis under test (AV-integration claim, encoding-currency version): in
-# true integration regions, BOTH plain predictive alignment (encoding_r2_audiovisual)
-# AND direct incremental AV variance (A+V+J minus A+V)
-# should be high for the native/intact condition and WEAKEN under scramble
-# and dummy.
+# Hypothesis under test: in true integration regions, BOTH the joint-only
+# model's held-out Pearson r (r_j) AND the direct joint gain (unique_j:
+# A+V+J minus A+V) are high for the intact embedding and WEAKEN under the
+# dummy conditions.
 #
 # Stages
-#   plain     Group-average plain encoding (encoding.py, modality=av) for
-#             every {base_model}_{condition} in BASE_MODELS x CONDITIONS.
-#             Reuses encoding/analysis.sh via ENCODING_MODELS_OVERRIDE.
-#   incremental  Group-average direct incremental AV variance
-#             (encoding/variance_partition.py) for every condition. Scramble
-#             uses the intact base model's correct a/v while adding the
-#             mismatched condition's J. Dummy conditions use the intact base
-#             model with a single real --nuisance-modalities
-#             (the placeholder modality can't be a nuisance band).
-#   consolidate  encoding/diff_maps.py pairing and modality-presence contrasts.
-#   all       plain + incremental + consolidate.
+#   partition    variance_partition.py for the intact model and every dummy
+#                condition (always with the intact base model's A and V
+#                bands and the condition's J), for every split x feature
+#                scaling variant.
+#   consolidate  encoding/diff_maps.py intact-vs-dummy contrasts.
+#   all          partition + consolidate.
 #
 # Usage
 #   bash encoding/run_diff_study.sh [STAGE]
 #
-# Env overrides (this is a LARGE compute job -- each incremental run is a
-# cross-validated banded-ridge fit, not a cheap correlation):
+# Env overrides (LARGE compute job: each fit is a cross-validated banded ridge):
 #   DIFF_STUDY_MODELS       space-separated subset of BASE_MODELS.
-#   DIFF_STUDY_CONDITIONS   space-separated subset of {avscramble,clsav_from_a,clsav_from_v}.
-#
-# Example: sanity-check one model before committing to the full sweep:
-#   DIFF_STUDY_MODELS="pe-av-small-16-frame" bash encoding/run_diff_study.sh plain
+#   DIFF_STUDY_CONDITIONS   space-separated subset of {clsav_from_a,clsav_from_v}.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
@@ -54,12 +45,9 @@ BIN_SEC=5.0
 SKIP_SEC=5.0
 DELAY_SEC=5.0
 TR=1.0
-ALPHA_MIN=-2
-ALPHA_MAX=9
-N_ALPHAS=23
 N_ITER=20
 BACKEND="torch_cuda"
-TEST_VIDEO_IDS="video5,video9,video14,video18"
+VARIANTS=(fixed:zscore fixed:center runwise:zscore runwise:center)
 
 run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }
@@ -72,7 +60,7 @@ BASE_MODELS=(
     topoomni_layer9_mp topoomni_layer18_mp topoomni_layer27_mp
     topoomni_layer9_sheet_mp topoomni_layer18_sheet_mp topoomni_layer27_sheet_mp
 )
-CONDITIONS=(avscramble clsav_from_a clsav_from_v)
+CONDITIONS=(clsav_from_a clsav_from_v)
 
 if [ -n "${DIFF_STUDY_MODELS:-}" ]; then
     read -ra BASE_MODELS <<< "$DIFF_STUDY_MODELS"
@@ -81,90 +69,39 @@ if [ -n "${DIFF_STUDY_CONDITIONS:-}" ]; then
     read -ra CONDITIONS <<< "$DIFF_STUDY_CONDITIONS"
 fi
 
-STAGE=${1:-plain}
+STAGE=${1:-partition}
 
-run_diff_study_plain() {
-    # Includes each BASE's own intact run (needed by diff_maps.py's
-    # diff_intact_minus_scrambled/dummy_plain_rsa) alongside every
-    # scramble/dummy condition and the intact base model.
-    local MODELS_STR="" BASE COND
+run_diff_study_partition() {
+    local BASE COND MODEL
+    log "=== Diff-study variance partition (group-average) ==="
     for BASE in "${BASE_MODELS[@]}"; do
-        MODELS_STR="${MODELS_STR}${BASE}:av;"
-        for COND in "${CONDITIONS[@]}"; do
-            MODELS_STR="${MODELS_STR}${BASE}_${COND}:av;"
+        for COND in "" "${CONDITIONS[@]}"; do
+            MODEL="${BASE}${COND:+_$COND}"
+            for VARIANT in "${VARIANTS[@]}"; do
+                log "  ${MODEL} (${VARIANT%%:*}, ${VARIANT##*:})"
+                run_python "${SCRIPT_DIR}/variance_partition.py" \
+                    --split "${VARIANT%%:*}" --feature-scaling "${VARIANT##*:}" \
+                    --preprocessed-dir "$PREPROCESSED_DIR" \
+                    --fmri-suffix "$FMRI_SUFFIX" \
+                    --timing-csv "$TIMING_CSV" \
+                    --embeddings-dir "$EMBEDDINGS_DIR" \
+                    --template-cifti "$TEMPLATE_CIFTI" \
+                    --output-dir "$OUTPUT_DIR" \
+                    --subject group_average \
+                    --model "$MODEL" --audio-model "$BASE" --video-model "$BASE" --tag unimodal_own \
+                    --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" --tr "$TR" \
+                    --n-iter "$N_ITER" --backend "$BACKEND" \
+                    || log "  SKIP ${MODEL}: variance_partition.py failed (embeddings missing?)"
+            done
         done
     done
-    MODELS_STR="${MODELS_STR%;}"
-    log "=== Diff-study PLAIN encoding: ${#BASE_MODELS[@]} models x (intact + ${#CONDITIONS[@]} conditions) ==="
-    BIN_SECS="$BIN_SEC" ENCODING_MODELS_OVERRIDE="$MODELS_STR" \
-        bash "${SCRIPT_DIR}/analysis.sh" avg
-    log "=== Diff-study plain encoding complete ==="
-}
-
-run_diff_study_incremental() {
-    local BASE COND MODEL NUISANCE_MODEL NUISANCE_MODS
-    log "=== Diff-study incremental AV (group-average) ==="
-    for BASE in "${BASE_MODELS[@]}"; do
-        for COND in "${CONDITIONS[@]}"; do
-            MODEL="${BASE}_${COND}"
-            case "$COND" in
-                avscramble)
-                    log "  SKIP ${MODEL}: global scramble embeddings cross train/test boundaries"
-                    continue ;;
-                clsav_from_a)
-                    NUISANCE_MODEL="$BASE"; NUISANCE_MODS="a" ;;
-                clsav_from_v)
-                    NUISANCE_MODEL="$BASE"; NUISANCE_MODS="v" ;;
-            esac
-            log "  ${MODEL}  (nuisance=${NUISANCE_MODEL}/${NUISANCE_MODS})"
-            run_python "${SCRIPT_DIR}/variance_partition.py" \
-                --preprocessed-dir "$PREPROCESSED_DIR" \
-                --fmri-suffix "$FMRI_SUFFIX" \
-                --timing-csv "$TIMING_CSV" \
-                --embeddings-dir "$EMBEDDINGS_DIR" \
-                --template-cifti "$TEMPLATE_CIFTI" \
-                --output-dir "$OUTPUT_DIR" \
-                --subject group_average \
-                --model "$MODEL" \
-                --nuisance-model "$NUISANCE_MODEL" --nuisance-modalities "$NUISANCE_MODS" \
-                --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" --tr "$TR" \
-                --normalize \
-                --alpha-min "$ALPHA_MIN" --alpha-max "$ALPHA_MAX" --n-alphas "$N_ALPHAS" --n-iter "$N_ITER" \
-                --backend "$BACKEND" \
-                --test-video-ids "$TEST_VIDEO_IDS" \
-                || log "  SKIP ${MODEL}: variance_partition.py failed (embeddings missing?)"
-        done
-        # Also ensure the intact base model's incremental map exists; cheap to re-check,
-        # variance_partition.py has no internal skip-if-exists so only run if
-        # the output is actually missing.
-        INTACT_OUT="${OUTPUT_DIR}/group_average/${BASE}/delay5s_norm_bin5s_skip5s/incremental_av_delta_r2.dscalar.nii"
-        if [ ! -f "$INTACT_OUT" ]; then
-            log "  ${BASE} (intact)"
-            run_python "${SCRIPT_DIR}/variance_partition.py" \
-                --preprocessed-dir "$PREPROCESSED_DIR" \
-                --fmri-suffix "$FMRI_SUFFIX" \
-                --timing-csv "$TIMING_CSV" \
-                --embeddings-dir "$EMBEDDINGS_DIR" \
-                --template-cifti "$TEMPLATE_CIFTI" \
-                --output-dir "$OUTPUT_DIR" \
-                --subject group_average \
-                --model "$BASE" \
-                --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" --tr "$TR" \
-                --normalize \
-                --alpha-min "$ALPHA_MIN" --alpha-max "$ALPHA_MAX" --n-alphas "$N_ALPHAS" --n-iter "$N_ITER" \
-                --backend "$BACKEND" \
-                --test-video-ids "$TEST_VIDEO_IDS" \
-                || log "  SKIP ${BASE} (intact): variance_partition.py failed"
-        fi
-    done
-    log "=== Diff-study incremental AV complete ==="
+    log "=== Diff-study variance partition complete ==="
 }
 
 case "$STAGE" in
-    plain)       run_diff_study_plain ;;
-    incremental|avresid) run_diff_study_incremental ;;
+    partition)   run_diff_study_partition ;;
     consolidate) run_python "${SCRIPT_DIR}/diff_maps.py" ;;
-    all)         run_diff_study_plain; run_diff_study_incremental; run_python "${SCRIPT_DIR}/diff_maps.py" ;;
-    *) echo "Unknown STAGE: $STAGE (use: plain | incremental | consolidate | all)"; exit 1 ;;
+    all)         run_diff_study_partition; run_python "${SCRIPT_DIR}/diff_maps.py" ;;
+    *) echo "Unknown STAGE: $STAGE (use: partition | consolidate | all)"; exit 1 ;;
 esac
 log "Diff study (${STAGE}) complete."

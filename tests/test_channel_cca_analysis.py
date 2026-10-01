@@ -5,7 +5,7 @@ Covers the entire surviving analysis: two continuous per-channel axes
 zero-order and a partial variant, and one block-bootstrapped Spearman +
 Pearson correlation between them. No classes, no permutation testing, no
 FDR, no winner-take-all group test -- see the module docstring in
-cf_modeling/channel_cca_analysis.py for what was deleted and why.
+cf_modeling/deprecated/channel_cca_analysis.py for what was deleted and why.
 """
 
 import importlib.util
@@ -17,7 +17,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-PATH = ROOT / "cf_modeling" / "channel_cca_analysis.py"
+PATH = ROOT / "cf_modeling" / "deprecated" / "channel_cca_analysis.py"
 SPEC = importlib.util.spec_from_file_location("channel_cca_analysis", PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)

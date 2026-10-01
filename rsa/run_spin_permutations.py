@@ -42,7 +42,7 @@ Algorithm
 Usage
 -----
 python rsa/run_spin_permutations.py \
-    --combined-cifti /home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average/pe-av-small-16-frame/rsa_59k_raw_k100_delay5s_bin5_spearman_maps.dscalar.nii \
+    --combined-cifti /home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average/pe-av-small-16-frame/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_maps.dscalar.nii \
     --map-name searchlight_spearman_rho \
     --left-sphere /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/L.sphere.59k_fs_LR.surf.gii \
     --right-sphere /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/R.sphere.59k_fs_LR.surf.gii \

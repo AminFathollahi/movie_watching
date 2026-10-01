@@ -60,7 +60,7 @@ import os
 # proxy config gets locked in at import time, so stripping these afterward
 # has no effect and local_files_only lookups fail with a bogus "couldn't
 # connect" error even though the model is fully cached locally.
-os.environ["HF_HOME"] = "/home/amin/hf_models"
+os.environ["HF_HOME"] = os.environ.get("MODELS_HOME", "/home/amin/hf_models")
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy",
            "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -76,13 +76,13 @@ import torchaudio
 from tqdm import tqdm
 from transformers import AutoModel, AutoProcessor
 from qwen_omni_utils import process_mm_info
-from natsort import natsorted
+from pe_av_extract_intact import _chunk_suffix, find_chunk_pairs
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_PATH      = "nvidia/omni-embed-nemotron-3b"
-DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
-DEVICE          = "cuda"
+DATA_BASE       = Path(os.environ.get("STIMULUS_DIR", "/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered"))
+EMBEDDINGS_BASE = Path(os.environ.get("EMBEDDINGS_BASE", "/home/amin/Research/Representation/Movie/outputs/model_embeddings"))
+DEVICE          = os.environ.get("NEMOTRON_DEVICE", "cuda")
 DTYPE           = torch.bfloat16
 BIN_SEC = float(os.environ.get("BIN_SEC", "2.0"))
 SKIP_SEC = float(os.environ.get("SKIP_SEC", str(BIN_SEC)))
@@ -132,22 +132,18 @@ def main():
             audio = torchaudio.functional.resample(torch.from_numpy(audio), native_sr, target_sr).numpy()
         return audio
 
-    def _find_audio_path(video_path):
-        parts = [p.replace("Video", "Audio") for p in video_path.parts]
-        wav_path = Path(*parts).with_suffix(".wav")
-        return wav_path if wav_path.exists() else video_path
-
-    def _build_messages(video_path, modality):
-        """modality: 'audio', 'video', or 'av'."""
+    def _build_messages(pair, modality):
+        """pair: (muted video mp4, wav); modality: 'audio', 'video', or 'av'."""
+        video_path, audio_path = pair
         content = [{"type": "text", "text": DOC_PREFIX}]
         if modality in ("video", "av"):
             content.append({"type": "video", "video": str(video_path)})
         if modality in ("audio", "av"):
-            content.append({"type": "audio", "audio": str(_find_audio_path(video_path))})
+            content.append({"type": "audio", "audio": str(audio_path)})
         return [{"role": "user", "content": content}]
 
-    def extract(video_path, modality, target_layers=TARGET_LAYERS):
-        messages = _build_messages(video_path, modality)
+    def extract(pair, modality, target_layers=TARGET_LAYERS):
+        messages = _build_messages(pair, modality)
         text = processor.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
         audio, images, videos = process_mm_info(messages, use_audio_in_video=False)
 
@@ -179,14 +175,16 @@ def main():
         torch.cuda.empty_cache()
         return pooled, lasttoken
 
-    # ── Segment list (same convention as omni3b_extract_intact.py) ────────
+    # ── Segment list: muted video + lossless wav, same windows/order as pe_av_extract_intact.py ──
     dur_int, skip_int = int(BIN_SEC), int(SKIP_SEC)
-    chunk_suffix = f"_av_chunks_{dur_int}s" if skip_int == dur_int else f"_av_chunks_{dur_int}s_skip{skip_int}s"
-    all_segs = natsorted(list(DATA_BASE.rglob(f"*{chunk_suffix}/*.mp4")), key=lambda p: p.name)
-    if not all_segs:
-        fallback_suffix = f"_chunks_{dur_int}s" if skip_int == dur_int else f"_chunks_{dur_int}s_skip{skip_int}s"
-        all_segs = natsorted(list(DATA_BASE.rglob(f"*{fallback_suffix}/*.mp4")), key=lambda p: p.name)
-    assert len(all_segs) > 0, f"No {BIN_SEC}s segments found under {DATA_BASE}"
+    all_segs = find_chunk_pairs(DATA_BASE, BIN_SEC, SKIP_SEC)
+    n_videos = sum(
+        len(list(d.glob("*_part_*.mp4")))
+        for d in DATA_BASE.glob(f"Video*/Video*_chunks_{_chunk_suffix(BIN_SEC, SKIP_SEC)}")
+        if "_av_" not in d.name
+    )
+    assert all_segs, f"No {BIN_SEC}s segments found under {DATA_BASE}"
+    assert len(all_segs) == n_videos, f"{n_videos - len(all_segs)} muted clips have no matching wav"
     print(f"Found {len(all_segs)} segments.")
 
     _limit = os.environ.get("NEMOTRON_UNIMODAL_LIMIT")
@@ -202,11 +200,11 @@ def main():
     results_av_lt = {idx: [] for idx in TARGET_LAYERS}
     failed = []
 
-    for vp in tqdm(all_segs, desc="nemotron a/v/av extraction"):
+    for pair in tqdm(all_segs, desc="nemotron a/v/av extraction"):
         try:
-            pooled_a,  lt_a  = extract(vp, "audio")
-            pooled_v,  lt_v  = extract(vp, "video")
-            pooled_av, lt_av = extract(vp, "av")
+            pooled_a,  lt_a  = extract(pair, "audio")
+            pooled_v,  lt_v  = extract(pair, "video")
+            pooled_av, lt_av = extract(pair, "av")
             for idx in TARGET_LAYERS:
                 results_a[idx].append(pooled_a[idx])
                 results_v[idx].append(pooled_v[idx])
@@ -215,7 +213,7 @@ def main():
                 results_v_lt[idx].append(lt_v[idx])
                 results_av_lt[idx].append(lt_av[idx])
         except Exception as e:
-            failed.append((vp.name, repr(e)))
+            failed.append((pair[0].name, repr(e)))
             for idx in TARGET_LAYERS:
                 results_a[idx].append(np.zeros(2048, dtype=np.float32))
                 results_v[idx].append(np.zeros(2048, dtype=np.float32))

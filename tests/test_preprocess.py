@@ -17,7 +17,6 @@ sys.path.insert(0, ROOT)
 
 from preprocess_individual import (
     apply_gsr,
-    apply_zscore,
     apply_psc,
     apply_sg_filter,
     SG_WINDOW,
@@ -48,36 +47,6 @@ def test_apply_gsr_preserves_differences():
     apply_gsr(data)
     diff_after = data[0] - data[1]
     np.testing.assert_allclose(diff_after, diff_before, atol=1e-10)
-
-
-# =============================================================================
-# apply_zscore
-# =============================================================================
-
-def test_apply_zscore_mean_zero():
-    """After zscore, mean per vertex over time must be ≈0."""
-    rng = np.random.default_rng(3)
-    data = rng.standard_normal((80, 60)).astype(np.float32)
-    apply_zscore(data)
-    np.testing.assert_allclose(data.mean(axis=1), 0.0, atol=1e-5)
-
-
-def test_apply_zscore_std_one():
-    """After zscore, std per vertex over time must be ≈1."""
-    rng = np.random.default_rng(4)
-    data = rng.standard_normal((80, 60)).astype(np.float32)
-    apply_zscore(data)
-    np.testing.assert_allclose(data.std(axis=1), 1.0, atol=1e-4)
-
-
-def test_apply_zscore_constant_vertex_no_nan():
-    """Constant vertex (std=0) must produce 0, not NaN or Inf."""
-    data = np.ones((5, 30), dtype=np.float32) * 7.0
-    data[0, :] = 3.0   # constant but non-trivial
-    apply_zscore(data)
-    assert not np.any(np.isnan(data))
-    assert not np.any(np.isinf(data))
-    np.testing.assert_allclose(data[0], 0.0, atol=1e-6)
 
 
 # =============================================================================

@@ -17,6 +17,7 @@ No figures are produced -- exact wb_view paths + map names are printed
 for manual inspection, per standing project convention.
 """
 
+import os
 import sys
 from pathlib import Path
 from itertools import combinations
@@ -28,10 +29,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from rsa.glasser import load_glasser_parcels
 from cifti_io import get_bm_axis
+from rsa.shared.naming import DEFAULT_MODEL_NORM
 
 GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average")
 GLASSER_DLABEL = "/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
-CONFIG_TAG = "k100_delay5s_bin5s_skip5s_spearman"
+CONFIG_TAG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 
 KINDS = ["auditory", "integration"]
 TAGS = ["text", "av", "clsav_from_a", "clsav_from_v"]

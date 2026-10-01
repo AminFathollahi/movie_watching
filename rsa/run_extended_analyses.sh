@@ -38,12 +38,13 @@ BIN_SEC=5.0
 SKIP_SEC=5.0
 DELAY_SEC=5.0
 METHOD="spearman"
+MODEL_NORM="${MODEL_NORM:-center}"
 TR=1.0
 GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-512}"
 
-CONFIG="k100_delay5s_bin5s_skip5s_spearman"
-NORMAL_MAPS_FILENAME="rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii"
-RESIDUALIZED_MAPS_FILENAME="rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_residualized_maps.dscalar.nii"
+CONFIG="k100_delay5s_bin5s_skip5s_spearman_${MODEL_NORM}"
+NORMAL_MAPS_FILENAME="rsa_59k_raw_${CONFIG}_maps.dscalar.nii"
+RESIDUALIZED_MAPS_FILENAME="rsa_59k_raw_${CONFIG}_residualized_maps.dscalar.nii"
 
 run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }
@@ -119,7 +120,7 @@ print(';'.join(missing))
     fi
 
     log "Running group-average searchlight RSA for residual embeddings"
-    BIN_SECS="$BIN_SEC" GPU_BATCH_SIZE="$GPU_BATCH_SIZE" RSA_MODELS_OVERRIDE="$models_str" \
+    BIN_SECS="$BIN_SEC" MODEL_NORMS="$MODEL_NORM" GPU_BATCH_SIZE="$GPU_BATCH_SIZE" RSA_MODELS_OVERRIDE="$models_str" \
         bash "${SCRIPT_DIR}/analysis.sh" avg searchlight
 }
 
@@ -164,7 +165,7 @@ for model in RESIDUALIZED_AV_MODELS:
             --subject group_average \
             --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" \
             --delay-sec "$DELAY_SEC" --tr "$TR" \
-            --k "$K" --method "$METHOD" \
+            --k "$K" --method "$METHOD" --model-norm "$MODEL_NORM" \
             --left-surface "$LEFT_SURFACE" --right-surface "$RIGHT_SURFACE" \
             --workbench "$WORKBENCH" \
             --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \

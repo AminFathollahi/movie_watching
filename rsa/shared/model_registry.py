@@ -415,7 +415,7 @@ def av_derived_baselines(
 # notebooks/feature_extraction/compute_linear_residual_embeddings.py for the
 # supported residual-analysis roster (ridge residual after regressing out
 # AudioMAE(a) + VideoMAEv2-Large(v)). Registered here for discoverability
-# -- rsa/searchlight.py, rsa/partial_rsa.py, and encoding/encoding.py only need
+# -- rsa/searchlight.py and rsa/partial_rsa.py only need
 # the .npy file to exist at the standard emb_path() location, not a MODELS entry.
 for _m in dict.fromkeys([*NATIVE_AV_MODELS, *RESIDUALIZED_AV_MODELS]):
     MODELS[f"{_m}_av_linear_resid_unimodal"] = {
@@ -482,7 +482,7 @@ class PartialRSARun(NamedTuple):
     # its OWN joint embedding (the best-additive-combination contrast).
     # "cross_baseline" runs regress OTHER models' unimodal streams out instead.
     # Both kinds share one output convention (see partial_rsa.py's save block):
-    # group_average/<label>/k{K}_delay{D}s_bin{B}s_skip{S}s_{method}/<file>.
+    # group_average/<label>/k{K}_delay{D}s_bin{B}s_skip{S}s_{method}_{model_norm}/<file>.
 
 
 def _own_unimodal_integration_run(model: str, modality: str = "av") -> PartialRSARun:

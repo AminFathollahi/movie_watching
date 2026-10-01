@@ -68,6 +68,7 @@ from rsa.shared.rsa_utils import (
     align_and_assert_bins,
     get_run_bin_counts,
 )
+from rsa.shared.naming import add_model_norm_arg, searchlight_config, searchlight_stem
 from rsa.searchlight import (
     get_neighbors,
     _precompute_model_rdm,
@@ -153,7 +154,7 @@ def parse_args():
     p.add_argument("--hrf",            action="store_true")
     p.add_argument("--method",         required=True, choices=["spearman", "pearson"])
     p.add_argument("--tr",             type=float, required=True)
-    p.add_argument("--normalize",      action=argparse.BooleanOptionalAction, default=True)
+    add_model_norm_arg(p)
     p.add_argument("--geodesic-cache-dir", default=None, dest="geodesic_cache_dir")
     p.add_argument("--combined-output",    default=None, dest="combined_output",
                    help="Combined .dscalar.nii to append sigmap_perm maps to "
@@ -682,21 +683,18 @@ def main():
     if args.skip_sec is None:
         args.skip_sec = args.bin_sec
 
-    normalize   = getattr(args, "normalize", True)
-    norm_tag    = "" if normalize else "_demean"
     bin_sec_int = int(args.bin_sec)
     skip_int    = int(args.skip_sec)
-    delay_tag   = f"delay{int(args.delay_sec)}s"
-    full_tag    = f"{args.fmri_suffix}{norm_tag}"
-    config      = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{args.method}"
+    config      = searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec,
+                                     args.method, args.model_norm)
     n_perm      = args.n_perm
 
     out_root = (Path(args.output_dir) / args.subject
                 / f"{args.model}_{args.modality}" / config)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    stem          = (f"rsa_59k_{full_tag}_k{args.k}_{delay_tag}"
-                     f"_bin{bin_sec_int}s_skip{skip_int}s_{args.method}")
+    stem          = searchlight_stem(args.fmri_suffix, args.k, args.delay_sec, args.bin_sec,
+                                     args.skip_sec, args.method, args.model_norm)
     perm_p_path   = out_root / f"{stem}_perm{n_perm}_p.npy"
     combined_path = Path(args.combined_output) if args.combined_output else None
     map_perm      = f"searchlight_{args.method}_sigmap_perm"
@@ -724,7 +722,7 @@ def main():
 
     fmri_binned = preprocess_fmri(
         fmri_continuous, timing_df, run_trs, args.bin_sec, args.tr,
-        args.delay_sec, skip_sec=args.skip_sec, normalize=normalize,
+        args.delay_sec, skip_sec=args.skip_sec, normalize=True,
     )
     del fmri_continuous
     gc.collect()
@@ -735,7 +733,7 @@ def main():
     emb = process_model_embeddings(
         str(emb_file), timing_df, bin_sec=args.bin_sec, tr=args.tr,
         run_trs=run_trs, delay_sec=args.delay_sec, hrf=args.hrf,
-        skip_sec=args.skip_sec, normalize=normalize,
+        skip_sec=args.skip_sec, model_norm=args.model_norm,
     )
     log.info(f"  Embeddings: {emb.shape}")
 

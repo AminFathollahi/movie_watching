@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "cf_modeling" / "run_cca_islands.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "cf_modeling" / "deprecated" / "run_cca_islands.py"
 SPEC = importlib.util.spec_from_file_location("run_cca_islands", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)

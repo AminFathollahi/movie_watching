@@ -1,6 +1,6 @@
 # Movie-watching fMRI: representation analyses
 
-Analysis code for HCP 7T movie-watching fMRI (175 subjects, 4 runs, TR = 1 s) compared against audio, video and joint audio-video model embeddings. The brain data are the 59,412 cortical grayordinates of the 59k fsLR surface (plus the subcortical voxels in `subcortical/`). Each movie clip is cut into fixed windows (1, 2 or 5 s), every window is embedded by each model, and the embeddings are compared with the delayed fMRI response of the same window.
+Analysis code for HCP 7T movie-watching fMRI (175 subjects, 4 runs, TR = 1 s) compared against audio, video and joint audio-video model embeddings. The brain data are the 108,441 cortical grayordinates of the 59k fsLR surface (plus the subcortical voxels in `subcortical/`). Each movie clip is cut into fixed windows (1, 2 or 5 s), every window is embedded by each model, and the embeddings are compared with the delayed fMRI response of the same window.
 
 Analyses:
 
@@ -10,27 +10,27 @@ Analyses:
 - Clustering of stimulus states and of vertex time series.
 - Seed-based connectivity from RSA-defined regions.
 
-## Current status (5 October 2026)
+## Progress (October 2026)
 
-The current question is where cortex integrates audio and video during movie watching, and whether the joint embedding of an audiovisual model (J) predicts responses beyond audio-only (A) and video-only (V) embeddings. The two audiovisual models are PE-AV (Perception Encoder Audio-Visual, small) and Nemotron (layer 18, mean-pooled). Each is compared with its own audio and video embeddings, and with eight pairs of separately trained audio and video encoders.
+The current question is where cortex combines auditory and visual information during movie watching, and whether audiovisual models capture that combination. Each 5-s window is embedded three ways: audio alone (A), video alone (V) and the joint audiovisual embedding (J). The audiovisual models are PE-AV (small) and Nemotron (layer 18). Their A and V are also replaced by eight pairs of separately trained audio and video encoders.
 
-Recent changes:
+Changes in this round:
 
-- Encoding embeddings are now scaled over the same rows and with the same statistics as the fMRI responses, and every encoding map was refitted under two cross-validation schemes: leaving out one run (4 folds) and leaving out one clip (15 folds). Leave-one-subject-out encoding was dropped.
-- The eight control pairs were refitted with one layer per encoder, chosen by a single-encoder screen.
-- New encoding maps: `shared_av`, the variance audio and video explain in common, and a summary comparing the model's own audio and video with the eight pairs.
-- CKA gained a commonality analysis, the CKA counterpart of the encoding variance partition, for the group average and for single subjects.
-- A dimension test (each band reduced to 32 or 128 principal components) lowered R² without changing the reliability of the `unique_j` maps, so the full embeddings are kept.
+- Embeddings are normalized the same way as the fMRI responses (within each run when a whole run is held out, with training-set statistics when a single clip is held out), and all encoding models were refitted under both splits.
+- The control encoders were refitted at the layer that best predicts cortex on its own.
+- Encoding now reports the variance A and V explain in common, for a model's own A and V and for each control pair.
+- CKA has a commonality decomposition that matches the encoding variance partition.
+- Reducing each embedding to 32 or 128 principal components lowered prediction without making the J maps more reliable, so the full embeddings are kept.
 
-Headline results (group average of 175 subjects, 5-s windows, held-out R² averaged over the 108,441 cortical grayordinates; leave-one-run-out / leave-one-clip-out):
+Results so far (group average of 175 subjects, mean held-out R² over the 108,441 cortical grayordinates, leave-one-run-out / leave-one-clip-out):
 
-- Audio and video embeddings together explain about a tenth of the response variance: R²(AV) 0.100 / 0.099 for PE-AV's own embeddings and 0.119 / 0.117 for Nemotron's.
-- The joint embedding adds almost nothing beyond the same model's audio and video embeddings: `unique_j` = R²(AVJ) − R²(AV) is +0.0008 / −0.0003 for PE-AV and +0.0017 / +0.0013 for Nemotron. Beyond separately trained encoders, Nemotron's J adds 0.015–0.041, and these maps agree across the two schemes (r 0.72–0.86).
-- Separately trained encoder pairs predict as well as PE-AV: the best pair (w2v-BERT 2.0 with V-JEPA 2 ViT-L) reaches R²(AV) 0.106 / 0.099, against 0.101 / 0.098 for PE-AV's full model. Nemotron's full model (0.121 / 0.118) is above every pair on average and above all eight at 36% of grayordinates.
-- Joint training does not give PE-AV's audio and video more shared brain-predictive variance than every separately trained pair: one pair (OpenBEATs with V-JEPA 2 ViT-L) shares as much as PE-AV's own audio and video, and PE-AV's own pair shares more than all eight control pairs at 17% / 15% of grayordinates.
-- CKA and encoding agree on the shared audio-video part: the CKA commonality `shared_av` map correlates 0.66 with the encoding one across cortex. Against an independent audiovisual localizer (the Lorax conjunction map, AV above both A and V), the CKA semi-partial map of PE-AV's J correlates 0.41 and the encoding R²(AV) map 0.34.
+- A and V together reach R² of about 0.10 (PE-AV 0.100 / 0.099, Nemotron 0.119 / 0.117).
+- Adding J to the model's own A and V changes R² by less than 0.002 (PE-AV +0.0008 / −0.0003, Nemotron +0.0017 / +0.0013). Added to separately trained encoders, Nemotron's J contributes 0.015 to 0.041, with similar maps under both splits.
+- Separately trained encoders match PE-AV. The best pair (w2v-BERT 2.0 audio, V-JEPA 2 ViT-L video) reaches 0.106 / 0.099, against 0.101 / 0.098 for PE-AV with A, V and J. Nemotron (0.121 / 0.118) is ahead of every pair on average.
+- The variance shared by A and V is no larger for PE-AV's own encoders than for the best separately trained pair (OpenBEATs audio, V-JEPA 2 ViT-L video).
+- CKA and encoding give similar maps of the part shared by A and V (r = 0.66 across cortex). Both resemble an audiovisual conjunction map from an independent localizer experiment: r = 0.41 for the CKA map of J beyond A and V, 0.34 for encoding R²(AV).
 
-Module details and per-pair tables are in [`encoding/README.md`](encoding/README.md) and [`cka/README.md`](cka/README.md). The full write-up, with methods from first principles and references, is kept with the outputs (`RSA_Encoding_CKA_explained.pdf`); earlier RSA, connective-field and clustering results are in `outputs/results_report.pdf`.
+Per-pair numbers are in [`encoding/README.md`](encoding/README.md) and [`cka/README.md`](cka/README.md).
 
 ## Repository layout
 
@@ -102,8 +102,8 @@ Embedding rows are ordered by clip (1 to 18), then by window start time. Window 
 
 ## Pipeline order
 
-1. **Check inputs.** `python verify_subjects.py` reports subjects with missing CIFTIs or surfaces.
-2. **Preprocess fMRI.** Each of `rsa/analysis.sh`, `encoding/analysis.sh` and `cf_modeling/run_analysis.sh` has a `preprocess` mode that runs `preprocess_individual.py` with its own `SG_FILTER`, `PSC` and `GSR` settings, saves per-subject and group-average CIFTIs and moves the group average to `average_sub/{flag}/`. Run it once with the `raw` setting at least, because the group average is the template and run-length source for every later step:
+1. Check inputs. `python verify_subjects.py` reports subjects with missing CIFTIs or surfaces.
+2. Preprocess fMRI. Each of `rsa/analysis.sh`, `encoding/analysis.sh` and `cf_modeling/run_analysis.sh` has a `preprocess` mode that runs `preprocess_individual.py` with its own `SG_FILTER`, `PSC` and `GSR` settings, saves per-subject and group-average CIFTIs and moves the group average to `average_sub/{flag}/`. Run it once with the `raw` setting at least, because the group average is the template and run-length source for every later step:
    ```bash
    conda activate movie
    bash rsa/analysis.sh preprocess
@@ -116,10 +116,10 @@ Embedding rows are ordered by clip (1 to 18), then by window start time. Window 
        --save-individual --save-average
    ```
    Steps run per run in the order Savitzky-Golay high-pass (window 201 TRs, order 3), percent signal change, global signal regression. Percent signal change divides by the temporal mean taken before the high-pass step, because the filter removes the mean. Without `--save-individual` and `--save-average` nothing is written; the RSA runner uses that streaming mode (`STREAM=true`) to preprocess raw CIFTIs on the fly.
-3. **Cut the stimulus.** `python notebooks/feature_extraction/segment_official.py` cuts the 18 clips and their 1, 2 and 5 s windows from the full run movies and writes `data/movie_timing.csv`. It reads `average_sub/raw/group_average_raw_run_trs.npy`, so step 2 comes first.
-4. **Extract embeddings.** See [`notebooks/feature_extraction/README.md`](notebooks/feature_extraction/README.md).
-5. **Build surfaces.** `bash make_average.sh` averages the per-subject surfaces listed in `subjects.txt` and writes `CohortAvg.*` surfaces to `data/GroupAverage_59k/`. The runners read them from `data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/`, so place or link them there. Then `bash rsa/analysis.sh neighbors_avg` builds the geodesic neighbor cache.
-6. **Run the analyses** (each runner documents its modes in its directory README):
+3. Cut the stimulus. `python notebooks/feature_extraction/segment_official.py` cuts the 18 clips and their 1, 2 and 5 s windows from the full run movies and writes `data/movie_timing.csv`. It reads `average_sub/raw/group_average_raw_run_trs.npy`, so step 2 comes first.
+4. Extract embeddings. See [`notebooks/feature_extraction/README.md`](notebooks/feature_extraction/README.md).
+5. Build surfaces. `bash make_average.sh` averages the per-subject surfaces listed in `subjects.txt` and writes `CohortAvg.*` surfaces to `data/GroupAverage_59k/`. The runners read them from `data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/`, so place or link them there. Then `bash rsa/analysis.sh neighbors_avg` builds the geodesic neighbor cache.
+6. Run the analyses (each runner documents its modes in its directory README):
    ```bash
    bash rsa/analysis.sh avg                  # group-average RSA
    bash rsa/analysis.sh persubject all 4     # per-subject RSA, 4 subjects in parallel, then group statistics and noise ceiling
@@ -129,10 +129,10 @@ Embedding rows are ordered by clip (1 to 18), then by window start time. Window 
    bash subcortical/analysis.sh neighbors    # once, before the other subcortical modes
    ```
    `connectivity/seed_connectivity.py` takes border files written by `rsa/draw_rsa_borders.py`, so it runs after RSA.
-7. **Inspect results.** `viz/plot_cortex_map.py` for single maps, `viz/prepare_wb_view_cortical.py` for a Workbench bundle, and the notebooks in `notebooks/visualization/`.
+7. Inspect results. `viz/plot_cortex_map.py` for single maps, `viz/prepare_wb_view_cortical.py` for a Workbench bundle, and the notebooks in `notebooks/visualization/`.
 
 ## Conventions
 
-- **Timing.** `data/movie_timing.csv` is the analysis timing file: 18 clips of meaningful audiovisual content, global onsets across the four concatenated runs, in seconds (equal to TR indices). `data/HCP_7T_Movie_Clip_Timing.csv` is the official run-local sheet; `official_timing.py` converts it to global time, and `connectivity/` uses it to find inter-clip rest blocks. The two sources differ at clip ends (for example the end credits of clip 1 are excluded from `movie_timing.csv`).
-- **Hemodynamic delay.** Applied at analysis time to the fMRI window, either as a boxcar shift (`--delay-sec`, default 5.0 s in the runners) or by convolving the model with the SPM hemodynamic response function (`--hrf`). Preprocessing does no timing selection.
-- **Subjects.** `data/subjects.txt` lists the 175 subjects used. Subjects with no individual midthickness surface are listed in `data/excluded.txt`.
+- `data/movie_timing.csv` is the analysis timing file: 18 clips of meaningful audiovisual content, global onsets across the four concatenated runs, in seconds (equal to TR indices). `data/HCP_7T_Movie_Clip_Timing.csv` is the official run-local sheet; `official_timing.py` converts it to global time, and `connectivity/` uses it to find inter-clip rest blocks. The two sources differ at clip ends (for example the end credits of clip 1 are excluded from `movie_timing.csv`).
+- The hemodynamic delay is applied at analysis time to the fMRI window, either as a boxcar shift (`--delay-sec`, default 5.0 s in the runners) or by convolving the model with the SPM hemodynamic response function (`--hrf`). Preprocessing does no timing selection.
+- `data/subjects.txt` lists the 175 subjects used. Subjects with no individual midthickness surface are listed in `data/excluded.txt`.

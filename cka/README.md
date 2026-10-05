@@ -79,9 +79,11 @@ Under `outputs/cka/raw/`, `{stem}` = `cka_59k_raw_k{k}_delay{D}s_bin{B}s_skip{B}
 | `cv`, subject mean | 0.0024 | 0.0003 | 0.0004 | |
 | `cv-ar`, group | 0.0004 | 0.00004 | 0.0001 | unique J 0.24, shared AV −0.04 |
 
-- **Commonality.** The shared AV map of `cv` correlates 0.66 with the encoding shared AV map (0.58 with Whisper and PE-Core as A and V). After whitening (`cv-ar`) shared AV is near zero and no longer follows encoding. For Nemotron with its own A and V, the part shared by all three is negative on average (−0.0016). Subject-mean values are 0.2–0.7 of the group values: noise inflates R²(S), but single subjects carry less stimulus-driven signal.
-- **Unique parts in subjects.** Their one-sample t exceeds 3 at every grayordinate. Each subject value is a square plus a positive noise term, so this does not by itself show an effect; their spatial pattern is the informative part.
-- **Agreement with the Lorax audiovisual maps** (group, whole cortex, Pearson). sp_J correlates with the conjunction map (AV above both A and V) 0.41 with own A and V and 0.47 with Whisper and PE-Core, and 0.33 and 0.47 after whitening. cka_J alone correlates 0.41; after removing what cka_J explains, the partial correlation of sp_J is 0.15 and 0.24 (0.11 and 0.27 whitened). These spatial correlations are inflated by spatial autocorrelation, so no p values are given.
+The `cv` shared AV map correlates 0.66 with the encoding shared AV map (0.58 with Whisper and PE-Core as A and V). After whitening (`cv-ar`) shared AV is close to zero and no longer resembles the encoding map. For Nemotron with its own A and V, the part shared by all three is negative on average (−0.0016). Subject means are 0.2 to 0.7 times the group values; noise inflates R²(S), but a single subject carries less stimulus-driven signal than a group of seven.
+
+In subjects, the one-sample t of every unique part exceeds 3 at every grayordinate. Each subject value is a square plus a positive noise term, so this alone is not evidence of an effect; the spatial pattern is what carries information.
+
+Across cortex, the group sp_J map correlates 0.41 (own A and V) and 0.47 (Whisper and PE-Core) with an audiovisual conjunction map (AV above both A and V) from an independent localizer experiment, and 0.33 and 0.47 after whitening. cka_J alone correlates 0.41; with cka_J partialled out, sp_J still correlates 0.15 and 0.24 (0.11 and 0.27 whitened). Spatial autocorrelation inflates these correlations, so no p values are given.
 
 ## Tests
 

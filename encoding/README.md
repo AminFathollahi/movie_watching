@@ -106,12 +106,13 @@ Group average, 5-s windows, demeaned embeddings. Each cell is the held-out value
 | `text-contrastive` | 0.0269 / 0.0276 | 0.0643 / 0.0651 | 0.0741 / 0.0712 | +0.0171 / +0.0216 | 0.0881 / 0.0885 | +0.0140 / +0.0174 | 0.1090 / 0.1105 | +0.0349 / +0.0393 |
 | `text-asr` | 0.0396 / 0.0489 | 0.0643 / 0.0651 | 0.0835 / 0.0877 | +0.0205 / +0.0263 | 0.0851 / 0.0863 | +0.0016 / −0.0013 | 0.1102 / 0.1142 | +0.0267 / +0.0265 |
 
-- **Joint embedding beyond the model's own audio and video.** Unique J is within ±0.002 of zero for both models. Its map correlates 0.40 (PE-AV) and 0.30 (Nemotron) between the two schemes, so at this size it is dominated by fold-to-fold variation. Replacing A and V by PE-AV's joint embedding with the other modality blanked (`dummy_av`) gives the same result.
-- **Joint embedding beyond separate encoders.** Nemotron's J adds 0.015–0.041, with maps that agree across schemes (r 0.72–0.86); PE-AV's adds −0.002 to +0.017.
-- **Audiovisual against unimodal models.** Three control pairs reach a higher R²(AV) than PE-AV's R²(AVJ) under leave-one-run-out, one under leave-one-clip-out. Per grayordinate, PE-AV's full model is above all eight pairs at 26% / 25% of cortex, Nemotron's at 36% / 36%.
-- **Shared audio-video variance.** Where PE-AV's own R²(AV) exceeds 0.05, its own audio and video share 0.038 / 0.043 of variance. The `latent` pair shares as much (own larger at 50% / 48% of those grayordinates); averaged over the eight pairs, own exceeds control by 0.012 / 0.006. Own is larger than all eight pairs at 17% / 15% of cortex for PE-AV and 14% / 16% for Nemotron.
-- **Agreement between schemes.** Across cortex, the R²(AVJ) maps correlate 0.93–0.96 between the two schemes, and the shared AV maps 0.51–0.82.
-- **Dimensionality.** Reducing each band to 32 or 128 principal components (fitted on training rows) lowers R² and leaves the agreement of unique J maps between schemes unchanged; the full embeddings are used.
+Against the model's own A and V, unique J is within 0.002 of zero for both models, and its map correlates only 0.40 (PE-AV) and 0.30 (Nemotron) between the two splits. Using PE-AV's joint embedding with the other modality blanked as A and V (`dummy_av`) gives the same result. Against the control pairs, Nemotron's J adds 0.015 to 0.041 and its maps correlate 0.72 to 0.86 between splits; PE-AV's J adds −0.002 to +0.017.
+
+Three control pairs have a higher mean R²(AV) than PE-AV's R²(AVJ) under leave-one-run-out, and one under leave-one-clip-out. PE-AV's full model is above all eight pairs at 26% / 25% of grayordinates, Nemotron's at 36% / 36%.
+
+Where PE-AV's own R²(AV) exceeds 0.05, its own A and V share 0.038 / 0.043. The `latent` pair shares as much (PE-AV larger at 50% / 48% of these grayordinates), and the mean over all eight pairs is lower by 0.012 / 0.006. A model's own A and V share more than all eight pairs at 17% / 15% of cortex for PE-AV and 14% / 16% for Nemotron.
+
+Between the two splits, the R²(AVJ) maps correlate 0.93 to 0.96 and the shared AV maps 0.51 to 0.82. Reducing each band to 32 or 128 principal components (fitted on training rows) lowers R² and leaves the between-split agreement of unique J unchanged.
 
 ## Tests
 

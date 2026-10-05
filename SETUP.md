@@ -1,111 +1,62 @@
-# Environment Setup
+# Setup
 
-This repository requires Python 3.10+, a Conda environment, and the **vicsompy** package
-(for CF modeling only). Follow these steps exactly.
+Python 3.10 and conda are required. The connective-field code additionally needs the `vicsompy` source repository.
 
-## 1. Clone vicsompy (CF modeling only)
+## vicsompy
 
-vicsompy **cannot be pip-installed** with modern PyTorch (≥ 2.6) due to a hard dependency
-on an older torch version. All CF modeling scripts import it directly from source.
+`vicsompy` is imported from source because it cannot be pip-installed together with PyTorch 2.6 or later (it pins an older torch).
 
 ```bash
-git clone https://github.com/nicholashedger/vicsompy.git /path/to/Vicarious_somatotopy
-# Note the full path — you'll set VICSOMPY_REPO below
+git clone https://github.com/nicholashedger/vicsompy.git /path/to/vicsompy
+export VICSOMPY_REPO=/path/to/vicsompy
 ```
 
-## 2. Set up the Conda environment
+`cf_modeling/01_extract_geometry.py`, `02_fit_cf_model.py` and `shared/ridge_utils.py` read `VICSOMPY_REPO`; both scripts also accept `--vicsompy-repo`. `cf_modeling/run_analysis.sh` sets its own `VICSOMPY_REPO` in its CONFIG block.
+
+## Environment
 
 ```bash
 conda env create -f cf_modeling/environment.yml
 conda activate movie
-
-# Install CUDA-enabled torch manually (required for GPU acceleration):
 pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
-
-# Install remaining pip packages:
 pip install himalaya==0.4.11 pycortex "mne>=1.9"
 ```
 
-The `movie` environment includes:
-- `torch 2.11.0+cu128` (CUDA 12.8, RTX 5070Ti compatible)
-- `himalaya 0.4.11`
-- `pycortex 1.3.0` (for flatmap visualisation)
-- `nibabel 5.4.0`, `scipy 1.15.2`, `scikit-learn 1.3.2`, `pandas 2.3.3`
-- `numpy 1.26.2` (< 2.0 required by himalaya)
-- `mne 1.9.0` (Savitzky-Golay filter in preprocessing)
-- `joblib`, `tqdm`, `h5py`, `matplotlib`
-- GNU `parallel` (per-subject batch processing)
+The `movie` environment covers CF modeling, RSA, encoding and clustering. Package versions are listed in `cf_modeling/environment.yml` (numpy below 2.0 is required by himalaya; GNU `parallel` is used for per-subject batches). The environments for embedding extraction (`avtransformer`, `topo_omni`, `cav-mae-sync`, `audiocaption`) are described in the root `README.md`.
 
-## 3. Configure paths
-
-Two environment variables control key paths. Set them in your shell profile
-(`~/.bashrc`, `~/.zshrc`, or an `env.sh` file you source before running analyses):
+Check the installation:
 
 ```bash
-# Path to the cloned vicsompy repository (CF modeling only)
-export VICSOMPY_REPO=/path/to/Vicarious_somatotopy
-
-# Path to the pycortex filestore (flat maps; CF modeling only)
-export PYCORTEX_FILESTORE=/path/to/hedger2026
-```
-
-All shell scripts in `cf_modeling/`, `encoding/`, and `rsa/` respect these variables.
-You can also override them per-run:
-
-```bash
-VICSOMPY_REPO=/alt/path bash cf_modeling/analysis.sh geometry
-```
-
-## 4. Verify the setup
-
-```bash
-conda activate movie
-
-# Verify torch + CUDA
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
-
-# Verify himalaya
-python -c "import himalaya; print('himalaya', himalaya.__version__)"
-
-# Verify vicsompy importable (CF modeling only)
-python -c "import sys; sys.path.insert(0, '$VICSOMPY_REPO'); from vicsompy.modeling import MssCf; print('vicsompy OK')"
-
-# Verify pycortex (CF modeling visualization only)
-python -c "import cortex; print('pycortex OK')"
+python -c "import himalaya; print(himalaya.__version__)"
+python -c "import cortex"
+python -c "import sys; sys.path.insert(0, '$VICSOMPY_REPO'); from vicsompy.modeling import MssCf"
 ```
 
-## 5. Data paths
+## Paths
 
-Edit the `CONFIG` section at the top of each `analysis.sh` to match your local
-data directories before running any analyses. Key variables:
+Data and output locations are set in the CONFIG block at the top of `cf_modeling/run_analysis.sh`, `rsa/analysis.sh` and `encoding/analysis.sh`. Edit them before running.
 
-| Variable | Description |
+| Variable | Meaning |
 |---|---|
 | `DATA_BASE` | Root data directory |
-| `OUTPUTS_BASE` | Root outputs directory |
-| `CIFTI_DIR` | Raw 7T HCP CIFTI files (streaming mode) |
-| `VICSOMPY_REPO` | vicsompy source repo (CF modeling) |
-| `PYCORTEX_STORE` | Pycortex filestore (CF modeling visualization) |
-| `GLASSER_DLABEL` | HCP-MMP1 59k_fs_LR dlabel parcellation |
-| `SUBJECTS_LIST` | Text file listing subject IDs (one per line) |
+| `OUTPUTS_BASE` | Root output directory |
+| `CIFTI_DIR` | Raw 7T HCP CIFTI files (used when `STREAM=true`) |
+| `SUBJECTS_LIST` | Text file with one subject ID per line |
+| `GLASSER_DLABEL` | HCP-MMP1 parcellation, `59k_fs_LR` dlabel (CF modeling and RSA) |
+| `VICSOMPY_REPO` | vicsompy checkout (CF modeling) |
+| `PYCORTEX_STORE` | Pycortex filestore, exported as `PYCORTEX_FILESTORE` (CF modeling) |
 
-## 6. Run order
+`cf_modeling/run_analysis.sh` also reads `MOVIE_HCP_DIR` and `MOVIE_RAW_CIFTI_DIR` from the environment, if set, for the HCP group-average directory and `CIFTI_DIR`.
+
+## Run order
 
 ```bash
 conda activate movie
-
-# Preprocessing (one-time; skip if using streaming mode)
-bash cf_modeling/analysis.sh preprocess
-
-# CF modeling (geometry → group-average → per-subject)
-# Default preprocessing: SG high-pass + PSC, no GSR (suffix = sg_psc)
-bash cf_modeling/analysis.sh all
-
-# RSA searchlight
-bash rsa/analysis.sh avg
-
-# Encoding models
-bash encoding/analysis.sh avg
+bash cf_modeling/run_analysis.sh preprocess     # one time; not needed with STREAM=true
+bash cf_modeling/run_analysis.sh all            # geometry, group average, per subject
+bash rsa/analysis.sh avg                        # group-average RSA
+bash encoding/analysis.sh variance_partition    # encoding models
 ```
 
-See `cf_modeling/README.md`, `rsa/README.md`, and `encoding/README.md` for full details.
+The default preprocessing is Savitzky-Golay high-pass filtering and percent signal change without global signal regression (suffix `sg_psc`). See `cf_modeling/README.md`, `rsa/README.md` and `encoding/README.md` for the individual analyses.

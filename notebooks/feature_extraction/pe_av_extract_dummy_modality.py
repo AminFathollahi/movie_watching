@@ -51,10 +51,15 @@ from transformers import AutoModel, AutoProcessor
 
 MODEL_ID    = "facebook/pe-av-small-16-frame"
 MODEL_NAME  = "pe-av-small-16-frame"
-DATA_BASE   = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-OUTPUT_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
-DUMMY_VIDEO = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/dummy_blank/dummy_black_5s.mp4")
-DUMMY_AUDIO = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/dummy_blank/dummy_silence_5s.wav")
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS  # noqa: E402
+
+DATA_BASE   = DATA / "segmented_stimulus/filtered"
+OUTPUT_BASE = OUTPUTS / "model_embeddings"
+DUMMY_VIDEO = DATA / "segmented_stimulus/dummy_blank/dummy_black_5s.mp4"
+DUMMY_AUDIO = DATA / "segmented_stimulus/dummy_blank/dummy_silence_5s.wav"
 SEG_SEC     = 5.0
 BATCH_SIZE  = 8
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

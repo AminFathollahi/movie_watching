@@ -63,3 +63,20 @@ htmlcov/
 venv/
 .DS_Store
 Thumbs.db
+
+# documents other than READMEs, and results
+*.md
+!README.md
+*.pdf
+*.tex
+*.txt
+*.docx
+*.csv
+*.npy
+*.nii
+*.gii
+*.png
+*.svg
+*.html
+/cf_modeling/vendor/
+/cf_modeling/NOTICE

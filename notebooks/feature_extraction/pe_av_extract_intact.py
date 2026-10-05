@@ -31,8 +31,13 @@ from transformers import AutoModel, AutoProcessor
 
 MODEL_ID    = "facebook/pe-av-small-16-frame"
 MODEL_NAME  = "pe-av-small-16-frame"
-DATA_BASE   = Path(os.environ.get("STIMULUS_DIR", "/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered"))
-OUTPUT_BASE = Path(os.environ.get("EMBEDDINGS_BASE", "/home/amin/Research/Representation/Movie/outputs/model_embeddings"))
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS  # noqa: E402
+
+DATA_BASE   = Path(os.environ.get("STIMULUS_DIR", str(DATA / "segmented_stimulus/filtered")))
+OUTPUT_BASE = Path(os.environ.get("EMBEDDINGS_BASE", str(OUTPUTS / "model_embeddings")))
 BIN_SEC = float(os.environ.get("BIN_SEC", "5.0"))
 SKIP_SEC = float(os.environ.get("SKIP_SEC", "1.0"))
 BATCH_SIZE  = int(os.environ.get("BATCH_SIZE", "8"))

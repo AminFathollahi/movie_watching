@@ -22,12 +22,14 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
 
 # =============================================================================
 # CONFIG
 # =============================================================================
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+DATA_BASE="$ROOT/data"
+OUTPUTS_BASE="$ROOT/outputs"
 
 GROUP_AVG_CIFTI="${DATA_BASE}/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
 GROUP_AVG_TRS="${DATA_BASE}/preprocessed/average_sub/raw/group_average_raw_run_trs.npy"

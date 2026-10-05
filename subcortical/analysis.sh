@@ -39,8 +39,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # =============================================================================
 # CONFIG
 # =============================================================================
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="$ROOT/data"
+OUTPUTS_BASE="$ROOT/outputs"
 
 CIFTI_DIR="${DATA_BASE}/individual-59k"
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"          # same authoritative roster as rsa/analysis.sh

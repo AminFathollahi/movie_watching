@@ -7,7 +7,7 @@ Two independent pipelines share this directory.
 | Interaction | Do movie-driven temporal states of a model embedding differ in how strongly they drive each brain network? | `cluster.sh groupaverage`, `run_cluster.py`, `state_content.py`, `av_integration.py` |
 | Method selection | Which dimensionality-reduction and clustering methods give useful partitions of grayordinate time series and of embedding-channel time series? | `run_vertex_clustering.sh`, `run_vertex_model_selection.sh`, `cluster.sh channel_model_selection`, `consolidate_vertex_outputs.py`, `screen_temporal_differentiation.py` |
 
-The environment is `movie`. Outputs go under `outputs/cluster/` (`--output-dir`). Numerical results of the method-selection pipeline are in `RESULTS.md`.
+The environment is `movie`. Outputs go under `outputs/cluster/` (`--output-dir`).
 
 ## 1. Interaction pipeline
 

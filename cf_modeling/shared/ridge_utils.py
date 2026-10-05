@@ -8,13 +8,14 @@ MIT License), which itself credits the gallantlab/voxelwise_tutorials package an
 this in the function's docstring.
 
 vicsompy is imported without pip install by inserting the source repo path:
-  VICSOMPY_REPO = /home/amin/Research/Representation/Movie/Vicarious_somatotopy
+  VICSOMPY_REPO (default: <MOVIE_ROOT>/Vicarious_somatotopy)
 This path is already inserted by 01_extract_geometry.py or 02_fit_cf_model.py before
 this module is imported.  If called in isolation, we fall back to the default path.
 """
 
 import os
 import sys
+from pathlib import Path
 import torch
 import numpy as np
 from himalaya.backend import set_backend
@@ -24,10 +25,10 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 # Ensure vicsompy is importable from the source repo (no pip install required)
-_DEFAULT_VICSOMPY_REPO = os.environ.get(
-    "VICSOMPY_REPO",
-    "/home/amin/Research/Representation/Movie/Vicarious_somatotopy",
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import ROOT  # noqa: E402
+
+_DEFAULT_VICSOMPY_REPO = os.environ.get("VICSOMPY_REPO", str(ROOT / "Vicarious_somatotopy"))
 if _DEFAULT_VICSOMPY_REPO not in sys.path:
     sys.path.insert(0, _DEFAULT_VICSOMPY_REPO)
 
@@ -101,7 +102,7 @@ def build_pipeline(n_samples_train, run_onsets, band_sizes, roi_names,
 def build_sphere_to_grayord_lut(bm_axis, n_verts_per_hem: int = 59292) -> np.ndarray:
     """Map full-sphere bilateral vertex indices → CIFTI grayordinate positions.
 
-    The HCP 59k_fs_LR CIFTI stores only non-medial-wall vertices (59412 total
+    The HCP 59k_fs_LR CIFTI stores only non-medial-wall vertices (108441 total
     out of 2×59292=118584 full-sphere positions).  Subsurface vertex indices
     (subsurface_verts_L/R from extract_geometry.py) are in full-sphere space;
     this LUT translates them to grayordinate row positions so that the CIFTI
@@ -144,7 +145,7 @@ def project_onto_lboes(data, subsurfaces, lut=None):
                  • If lut is None   : (118584, T) full bilateral sphere
                                       (L=0:59292, R=59292:118584).
                  • If lut is given  : (n_grayord, T) CIFTI grayordinate data
-                                      (medial wall excluded, e.g. 59412 vertices).
+                                      (medial wall excluded, e.g. 108441 vertices).
     subsurfaces: list of Subsurface — each must have subsurface_verts_L/R,
                  L_eigenvectors, R_eigenvectors, n_lboe
     lut        : (118584,) int32 — from build_sphere_to_grayord_lut(), or None.

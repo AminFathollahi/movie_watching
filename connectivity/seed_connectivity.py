@@ -67,11 +67,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cifti_io import get_bm_axis, get_cortex_vertex_indices, save_cifti_map
 from rsa.glasser import load_glasser_parcels
+from paths import ROOT as _BASE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-_BASE = Path("/home/amin/Research/Representation/Movie")
 _GROUP_AVG_CIFTI = (_BASE / "data/preprocessed/average_sub/raw"
                      "/group_average_raw_cortex_59k.dtseries.nii")
 _RAW_DIR = _BASE / "data/individual-59k"

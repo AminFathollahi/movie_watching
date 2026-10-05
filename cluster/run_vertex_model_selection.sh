@@ -3,8 +3,10 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DATA_BASE="${DATA_BASE:-/home/amin/Research/Representation/Movie/data}"
-OUTPUTS_BASE="${OUTPUTS_BASE:-/home/amin/Research/Representation/Movie/outputs}"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="${DATA_BASE:-$ROOT/data}"
+OUTPUTS_BASE="${OUTPUTS_BASE:-$ROOT/outputs}"
 CONDA_ENV="${CONDA_ENV:-movie}"
 TEMPLATE_CIFTI="${TEMPLATE_CIFTI:-${DATA_BASE}/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii}"
 

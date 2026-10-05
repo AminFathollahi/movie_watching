@@ -27,8 +27,13 @@ from pathlib import Path
 import numpy as np
 from natsort import natsorted
 
-DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS  # noqa: E402
+
+DATA_BASE       = DATA / "segmented_stimulus/filtered"
+EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"
 BIN_SEC, SKIP_SEC = 5.0, 5.0
 # {tag: [layers]} -- nemotron has an extra layer 36 (its true final/native layer).
 MODEL_TAG_LAYERS = {

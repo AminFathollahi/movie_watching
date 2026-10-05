@@ -6,9 +6,14 @@ import os
 import re
 from pathlib import Path
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+
 # Must run before any transformers/huggingface_hub import -- HF_HOME is read
 # at import time, so setting it later has no effect on cache resolution.
-os.environ["HF_HOME"] = "/media/amin/ADATA HD710 PRO/hf_models"
+os.environ["HF_HOME"] = str(MODELS)
 
 import numpy as np
 import pandas as pd
@@ -22,10 +27,10 @@ MODEL_ID    = "facebook/pe-av-small-16-frame"
 MODEL_NAME  = "pe-av-small-16-frame"
 DATA_BASE   = Path(os.environ.get(
     "MOVIE_SEGMENTED_DIR",
-    "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered",
+    str(EXTERNAL / "data/segmented_stimulus/filtered"),
 ))
-OUTPUT_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
-TIMING_CSV  = Path("/home/amin/Research/Representation/Movie/data/movie_timing.csv")
+OUTPUT_BASE = OUTPUTS / "model_embeddings"
+TIMING_CSV  = DATA / "movie_timing.csv"
 SEG_SEC     = 5.0
 BATCH_SIZE  = 8
 SCRAMBLE_SEED = 42

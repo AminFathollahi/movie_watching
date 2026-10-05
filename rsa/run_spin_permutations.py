@@ -42,16 +42,16 @@ Algorithm
 Usage
 -----
 python rsa/run_spin_permutations.py \
-    --combined-cifti /home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average/pe-av-small-16-frame/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_maps.dscalar.nii \
+    --combined-cifti $ROOT/outputs/rsa/raw/group_average/pe-av-small-16-frame/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_maps.dscalar.nii \
     --map-name searchlight_spearman_rho \
-    --left-sphere /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/L.sphere.59k_fs_LR.surf.gii \
-    --right-sphere /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/R.sphere.59k_fs_LR.surf.gii \
-    --left-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
-    --right-surface /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
-    --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
+    --left-sphere $ROOT/data/HCP_S1200_GroupAvg_v1/L.sphere.59k_fs_LR.surf.gii \
+    --right-sphere $ROOT/data/HCP_S1200_GroupAvg_v1/R.sphere.59k_fs_LR.surf.gii \
+    --left-surface $ROOT/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
+    --right-surface $ROOT/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
+    --template-cifti $ROOT/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
     --n-spin 1000 \
     --alpha 0.05 \
-    --output-dir /home/amin/Research/Representation/Movie/outputs/rsa/spin_tests
+    --output-dir $ROOT/outputs/rsa/spin_tests
 
 Reference
 ---------

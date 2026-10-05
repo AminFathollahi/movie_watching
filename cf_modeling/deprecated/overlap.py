@@ -17,10 +17,15 @@ import argparse
 import json
 import logging
 import os
+import sys
+from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 from scipy.stats import spearmanr
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS  # noqa: E402
 
 try:
     from cf_modeling.cf_naming import (
@@ -36,10 +41,10 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
 
-_DATA_BASE = "/home/amin/Research/Representation/Movie/data/Setareh"
+_DATA_BASE = str(DATA / "Setareh")
 _HCP_DIR   = f"{_DATA_BASE}/HCP_S1200_GroupAvg_v1"
-_OUT_BASE  = "/home/amin/Research/Representation/Movie/outputs/cf_modeling"
-_RSA_BASE  = "/home/amin/Research/Representation/Movie/outputs/searchlight_rsa_output"
+_OUT_BASE  = str(OUTPUTS / "cf_modeling")
+_RSA_BASE  = str(OUTPUTS / "searchlight_rsa_output")
 
 RSA_MODEL = "pe-av-small-16-frame"
 
@@ -108,8 +113,8 @@ def _load_rsa_fullbrain(rsa_base, rsa_model, norm, hrf_tag, method,
     lf = np.load(_rsa_path(rsa_base, rsa_model, norm, hrf_tag, method, bin_size, modality, "left"))
     rf = np.load(_rsa_path(rsa_base, rsa_model, norm, hrf_tag, method, bin_size, modality, "right"))
     out = np.concatenate([lf[gray_L], rf[gray_R]]).astype(np.float32)
-    if out.shape[0] != 59412:
-        raise RuntimeError(f"Expected 59412 grayordinates, got {out.shape[0]}")
+    if out.shape[0] != 108441:
+        raise RuntimeError(f"Expected 108441 grayordinates, got {out.shape[0]}")
     return out
 
 
@@ -201,7 +206,7 @@ def _run_one_rsa_config(config_name, integration_score, R2_a_nc, R2_b_nc,
 
     results.update({
         "rsa_model": rsa_model,
-        "config": config_name, "n_verts": 59412, "n_boot": N_BOOTSTRAP,
+        "config": config_name, "n_verts": 108441, "n_boot": N_BOOTSTRAP,
         "overlap": overlap_stats,
     })
     json_path = os.path.join(results_dir, f"rsa_overlap_{rsa_model}_{config_name}.json")

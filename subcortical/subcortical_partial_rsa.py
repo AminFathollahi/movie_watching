@@ -28,15 +28,15 @@ Usage
 -----
 python subcortical/subcortical_partial_rsa.py \\
     --run integration_pe-av-small-16-frame_clsav_from_a \\
-    --raw-dir /home/amin/Research/Representation/Movie/data/individual-59k \\
-    --subjects-list /home/amin/Research/Representation/Movie/data/subjects.txt \\
+    --raw-dir $ROOT/data/individual-59k \\
+    --subjects-list $ROOT/data/subjects.txt \\
     --subject group_average \\
-    --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \\
-    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \\
-    --template-cifti /home/amin/Research/Representation/Movie/outputs/subcortical/subcortical_template.dscalar.nii \\
-    --output-dir /home/amin/Research/Representation/Movie/outputs/subcortical \\
-    --group-average-dir /home/amin/Research/Representation/Movie/outputs/subcortical/group_average_cache \\
-    --neighbor-cache-dir /home/amin/Research/Representation/Movie/outputs/subcortical/_neighbor_cache \\
+    --timing-csv $ROOT/data/movie_timing.csv \\
+    --embeddings-dir $ROOT/outputs/model_embeddings \\
+    --template-cifti $ROOT/outputs/subcortical/subcortical_template.dscalar.nii \\
+    --output-dir $ROOT/outputs/subcortical \\
+    --group-average-dir $ROOT/outputs/subcortical/group_average_cache \\
+    --neighbor-cache-dir $ROOT/outputs/subcortical/_neighbor_cache \\
     --k 100 --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --method spearman
 """
 

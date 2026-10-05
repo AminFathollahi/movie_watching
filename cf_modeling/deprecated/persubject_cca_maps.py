@@ -52,6 +52,7 @@ import cf_modeling.deprecated.persubject_cca_channel_1pct as pcca1pct  # noqa: E
 from cf_modeling.cf_naming import persubject_output_root  # noqa: E402
 from cf_modeling.deprecated.run_cca_islands import DEFAULT_TEMPLATE  # noqa: E402
 from cifti_io import save_cifti_map, save_cifti_multimap, get_bm_axis  # noqa: E402
+from paths import OUTPUTS  # noqa: E402
 from connectivity.seed_connectivity import compute_seed_connectivity  # noqa: E402
 from preprocess_individual import preprocess_subject  # noqa: E402
 from rsa.glasser import load_glasser_parcels  # noqa: E402
@@ -59,8 +60,7 @@ from rsa.glasser import load_glasser_parcels  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("persubject_cca_maps")
 
-MOVIE_ROOT = Path("/home/amin/Research/Representation/Movie")
-DEFAULT_SEARCHLIGHT_ROOT = MOVIE_ROOT / "outputs/rsa/raw/subject_data"
+DEFAULT_SEARCHLIGHT_ROOT = OUTPUTS / "rsa/raw/subject_data"
 SEARCHLIGHT_SUBPATH = (
     "pe-av-small-16-frame_av/k100_delay5s_bin5s_skip5s_spearman/"
     "rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy")

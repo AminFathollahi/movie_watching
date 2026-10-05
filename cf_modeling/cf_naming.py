@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import EXTERNAL  # noqa: E402
 
 LBOE_SUFFIX = re.compile(r"_lboe(?P<count>[1-9][0-9]*)$")
 
 # External drive per-subject CF outputs were moved to (root SSD is chronically
 # near-full; see 2026-09-04 migration). Mirrors OUTPUTS/cf_modeling/ layout.
-PERSUBJECT_MOUNT = Path("/media/amin/ADATA HD710 PRO")
-PERSUBJECT_SUBPATH = "Research/Representation/Movie/outputs/cf_modeling"
+PERSUBJECT_MOUNT = EXTERNAL
+PERSUBJECT_SUBPATH = "outputs/cf_modeling"
 
 ROI_MEAN_PREPROCESSING = {
     "sg_psc_per_run_zscore": {
@@ -111,9 +114,9 @@ def persubject_output_root() -> Path:
                 f"MOVIE_PERSUBJECT_ROOT={root} does not exist. Point it at a "
                 "reachable directory.")
         return root
-    if not PERSUBJECT_MOUNT.is_mount():
+    if not PERSUBJECT_MOUNT.is_dir():
         raise RuntimeError(
-            f"External drive not mounted at {PERSUBJECT_MOUNT}. Mount it "
+            f"External drive not reachable at {PERSUBJECT_MOUNT}. Mount it "
             "before running this (or set MOVIE_PERSUBJECT_ROOT to bypass).")
     root = PERSUBJECT_MOUNT / PERSUBJECT_SUBPATH
     root.mkdir(parents=True, exist_ok=True)

@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "rsa"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from paths import DATA, OUTPUTS  # noqa: E402
 from io_cluster import (  # noqa: E402
     GROUP_AVG_CIFTI, GROUP_AVG_TRS, load_group_average, write_dlabel,
     preprocess_fmri, process_model_embeddings, get_run_bin_counts, align_and_assert_bins,
@@ -39,9 +40,9 @@ from interaction import interaction_matrix, block_permutation_test  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-TIMING_CSV = "/home/amin/Research/Representation/Movie/data/movie_timing.csv"
-EMBEDDINGS_DIR = "/home/amin/Research/Representation/Movie/outputs/model_embeddings"
-OUTPUT_DIR = "/home/amin/Research/Representation/Movie/outputs/cluster"
+TIMING_CSV = str(DATA / "movie_timing.csv")
+EMBEDDINGS_DIR = str(OUTPUTS / "model_embeddings")
+OUTPUT_DIR = str(OUTPUTS / "cluster")
 
 
 def parse_args():

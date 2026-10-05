@@ -5,8 +5,8 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-MOVIE_ROOT="/home/amin/Research/Representation/Movie"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+MOVIE_ROOT="${MOVIE_ROOT:-$(dirname "$ROOT")}"
 OUTPUTS="${MOVIE_ROOT}/outputs"
 DATA="${MOVIE_ROOT}/data"
 CHANNEL_ROOT="${CHANNEL_CCA_ROOT:-${OUTPUTS}/cf_modeling/deprecated/channel_cca_preference}"

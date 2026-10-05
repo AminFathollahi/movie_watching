@@ -18,7 +18,7 @@ Pipeline (matching vicsompy's analyse_subject exactly, without splicing)
 6. Instantiate CfModel (lib/cf_model.py) — subclass of vicsompy's MssCf.
 7. nm.make_dm_grayord()      — LBOE design matrix from sphere-space train data.
 8. nm.prep_pipeline()        — himalaya banded ridge with LORO-CV.
-9. nm.fit_grayord()          — fit on grayordinate targets (T_train × 59412).
+9. nm.fit_grayord()          — fit on grayordinate targets (T_train × 108441).
 10. nm.get_params()           — betas, train split R², best alphas.
 11. nm.test_xval_grayord()   — test R² (full + per-band split).
 12. nm.compute_null_r2()     — OLS null model from ROI mean timecourses.
@@ -78,10 +78,10 @@ from scipy.stats import zscore
 # ---------------------------------------------------------------------------
 # Vicsompy import — must be before lib imports that re-export vicsompy classes
 # ---------------------------------------------------------------------------
-VICSOMPY_REPO = os.environ.get(
-    "VICSOMPY_REPO",
-    "/home/amin/Research/Representation/Movie/Vicarious_somatotopy",
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import OUTPUTS, ROOT  # noqa: E402
+
+VICSOMPY_REPO = os.environ.get("VICSOMPY_REPO", str(ROOT / "Vicarious_somatotopy"))
 if VICSOMPY_REPO not in sys.path:
     sys.path.insert(0, VICSOMPY_REPO)
 
@@ -144,7 +144,7 @@ def parse_args():
     p.add_argument("--subject", default=None,
                    help="HCP subject ID (required for --mode per_subject).")
     p.add_argument("--output-base",
-                   default="/home/amin/Research/Representation/Movie/outputs/cf_modeling",
+                   default=str(OUTPUTS / "cf_modeling"),
                    dest="output_base")
     p.add_argument("--vicsompy-repo", default=VICSOMPY_REPO, dest="vicsompy_repo",
                    help="Path to local vicsompy source repo.")
@@ -279,7 +279,7 @@ def _run_pipeline(
     Parameters
     ----------
     cortex_data : (n_grayord, T_total) float32 — CIFTI grayordinate data.
-                  May be cortex-only (59412) or full-brain (170494 grayords).
+                  May be cortex-only (108441) or full-brain (170494 grayords).
     run_trs     : list of int — TRs per run (4 entries for HCP movie).
     bm_axis     : nibabel BrainModelAxis — from the CIFTI header.
     out_dir     : str — directory for npy files.

@@ -30,9 +30,10 @@ sys.path.insert(0, str(ROOT))
 from rsa.glasser import load_glasser_parcels
 from cifti_io import get_bm_axis
 from rsa.shared.naming import DEFAULT_MODEL_NORM
+from paths import DATA, OUTPUTS
 
-GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average")
-GLASSER_DLABEL = "/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
+GROUP_DIR = OUTPUTS / "rsa/raw/group_average"
+GLASSER_DLABEL = str(DATA / "HCP_S1200_GroupAvg_v1") + "/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
 CONFIG_TAG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 
 KINDS = ["auditory", "integration"]

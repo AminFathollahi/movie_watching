@@ -59,6 +59,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from paths import DATA  # noqa: E402
 from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
 from cifti_io import (  # noqa: E402
     get_combined_map_names,
@@ -194,10 +195,8 @@ def main() -> None:
 
 
 def demo():
-    template = "/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
-    with tempfile.TemporaryDirectory(
-        dir="/tmp/claude-1000/-home-amin-Research-Representation-Movie-movie-watching/63cd2761-6f15-4454-9bd1-9fda179d8650/scratchpad"
-    ) as tmp:
+    template = str(DATA / "preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii")
+    with tempfile.TemporaryDirectory() as tmp:
         rsa_root = Path(tmp)
         rng = np.random.default_rng(0)
         for variant, sources in VARIANTS.items():

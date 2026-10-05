@@ -19,18 +19,18 @@ import argparse
 import csv
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import OUTPUTS  # noqa: E402
 
-DEFAULT_SELECTION_ROOT = Path(
-    "/home/amin/Research/Representation/Movie/outputs/cluster/group_average/"
-    "_vertex/norm-zscore_raw"
-)
-DEFAULT_STIMULUS_MAP = Path(
-    "/home/amin/Research/Representation/Movie/outputs/sitmulus_regressor_cifti/"
+DEFAULT_SELECTION_ROOT = OUTPUTS / "cluster/group_average/_vertex/norm-zscore_raw"
+DEFAULT_STIMULUS_MAP = (
+    OUTPUTS / "sitmulus_regressor_cifti/"
     "HCP_movie_stimulus_correlation_5sdelay_normalized.dscalar.nii"
 )
 REDUCTION_ORDER = {name: i for i, name in enumerate(

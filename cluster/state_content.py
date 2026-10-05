@@ -17,14 +17,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from paths import DATA, OUTPUTS  # noqa: E402
 from io_cluster import GROUP_AVG_TRS, get_segment_metadata  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-TIMING_CSV = "/home/amin/Research/Representation/Movie/data/movie_timing.csv"
+TIMING_CSV = str(DATA / "movie_timing.csv")
 
 
 def _merge_contiguous(sorted_starts_ends, gap_tol=0.01):
@@ -78,7 +80,7 @@ def summarize_states(state_labels: np.ndarray, meta: pd.DataFrame) -> dict:
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument("--output-dir", default="/home/amin/Research/Representation/Movie/outputs/cluster")
+    p.add_argument("--output-dir", default=str(OUTPUTS / "cluster"))
     p.add_argument("--model", required=True)
     p.add_argument("--modality", default="av")
     p.add_argument("--config", required=True)

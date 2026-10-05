@@ -17,16 +17,16 @@ automatically → 175 subjects used for splitting.
 Usage (all defaults set; only required args shown):
   conda activate analysis
   python rsa/kreilability.py \\
-    --subjects-list /home/amin/Research/Representation/Movie/data/subjects.txt \\
-    --timing-csv    /home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered/movie_timing.csv \\
-    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \\
-    --template-cifti /home/amin/Research/Representation/Movie/data/average_sub/sg_psc/group_average_sg_psc_cortex_59k.dtseries.nii \\
+    --subjects-list $ROOT/data/subjects.txt \\
+    --timing-csv    $ROOT/data/segmented_stimulus/filtered/movie_timing.csv \\
+    --embeddings-dir $ROOT/outputs/model_embeddings \\
+    --template-cifti $ROOT/data/average_sub/sg_psc/group_average_sg_psc_cortex_59k.dtseries.nii \\
     --model pe-av-small-16-frame --modality av \\
     --k 100 150 200 --n-splits 50
 
 Override defaults:
-  --preprocessed-dir  /home/amin/Research/Representation/Movie/data/preprocessed
-  --outdir            /media/amin/ADATA HD710 PRO/Research/Representation/Movie/outputs/k_splithalf
+  --preprocessed-dir  $ROOT/data/preprocessed
+  --outdir            $ROOT/external/outputs/k_splithalf
   --indiv-surf-template ".../midthickness_1.6/{sub}.{hem}.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
   --bin-sec 2.0
   --workbench /opt/workbench/bin_linux64/wb_command
@@ -56,6 +56,7 @@ from rsa.shared.rsa_utils import (
     process_model_embeddings,
 )
 from cifti_io import get_bm_axis, get_cortex_vertex_indices
+from paths import DATA, EXTERNAL
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,12 +73,10 @@ log = logging.getLogger(__name__)
 _EXCLUDED_SUBJECTS_SAFEGUARD: set[str] = {"126931", "745555"}
 
 # Default paths
-_DEFAULT_PREPROCESSED_DIR = (
-    "/home/amin/Research/Representation/Movie/data/preprocessed"
-)
-_DEFAULT_OUTDIR = "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/outputs/k_splithalf"
+_DEFAULT_PREPROCESSED_DIR = str(DATA / "preprocessed")
+_DEFAULT_OUTDIR = str(EXTERNAL / "outputs/k_splithalf")
 _DEFAULT_SURF_TEMPLATE = (
-    "/home/amin/Research/Representation/Movie/data/midthickness_1.6"
+    f"{DATA}/midthickness_1.6"
     "/{sub}.{hem}.midthickness_1.6mm_MSMAll.59k_fs_LR.surf.gii"
 )
 _DEFAULT_WORKBENCH = "/opt/workbench/bin_linux64/wb_command"

@@ -11,6 +11,7 @@ minimal .dlabel writer (no writer exists anywhere in the repo).
 
 import logging
 import sys
+import tempfile
 from pathlib import Path
 
 import nibabel as nib
@@ -26,12 +27,13 @@ from rsa.shared.rsa_utils import (  # noqa: E402
 from cifti_io import (  # noqa: E402
     load_cifti_data, get_bm_axis, get_cortex_vertex_indices, save_cifti_map,
 )
+from paths import DATA  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-GROUP_AVG_CIFTI = "/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
-GROUP_AVG_TRS = "/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy"
+GROUP_AVG_CIFTI = str(DATA / "preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii")
+GROUP_AVG_TRS = str(DATA / "preprocessed/average_sub/raw/group_average_raw_run_trs.npy")
 
 
 def load_group_average(cifti_path: str = GROUP_AVG_CIFTI, trs_path: str = GROUP_AVG_TRS):
@@ -275,8 +277,7 @@ def demo():
 
     rng = np.random.default_rng(0)
     fake_labels = rng.integers(-1, 4, size=X.shape[0])  # -1..3
-    out_path = "/tmp/claude-1000/-home-amin-Research-Representation-Movie-movie-watching/9e3f6255-2452-440c-8a49-0deca8947cc3/scratchpad/demo_labels.dlabel.nii"
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    out_path = str(Path(tempfile.mkdtemp()) / "demo_labels.dlabel.nii")
     remapped = write_dlabel(fake_labels, GROUP_AVG_CIFTI, out_path)
 
     reloaded = nib.load(out_path)
@@ -288,7 +289,7 @@ def demo():
     print(f"[demo] write_dlabel round-trip OK: V={reloaded.shape[1]}  n_label_keys={n_keys}")
 
     import pandas as pd
-    timing_df = pd.read_csv("/home/amin/Research/Representation/Movie/data/movie_timing.csv")
+    timing_df = pd.read_csv(DATA / "movie_timing.csv")
     meta = get_segment_metadata(timing_df, run_trs, bin_sec=5.0, tr=1.0, delay_sec=5.0, skip_sec=5.0)
     assert len(meta) == 626, f"expected 626 segments, got {len(meta)}"
     assert list(meta["seg_idx"]) == list(range(626)), "seg_idx must be contiguous 0..625"

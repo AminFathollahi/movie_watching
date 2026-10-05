@@ -38,6 +38,8 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
+from paths import ROOT
+
 SHEET_ROWS = 304
 SHEET_COLS = 512
 N_UNITS = SHEET_ROWS * SHEET_COLS  # 155648
@@ -46,7 +48,7 @@ ENCODER_ROWS = 160  # rows 0-159: vision/audio encoders; 160-303: thinker stack
 TOWER_VISION, TOWER_AUDIO, TOWER_THINKER = 0, 1, 2
 TOWER_NAMES = {TOWER_VISION: "vision", TOWER_AUDIO: "audio", TOWER_THINKER: "thinker"}
 
-TOPO_REPO = "/home/amin/Research/Representation/Movie/Model Repos/topo-omni"
+TOPO_REPO = str(ROOT / "Model Repos" / "topo-omni")
 
 
 # =============================================================================

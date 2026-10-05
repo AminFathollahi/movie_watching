@@ -22,14 +22,15 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from paths import DATA, EXTERNAL, OUTPUTS  # noqa: E402
 
 MODEL = "pe-av-small-16-frame"
 FULL_EMBEDDING = (
-    f"/home/amin/Research/Representation/Movie/outputs/model_embeddings/{MODEL}/"
+    f"{OUTPUTS}/model_embeddings/{MODEL}/"
     f"bin5s_skip5s/{MODEL}_av.npy"
 )
 CHANNEL_LABELS = (
-    "/home/amin/Research/Representation/Movie/outputs/cluster/peav/"
+    f"{OUTPUTS}/cluster/peav/"
     "_channel_timeseries_model_selection/norm-zscore_raw/selected_maps/"
     "sreduce-mds_snc2_landmarks1000_extk8_iter300/"
     "sreduce-mds_snc2_landmarks1000_extk8_iter300_scluster-kmeans_k8/channel_labels.npy"
@@ -38,17 +39,17 @@ CLUSTER_ID = 7
 REDUCER_TAG = "sreduce-mds_snc2_landmarks1000_extk8_iter300"
 CLUSTER_TAG = "scluster-kmeans_k8"
 
-PREPROCESSED_DIR = "/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw"
-TIMING_CSV = "/home/amin/Research/Representation/Movie/data/movie_timing.csv"
+PREPROCESSED_DIR = f"{DATA}/preprocessed/average_sub/raw"
+TIMING_CSV = f"{DATA}/movie_timing.csv"
 TEMPLATE_CIFTI = (
-    "/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/"
+    f"{DATA}/preprocessed/average_sub/raw/"
     "group_average_raw_cortex_59k.dtseries.nii"
 )
-HCP_DIR = "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1"
+HCP_DIR = f"{EXTERNAL}/data/HCP_S1200_GroupAvg_v1"
 LEFT_SURFACE = f"{HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
 RIGHT_SURFACE = f"{HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
 WORKBENCH = "/opt/workbench/bin_linux64/wb_command"
-GEODESIC_CACHE_DIR = "/home/amin/Research/Representation/Movie/outputs/rsa/_geodesic_cache"
+GEODESIC_CACHE_DIR = f"{OUTPUTS}/rsa/_geodesic_cache"
 K = 100
 BIN_SEC = 5.0
 SKIP_SEC = 5.0
@@ -56,7 +57,7 @@ DELAY_SEC = 5.0
 METHOD = "spearman"
 TR = 1.0
 
-OUTPUT_DIR = "/home/amin/Research/Representation/Movie/outputs/rsa/_channel_subset_searchlight"
+OUTPUT_DIR = f"{OUTPUTS}/rsa/_channel_subset_searchlight"
 EMBEDDINGS_SCRATCH_DIR = Path(OUTPUT_DIR) / "embeddings"
 SUBSET_MODEL_NAME = "peav_cluster7"
 

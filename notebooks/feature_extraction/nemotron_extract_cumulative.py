@@ -44,7 +44,13 @@ import os
 import subprocess
 import tempfile
 
-os.environ["HF_HOME"] = "/home/amin/hf_models"
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+
+os.environ["HF_HOME"] = str(MODELS)
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy",
@@ -64,8 +70,8 @@ from natsort import natsorted
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_PATH      = "nvidia/omni-embed-nemotron-3b"
-DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+DATA_BASE       = DATA / "segmented_stimulus/filtered"
+EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
 BIN_SEC         = 5.0   # segment grid (same as bin5s_skip5s); cumulative duration for

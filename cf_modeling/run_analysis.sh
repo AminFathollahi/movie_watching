@@ -58,19 +58,21 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
 
 # =============================================================================
 # CONFIG — all paths and analysis parameters defined here
 # =============================================================================
 
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
-HCP_DIR="${MOVIE_HCP_DIR:-/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
+DATA_BASE="$ROOT/data"
+HCP_DIR="${MOVIE_HCP_DIR:-$DATA_BASE/HCP_S1200_GroupAvg_v1}"
 PYCORTEX_STORE="${DATA_BASE}/hedger2026"
 export PYCORTEX_FILESTORE="$PYCORTEX_STORE"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+OUTPUTS_BASE="$ROOT/outputs"
 
 # ── vicsompy source repo (direct import; no pip install) ──────────────────────
-VICSOMPY_REPO="/home/amin/Research/Representation/Movie/Vicarious_somatotopy"
+VICSOMPY_REPO="${VICSOMPY_REPO:-$ROOT/Vicarious_somatotopy}"
 
 # ── Pycortex subject ──────────────────────────────────────────────────────────
 CX_SUB="hcp_999999_draw_NH"
@@ -89,7 +91,7 @@ N_LBOE=100
 STREAM=false
 
 # Raw CIFTI directory (streaming mode only)
-CIFTI_DIR="${MOVIE_RAW_CIFTI_DIR:-/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/individual-59k}"
+CIFTI_DIR="${MOVIE_RAW_CIFTI_DIR:-$ROOT/external/data/individual-59k}"
 
 # ── Preprocessing flags ───────────────────────────────────────────────────────
 # Applied per run: SG high-pass → PSC (with pre-SG mean) → GSR

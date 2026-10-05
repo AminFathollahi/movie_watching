@@ -7,7 +7,7 @@ bilateral surface space.
 Background
 ----------
 HCP 59k_fs_LR CIFTI files store only non-medial-wall grayordinates:
-  - 59412 grayordinates total (29696 L + 29716 R).
+  - 108441 grayordinates total (54216 L + 54225 R).
   - Full sphere has 59292 vertices per hemisphere (118584 bilateral), including
     the medial wall.
 
@@ -83,7 +83,7 @@ def grayord_to_sphere_space(
     Parameters
     ----------
     grayord_data   : (n_grayord, T) float32 — CIFTI cortical grayordinate data.
-                     n_grayord = 59412 for the HCP 59k_fs_LR cortex-only CIFTI.
+                     n_grayord = 108441 for the HCP 59k_fs_LR cortex-only CIFTI.
     bm_axis        : nibabel BrainModelAxis from the CIFTI header.
     n_verts_per_hem: int — sphere vertices per hemisphere (59292 for 59k_fs_LR).
 

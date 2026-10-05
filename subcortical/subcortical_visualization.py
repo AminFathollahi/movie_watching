@@ -39,10 +39,11 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from subcortical_io import struct_slices  # noqa: E402
+from paths import OUTPUTS  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-DEFAULT_OUTPUT_DIR = Path("/home/amin/Research/Representation/Movie/outputs/subcortical")
+DEFAULT_OUTPUT_DIR = OUTPUTS / "subcortical"
 DEFAULT_WB = Path("/opt/workbench/bin_linux64/wb_command")
 
 # ``carrier`` is Workbench's fixed structure enum.  For a bilateral mesh we

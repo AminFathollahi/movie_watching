@@ -37,9 +37,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # =============================================================================
 # CONFIG — all paths and analysis parameters defined here
 # =============================================================================
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
-EXTERNAL_BASE="/media/amin/ADATA HD710 PRO/Research/Representation/Movie"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="$ROOT/data"
+OUTPUTS_BASE="$ROOT/outputs"
+EXTERNAL_BASE="$ROOT/external"
 HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
 
 PREPROCESSING_FLAG="raw"

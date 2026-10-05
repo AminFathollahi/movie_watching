@@ -31,11 +31,16 @@ try:
 except ImportError:
     pd = None
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS  # noqa: E402
+
 CONCEPT_EXCEL = Path(
-    "/home/amin/Research/Representation/Movie/data/Video_Audio_Pair_Concepts_All.xlsx"
+    str(DATA / "Video_Audio_Pair_Concepts_All.xlsx")
 )
 TEXT_BASE = Path(
-    "/home/amin/Research/Representation/Movie/outputs/model_embeddings/text"
+    str(OUTPUTS / "model_embeddings/text")
 )
 
 # Set False to skip LLM and concatenate caption + transcript directly

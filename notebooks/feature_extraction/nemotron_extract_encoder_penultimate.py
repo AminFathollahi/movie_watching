@@ -24,7 +24,7 @@ Output convention (shared across every nemotron_layer*_mp/_lt readout):
     {embeddings_dir}/nemotron_encoder_penultimate/bin5s_skip5s/nemotron_encoder_penultimate_{a,v}.npy
 
 Run with:
-    HF_HOME=/media/amin/EXTERNAL_USB/SMAF/hf_models \
+    HF_HOME=<models folder> \
     conda run --no-capture-output -n avtransformer \
         python "notebooks/feature_extraction/nemotron_extract_encoder_penultimate.py"
 """
@@ -35,10 +35,15 @@ from pathlib import Path
 
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+
 # force-set (not setdefault): the avtransformer conda env's activation script
 # exports HF_HOME as the literal unexpanded string "~/.cache/huggingface",
 # so setdefault() silently no-ops and the wrong cache dir gets used.
-os.environ["HF_HOME"] = "/media/amin/EXTERNAL_USB/SMAF/hf_models"
+os.environ["HF_HOME"] = str(MODELS)
 for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy",
            "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
     os.environ.pop(_v, None)
@@ -54,8 +59,8 @@ from qwen_omni_utils import process_mm_info
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_PATH        = "nvidia/omni-embed-nemotron-3b"
-DATA_BASE         = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE   = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+DATA_BASE         = DATA / "segmented_stimulus/filtered"
+EMBEDDINGS_BASE   = OUTPUTS / "model_embeddings"
 DEVICE            = "cuda"
 DTYPE             = torch.bfloat16
 BIN_SEC, SKIP_SEC = 5.0, 5.0

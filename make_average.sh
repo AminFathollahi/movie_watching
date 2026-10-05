@@ -25,7 +25,9 @@ set -euo pipefail
 # =============================================================================
 # CONFIG
 # =============================================================================
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="$ROOT/data"
 
 # Authoritative subject list (n=175; excludes subjects without midthickness)
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"

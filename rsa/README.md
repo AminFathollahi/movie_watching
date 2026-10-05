@@ -2,7 +2,7 @@
 
 Compares cortical activity in the HCP 7T movie-watching fMRI data with the representational geometry of model embeddings (audio, video and joint audio-video models). RSA is computed as a vertex-wise searchlight on the cortical surface or per Glasser parcel. Further scripts provide group inference, partial and residual-embedding RSA, audio-video integration controls, noise ceilings and an analysis of the Topo-Omni cortical sheet.
 
-Run from the repository root; environment setup is in [`SETUP.md`](../SETUP.md). Shared modules are described in [`shared/`](shared/README.md). Searchlight centered kernel alignment is not RSA and lives in [`cka/`](../cka/README.md).
+Run from the repository root; environment setup is in the [top-level README](../README.md). Shared modules are described in [`shared/`](shared/README.md). Searchlight centered kernel alignment is not RSA and lives in [`cka/`](../cka/README.md).
 
 ## Method
 

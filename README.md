@@ -54,11 +54,11 @@ Per-pair numbers are in [`encoding/README.md`](encoding/README.md) and [`cka/REA
 | `cifti_io.py` | CIFTI helpers shared across directories |
 | `make_average.sh` | Group-average midthickness and inflated surfaces from the subject list |
 | `verify_subjects.py` | Checks that every listed subject has all four raw CIFTIs and both midthickness surfaces |
-| `SETUP.md` | Environment and path setup |
+| `paths.py` | Data, output, external-drive and model-weight locations |
 
 ## Environments
 
-The `movie` environment runs everything except embedding extraction. Set it up as described in [`SETUP.md`](SETUP.md):
+The `movie` environment runs everything except embedding extraction:
 
 ```bash
 conda env create -f cf_modeling/environment.yml
@@ -66,6 +66,14 @@ conda activate movie
 pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
 pip install himalaya==0.4.11 pycortex "mne>=1.9"
 ```
+
+Connective-field modeling imports `vicsompy` (Hedger et al. 2025) from source, because its pinned torch version conflicts with the one above:
+
+```bash
+git clone https://github.com/nicholashedger/vicsompy.git ../Vicarious_somatotopy
+```
+
+`VICSOMPY_REPO` or `--vicsompy-repo` point to another checkout.
 
 Embedding extraction uses separate environments because the model repositories pin incompatible package versions:
 
@@ -78,13 +86,11 @@ Embedding extraction uses separate environments because the model repositories p
 
 ## Data and output locations
 
-Paths are set in the `CONFIG` block at the top of each runner script. Defaults:
+All locations are relative to the directory that contains the repository (`MOVIE_ROOT` overrides it): `data/`, `outputs/`, `external/` for data kept on a separate drive (a link to that drive's copy of the same tree), and `hf_models/` for model weights (`MOVIE_MODELS_DIR` overrides it). Python scripts read them from `paths.py`, runner scripts from their `CONFIG` block.
 
-| Item | Default location |
+| Item | Location |
 |---|---|
-| Data root | `../data`, next to the repository |
-| Output root | `../outputs`, next to the repository |
-| Raw CIFTIs, one file per subject and run (`{sub}_tfMRI_MOVIE{1-4}_7T_{AP\|PA}_Atlas_1.6mm_hp2000_clean.dtseries.nii`) | `individual-59k/` on the external drive |
+| Raw CIFTIs, one file per subject and run (`{sub}_tfMRI_MOVIE{1-4}_7T_{AP\|PA}_Atlas_1.6mm_hp2000_clean.dtseries.nii`) | `external/data/individual-59k/` |
 | Subject list (one ID per line, `#` comments) | `data/subjects.txt` |
 | Per-subject midthickness and inflated surfaces | `data/midthickness_1.6/`, `data/Inflated_1.6/` |
 | Group-average surfaces (`CohortAvg.{L,R}.{midthickness,inflated}_MSMAll.59k_fs_LR.surf.gii`) and Glasser parcellation | `data/HCP_S1200_GroupAvg_v1/` |

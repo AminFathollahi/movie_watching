@@ -35,9 +35,9 @@ python notebooks/feature_extraction/extract_embeddings.py --verify [--models ...
 |---|---|
 | `--models` | all models in the registry |
 | `--bins` | `1 2 5` |
-| `--stimulus-dir` | `../data/segmented_stimulus/filtered`, relative to the repository |
-| `--embeddings-dir` | `../outputs/model_embeddings`, relative to the repository |
-| `--models-home` | a local Hugging Face cache, set as `HF_HOME`; models load from local files |
+| `--stimulus-dir` | `external/data/segmented_stimulus/filtered` (locations as in the top-level README) |
+| `--embeddings-dir` | `outputs/model_embeddings` |
+| `--models-home` | `hf_models/`, set as `HF_HOME`; models load from local files |
 | `--device` | `cuda` |
 | `--limit` | all chunks; with `N`, only the first `N` chunks of each bin |
 | `--overwrite` | recompute; otherwise a model and bin whose arrays exist are skipped |

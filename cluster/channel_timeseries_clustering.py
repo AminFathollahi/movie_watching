@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from paths import DATA, OUTPUTS  # noqa: E402
 from cf_modeling.deprecated.channel_cca_analysis import MODEL_CONFIGS, _model_files  # noqa: E402
 from rsa.shared.rsa_utils import process_model_embeddings  # noqa: E402
 from io_cluster import write_channel_labels_csv  # noqa: E402
@@ -41,13 +42,12 @@ from vertex_clustering import (  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-OUTPUT_DIR = "/home/amin/Research/Representation/Movie/outputs/cluster"
+OUTPUT_DIR = str(OUTPUTS / "cluster")
 FAMILIES = tuple(MODEL_CONFIGS)
-EMBEDDINGS_DIR = "/home/amin/Research/Representation/Movie/outputs/model_embeddings"
-TIMING_CSV = "/home/amin/Research/Representation/Movie/data/movie_timing.csv"
-RUN_TRS = (
-    "/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/"
-    "hedger_sg_psc/group_average_hedger_sg_psc_run_trs.npy"
+EMBEDDINGS_DIR = str(OUTPUTS / "model_embeddings")
+TIMING_CSV = str(DATA / "movie_timing.csv")
+RUN_TRS = str(
+    DATA / "preprocessed/average_sub/hedger_sg_psc/group_average_hedger_sg_psc_run_trs.npy"
 )
 
 

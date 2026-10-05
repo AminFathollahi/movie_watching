@@ -44,13 +44,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "rsa"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from paths import DATA, OUTPUTS  # noqa: E402
 from io_cluster import write_dlabel, get_bm_axis, GROUP_AVG_CIFTI  # noqa: E402
 from rsa.glasser import load_glasser_parcels  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-GLASSER_DLABEL = ("/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/"
+GLASSER_DLABEL = (f"{DATA}/HCP_S1200_GroupAvg_v1/"
                   "Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors."
                   "59k_fs_LR.dlabel.nii")
 
@@ -170,7 +171,7 @@ def build_category_dlabel(vertex_labels: np.ndarray, classification: dict, atlas
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument("--output-dir", default="/home/amin/Research/Representation/Movie/outputs/cluster")
+    p.add_argument("--output-dir", default=str(OUTPUTS / "cluster"))
     p.add_argument("--template-cifti", default=GROUP_AVG_CIFTI)
     p.add_argument("--glasser-dlabel", default=GLASSER_DLABEL)
     p.add_argument("--model", required=True, help="base model name, e.g. nemotron_layer27_mp")

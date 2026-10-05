@@ -12,9 +12,9 @@ fallback if SUITPy/wb_command are unavailable).
 Usage
 -----
   python subcortical/precompute_neighbors.py \\
-      --raw-dir /home/amin/Research/Representation/Movie/data/individual-59k \\
+      --raw-dir $ROOT/data/individual-59k \\
       --subject 132118 --k 100 \\
-      --cache-dir /home/amin/Research/Representation/Movie/outputs/subcortical/_neighbor_cache \\
+      --cache-dir $ROOT/outputs/subcortical/_neighbor_cache \\
       --workbench /opt/workbench/bin_linux64/wb_command
 """
 

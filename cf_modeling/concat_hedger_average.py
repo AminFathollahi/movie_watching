@@ -17,10 +17,11 @@ import numpy as np
 import nibabel as nib
 from pathlib import Path
 
-HEDGER_DIR = Path("/home/amin/Research/Representation/Movie/data/hedger2026"
-                  "/hcp_movie/hcp_movie/subjects/999999")
-OUT_DIR    = Path("/home/amin/Research/Representation/Movie/data/preprocessed"
-                  "/average_sub/hedger_sg_psc")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import DATA  # noqa: E402
+
+HEDGER_DIR = DATA / "hedger2026/hcp_movie/hcp_movie/subjects/999999"
+OUT_DIR    = DATA / "preprocessed/average_sub/hedger_sg_psc"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 RUNS = [HEDGER_DIR / f"tfMRI_MOVIE{r}_7T_AP_Atlas_1.6mm_MSMAll_hp2000_clean"

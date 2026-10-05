@@ -56,6 +56,7 @@ from scipy import stats
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from paths import DATA, OUTPUTS  # noqa: E402
 from rsa.perm_searchlight import (  # noqa: E402
     _run_hemisphere, _run_hemisphere_paired, within_run_shift_pair_indices,
 )
@@ -105,8 +106,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--demo", action="store_true")
 
-    data_base = "/home/amin/Research/Representation/Movie/data"
-    outputs_base = "/home/amin/Research/Representation/Movie/outputs"
+    data_base = str(DATA)
+    outputs_base = str(OUTPUTS)
 
     p.add_argument("--preprocessed-dir", default=f"{data_base}/preprocessed/average_sub/raw")
     p.add_argument("--fmri-suffix", default="raw")

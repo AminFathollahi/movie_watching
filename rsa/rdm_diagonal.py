@@ -40,27 +40,27 @@ Outputs — stage 2 (requires --preprocessed-dir + other fMRI args):
 
 Usage (RDM only):
   python rsa/rdm_diagonal.py \
-      --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
-      --timing-csv     /home/amin/Research/Representation/Movie/data/movie_timing.csv \
-      --output-dir     /home/amin/Research/Representation/Movie/outputs/rsa/raw/rdm_diagonal \
+      --embeddings-dir $ROOT/outputs/model_embeddings \
+      --timing-csv     $ROOT/data/movie_timing.csv \
+      --output-dir     $ROOT/outputs/rsa/raw/rdm_diagonal \
       --model omni3b_layer35 \
       --modality av --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0
 
 Usage (RDM + RSA maps):
   python rsa/rdm_diagonal.py \
-      --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
-      --timing-csv     /home/amin/Research/Representation/Movie/data/movie_timing.csv \
-      --output-dir     /home/amin/Research/Representation/Movie/outputs/rsa/raw/rdm_diagonal \
+      --embeddings-dir $ROOT/outputs/model_embeddings \
+      --timing-csv     $ROOT/data/movie_timing.csv \
+      --output-dir     $ROOT/outputs/rsa/raw/rdm_diagonal \
       --model pe-av-small-16-frame \
       --modality av --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0 \
-      --preprocessed-dir /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw \
+      --preprocessed-dir $ROOT/data/preprocessed/average_sub/raw \
       --fmri-suffix raw \
-      --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
-      --glasser-dlabel /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii \
-      --left-surface   /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
-      --right-surface  /home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
+      --template-cifti $ROOT/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \
+      --glasser-dlabel $ROOT/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii \
+      --left-surface   $ROOT/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
+      --right-surface  $ROOT/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii \
       --workbench      /opt/workbench/bin_linux64/wb_command \
-      --geodesic-cache-dir /home/amin/Research/Representation/Movie/outputs/rsa/_geodesic_cache \
+      --geodesic-cache-dir $ROOT/outputs/rsa/_geodesic_cache \
       --k 100 --method spearman
 """
 

@@ -35,16 +35,20 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import ROOT, OUTPUTS, EXTERNAL  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
-REPO_ROOT      = Path("/home/amin/Research/Representation/Movie/Model Repos/cav-mae-sync")
-DATA_ROOT      = Path(os.environ.get("STIMULUS_DIR", "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered"))
+REPO_ROOT      = ROOT / "Model Repos/cav-mae-sync"
+DATA_ROOT      = Path(os.environ.get("STIMULUS_DIR", str(EXTERNAL / "data/segmented_stimulus/filtered")))
 MODEL_PATH     = REPO_ROOT / "pretrained_models" / "cav_mae_sync.pth"
 SCRAMBLE_AV    = bool(int(os.environ.get("CAV_MAE_SCRAMBLE_AV", "0")))
 SCRAMBLE_SEED  = 42
 _MODEL_NAME    = "cav-mae-sync_avscramble" if SCRAMBLE_AV else "cav-mae-sync"
-OUTPUT_ROOT    = Path(os.environ.get("EMBEDDINGS_BASE", "/home/amin/Research/Representation/Movie/outputs/model_embeddings")) / _MODEL_NAME
+OUTPUT_ROOT    = Path(os.environ.get("EMBEDDINGS_BASE", str(OUTPUTS / "model_embeddings"))) / _MODEL_NAME
 
 AUDIO_MEAN     = -5.081
 AUDIO_STD      = 4.4849

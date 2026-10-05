@@ -15,8 +15,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT_DIR"
 
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="$ROOT/data"
+OUTPUTS_BASE="$ROOT/outputs"
 HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
 
 PREPROCESSED_AVG_DIR="${DATA_BASE}/preprocessed/average_sub/raw"

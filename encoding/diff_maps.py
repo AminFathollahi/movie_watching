@@ -33,11 +33,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cifti_io import load_named_map, merge_into_combined  # noqa: E402
+from paths import OUTPUTS  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
 log = logging.getLogger(__name__)
 
-GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/encoding/group_average")
+GROUP_DIR = OUTPUTS / "encoding/group_average"
 CONFIG = "delay5s_bin5s_skip5s"
 SPLITS = ("loro",)
 SCALINGS = ("demean",)

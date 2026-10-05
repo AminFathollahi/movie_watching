@@ -19,14 +19,19 @@ from natsort import natsorted
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-WHISPER_LOCAL_PATH = "/media/amin/EXTERNAL_USB/SMAF/hf_models/manual/models--openai--whisper-large-v3"
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+
+WHISPER_LOCAL_PATH = str(MODELS / "manual/models--openai--whisper-large-v3")
 WHISPER_BATCH_SIZE = 16
 USE_VAD = True
 BIN_SEC = SKIP_SEC = 2.0
 
-DATA_BASE = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-TEXT_OUT = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings/text")
-PROXY_OUT = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings/whisper_speech_proxy")
+DATA_BASE = DATA / "segmented_stimulus/filtered"
+TEXT_OUT = OUTPUTS / "model_embeddings/text"
+PROXY_OUT = OUTPUTS / "model_embeddings/whisper_speech_proxy"
 
 
 def find_chunk_pairs(data_base, bin_sec, skip_sec):

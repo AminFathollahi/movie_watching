@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from collections import Counter, deque
 from pathlib import Path
 
@@ -13,8 +14,9 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import ROOT as BASE  # noqa: E402
 
-BASE = Path("/home/amin/Research/Representation/Movie")
 DEFAULT_MAP = (BASE / "outputs/rsa/raw/group_average/pe-av-small-16-frame_av"
                "/k100_delay5s_bin5s_skip5s_spearman"
                "/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy")

@@ -57,6 +57,9 @@ import numpy as np
 import pandas as pd
 import scipy as sp
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import DATA, OUTPUTS, ROOT  # noqa: E402
+
 try:
     from cf_naming import strip_lboe_suffix
 except ModuleNotFoundError:  # package-style imports in tests and notebooks
@@ -65,10 +68,7 @@ except ModuleNotFoundError:  # package-style imports in tests and notebooks
 # ---------------------------------------------------------------------------
 # Vicsompy import (direct from source repo, no installation)
 # ---------------------------------------------------------------------------
-VICSOMPY_REPO = os.environ.get(
-    "VICSOMPY_REPO",
-    "/home/amin/Research/Representation/Movie/Vicarious_somatotopy",
-)
+VICSOMPY_REPO = os.environ.get("VICSOMPY_REPO", str(ROOT / "Vicarious_somatotopy"))
 if VICSOMPY_REPO not in sys.path:
     sys.path.insert(0, VICSOMPY_REPO)
 
@@ -96,12 +96,12 @@ CX_SUB        = "hcp_999999_draw_NH"
 SURF_TYPE     = "fiducial"    # 'fiducial' = midthickness in pycortex; sphere absent
 N_VERTS_PER_HEM = 59292
 
-_DATA_BASE      = "/home/amin/Research/Representation/Movie/data/Setareh"
+_DATA_BASE      = str(DATA / "Setareh")
 _HCP_DIR        = f"{_DATA_BASE}/HCP_S1200_GroupAvg_v1"
-_OUT_BASE       = "/home/amin/Research/Representation/Movie/outputs/cf_modeling"
-_PYCORTEX_STORE = "/home/amin/Research/Representation/Movie/data/hedger2026"
+_OUT_BASE       = str(OUTPUTS / "cf_modeling")
+_PYCORTEX_STORE = str(DATA / "hedger2026")
 _GLASSER_DLABEL = (
-    f"/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1/"
+    f"{DATA}/HCP_S1200_GroupAvg_v1/"
     "Q1-Q6_RelatedParcellation210"
     ".CorticalAreas_dil_Final_Final_Areas_Group_Colors"
     ".59k_fs_LR.dlabel.nii"

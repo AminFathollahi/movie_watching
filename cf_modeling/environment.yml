@@ -11,7 +11,7 @@ name: movie
 #   pip install himalaya==0.4.11 pycortex mne>=1.9
 #
 # vicsompy is NOT pip-installed — import directly from source:
-#   VICSOMPY_REPO=/home/amin/Research/Representation/Movie/Vicarious_somatotopy
+#   VICSOMPY_REPO=<MOVIE_ROOT>/Vicarious_somatotopy  (default)
 #   sys.path.insert(0, VICSOMPY_REPO)  (done in every CF modeling script)
 #
 # Verified package versions (movie env, 2026-05):

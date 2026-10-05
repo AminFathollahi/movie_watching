@@ -41,12 +41,12 @@ file-layout conventions.
 
 Run with:
     conda run -n movie python rsa/scramble_paired_stats.py \\
-        --output-dir /home/amin/Research/Representation/Movie/outputs/rsa/raw \\
+        --output-dir $ROOT/outputs/rsa/raw \\
         --intact-model pe-av-small-16-frame \\
         --scrambled-model pe-av-small-16-frame_avscramble \\
         --modality av --k 100 --bin-sec 5.0 --delay-sec 5.0 --method spearman \\
         --fmri-tag raw \\
-        --template-cifti /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \\
+        --template-cifti $ROOT/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \\
         --n-perm 100
 """
 

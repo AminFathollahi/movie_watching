@@ -31,7 +31,7 @@ grid (`load_positions()`, qwen2_5_omni.py:782-805, when coords.npy is
 missing). This formula needs no forward pass and no `unified_sheet` runtime
 tensor -- a unit's grid position is fixed by (layer, channel) alone, so it
 works for our 5s segments even though `unified_sheet` itself collapses to
-empty at that clip length (see plan.md item 3).
+empty at that clip length.
 
 Only the TEXT-DECODER layers (9, 18, 27 -- our sheet models) are supported;
 visual/audio cortical-sheet positions are not needed here.

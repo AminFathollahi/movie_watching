@@ -64,10 +64,9 @@ Mean-over-all-own-modality-tokens is the natural single-modality analogue of
 own input, with no cherry-picking.
 
 DATA_BASE note: topo_omni_extract_intact.py's DATA_BASE symlink
-(data/segmented_stimulus -> /media/amin/EXTERNAL_USB/...) is currently a
-DEAD symlink on this machine (that drive is not attached). The identical
-data is also mirrored on the ADATA HD710 PRO external drive, which IS
-mounted -- DATA_BASE below tries the symlink first, then that mirror.
+(data/segmented_stimulus -> the external drive) can be a dead symlink when
+that drive is not attached. The identical data is also mirrored under
+external/data -- DATA_BASE below tries the symlink first, then that mirror.
 
 Run with:
     conda run --no-capture-output -n topo_omni \
@@ -97,7 +96,11 @@ from huggingface_hub import snapshot_download
 from natsort import natsorted
 from tqdm import tqdm
 
-TOPO_OMNI_REPO = Path("/home/amin/Research/Representation/Movie/Model Repos/topo-omni")
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import ROOT, DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+
+TOPO_OMNI_REPO = ROOT / "Model Repos/topo-omni"
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"
 sys.path.insert(0, str(TOPO_OMNI_REPO))
 sys.path.insert(0, str(TOPO_OMNI_REPO / "src"))
@@ -116,7 +119,7 @@ TOPO_MODEL_ID = "epfl-neuroai/topo-omni"
 # instead of trusting HF_HOME resolution.
 _HF_SNAPSHOT_CANDIDATES = [
     Path.home() / ".cache/huggingface/hub/models--epfl-neuroai--topo-omni",
-    Path("/media/amin/ADATA HD710 PRO/hf_models/hub/models--epfl-neuroai--topo-omni"),
+    MODELS / "hub/models--epfl-neuroai--topo-omni",
 ]
 
 
@@ -133,8 +136,8 @@ def _resolve_model_path() -> str:
 
 
 _DATA_BASE_CANDIDATES = [
-    Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered"),
-    Path("/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered"),
+    DATA / "segmented_stimulus/filtered",
+    EXTERNAL / "data/segmented_stimulus/filtered",
 ]
 DATA_BASE = next(
     (p for p in _DATA_BASE_CANDIDATES if p.is_dir() and any(p.iterdir())), None
@@ -144,7 +147,7 @@ assert DATA_BASE is not None, (
     f"{[str(p) for p in _DATA_BASE_CANDIDATES]}"
 )
 
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"
 DEVICE   = "cuda"
 DTYPE    = torch.bfloat16
 BIN_SEC  = float(os.environ.get("BIN_SEC", "2.0"))

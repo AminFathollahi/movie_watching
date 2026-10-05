@@ -100,9 +100,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # =============================================================================
 # CONFIG — all paths and analysis parameters defined here
 # =============================================================================
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="$ROOT/data"
 HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+OUTPUTS_BASE="$ROOT/outputs"
 
 # Raw 7T CIFTI files (used in streaming mode — preprocess on-the-fly)
 CIFTI_DIR="${DATA_BASE}/individual-59k" 
@@ -146,7 +148,7 @@ PREPROCESSED_INDIV_DIR="${DATA_BASE}/preprocessed/${PREPROCESSING_FLAG}"
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 
 # Timing
-TIMING_CSV="/home/amin/Research/Representation/Movie/data/movie_timing.csv"
+TIMING_CSV="$ROOT/data/movie_timing.csv"
 
 # Embeddings root
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
@@ -158,14 +160,14 @@ EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
 # raise a shape mismatch error at save time.  Use the static HCP curvature
 # dscalar which always exists, has the correct BrainModelAxis, and is
 # preprocessing-flag-independent.
-TEMPLATE_CIFTI="/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
+TEMPLATE_CIFTI="$ROOT/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
 
 # Surface geometry — group-average midthickness (59k)
 LEFT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii"
 RIGHT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"
 
 # Per-subject midthickness surfaces (used when available for the searchlight loop)
-MIDTHICKNESS_DIR="/media/amin/EXTERNAL_USB/SMAF/Research/Representation/Movie/data/midthickness_1.6"
+MIDTHICKNESS_DIR="$ROOT/external/data/midthickness_1.6"
 
 # Glasser parcellation, 59k version (must match TEMPLATE_CIFTI and the surfaces)
 GLASSER_DLABEL="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"

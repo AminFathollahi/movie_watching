@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from cifti_io import save_cifti_multimap
+from paths import DATA, OUTPUTS
 from cf_modeling.cf_naming import (
     cf_model_map_stems,
     legacy_cf_model_map_stems,
@@ -47,8 +48,8 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
 
-_OUT_BASE       = "/home/amin/Research/Representation/Movie/outputs/cf_modeling"
-_PYCORTEX_STORE = "/home/amin/Research/Representation/Movie/data/hedger2026"
+_OUT_BASE       = str(OUTPUTS / "cf_modeling")
+_PYCORTEX_STORE = str(DATA / "hedger2026")
 
 
 # =============================================================================

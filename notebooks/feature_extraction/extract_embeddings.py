@@ -28,9 +28,13 @@ import torchaudio
 from natsort import natsorted
 from tqdm import tqdm
 
-STIMULUS_DIR = "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered"
-EMBEDDINGS_DIR = "/home/amin/Research/Representation/Movie/outputs/model_embeddings"
-MODELS_HOME = "/media/amin/ADATA HD710 PRO/hf_models"
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+
+STIMULUS_DIR = str(EXTERNAL / "data/segmented_stimulus/filtered")
+EMBEDDINGS_DIR = str(OUTPUTS / "model_embeddings")
+MODELS_HOME = str(MODELS)
 N_FRAMES = 16
 DECODER_KEYS = ("decoder.", "encoder_to_decoder.", "mask_token")
 DEPTHS = {"-d50": 0.5, "-d75": 0.75, "": 1.0}

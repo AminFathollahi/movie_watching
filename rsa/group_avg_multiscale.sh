@@ -19,9 +19,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # =============================================================================
 # CONFIG
 # =============================================================================
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="$ROOT/data"
 HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+OUTPUTS_BASE="$ROOT/outputs"
 
 # Base preprocessing flags pointing to the continuous map directory
 PREPROCESSING_FLAG="sg_psc"

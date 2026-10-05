@@ -2,22 +2,26 @@ import torch
 from safetensors.torch import save_file
 from pathlib import Path
 import os
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import MODELS  # noqa: E402
 
 # --- IMPORTANT: UPDATE THIS HASH ---
-# Run 'ls /home/amin/hf_models/manual/models--facebook--PE-Core-G14-448/snapshots/' 
+# Run 'ls <models folder>/manual/models--facebook--PE-Core-G14-448/snapshots/' 
 # to find the correct hash folder name for G14.
 
 conversions = [
     {
-        "dir": f"/home/amin/hf_models/manual/models--facebook--PE-Core-G14-448",
+        "dir": str(MODELS / "manual/models--facebook--PE-Core-G14-448"),
         "old_name": "PE-Core-G14-448.pt"
     },
     {
-        "dir": "/home/amin/hf_models/manual/models--laion--larger_clap_music_and_speech/snapshots/195c3a3e68faebb3e2088b9a79e79b43ddbda76b",
+        "dir": str(MODELS / "manual/models--laion--larger_clap_music_and_speech/snapshots/195c3a3e68faebb3e2088b9a79e79b43ddbda76b"),
         "old_name": "pytorch_model.bin"
     },
     {
-        "dir": "/home/amin/hf_models/manual/models--shikhar7ssu--OpenBEATs-Large-i2/snapshots/186e34c71c01b39e29572bc047cfc100dda6289a/work/nvme/bbjs/sbharadwaj/7Msounds/exp/beats_iter1_large1.tune_lr1.0e-4_warmup40000_bins1600000_totalsteps400000",
+        "dir": str(MODELS / "manual/models--shikhar7ssu--OpenBEATs-Large-i2/snapshots/186e34c71c01b39e29572bc047cfc100dda6289a/work/nvme/bbjs/sbharadwaj/7Msounds/exp/beats_iter1_large1.tune_lr1.0e-4_warmup40000_bins1600000_totalsteps400000"),
         "old_name": "epoch_latest.pt"
     }
 ]

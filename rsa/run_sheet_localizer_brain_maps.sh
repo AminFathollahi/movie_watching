@@ -31,8 +31,10 @@ esac
 SUFFIX="${SUFFIX:-}"
 BASE_NAME="localizer_${KIND}_drv-${DRIVER}_sheet-${SHEET}${SUFFIX}"
 
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="$ROOT/data"
+OUTPUTS_BASE="$ROOT/outputs"
 HCP_DIR="${DATA_BASE}/HCP_S1200_GroupAvg_v1"
 
 PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/raw"

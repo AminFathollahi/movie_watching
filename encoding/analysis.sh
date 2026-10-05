@@ -43,11 +43,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # =============================================================================
 # CONFIG — all paths and analysis parameters defined here
 # =============================================================================
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
+DATA_BASE="$ROOT/data"
+OUTPUTS_BASE="$ROOT/outputs"
 
 # Raw 7T CIFTI files (input to the preprocess mode)
-CIFTI_DIR="/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/individual-59k"
+CIFTI_DIR="$ROOT/external/data/individual-59k"
 
 # Preprocessing flags
 SG_FILTER=false   # Savitzky-Golay high-pass filter
@@ -87,7 +89,7 @@ TIMING_CSV="${DATA_BASE}/movie_timing.csv"
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
 
 # CIFTI template whose brain-model axis defines the output grayordinates.
-TEMPLATE_CIFTI="/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
+TEMPLATE_CIFTI="$ROOT/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
 
 # Output root
 OUTPUT_DIR="${OUTPUTS_BASE}/encoding"
@@ -132,7 +134,7 @@ RESPONSE_SCALING=(run)
 AUDIO_MODELS=()
 VIDEO_MODELS=()
 read -ra PAIRING_SEEDS <<< "${PAIRING_SEEDS:-0}"
-SEGMENTED_DIR="${MOVIE_SEGMENTED_DIR:-/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered}"
+SEGMENTED_DIR="${MOVIE_SEGMENTED_DIR:-$ROOT/external/data/segmented_stimulus/filtered}"
 
 CONDA_ENV="movie"
 # =============================================================================

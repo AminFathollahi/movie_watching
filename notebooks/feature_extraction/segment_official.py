@@ -29,9 +29,9 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from official_timing import add_global_time, load_official_timing  # noqa: E402
+from paths import DATA, EXTERNAL  # noqa: E402
 
-DATA = Path("/home/amin/Research/Representation/Movie/data")
-STIMULUS = Path("/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus")
+STIMULUS = EXTERNAL / "data/segmented_stimulus"
 FULL, OUT = STIMULUS / "full", STIMULUS / "filtered"
 MOVIES = {1: "7T_MOVIE1_CC1_v2", 2: "7T_MOVIE2_HO1_v2", 3: "7T_MOVIE3_CC2_v2", 4: "7T_MOVIE4_HO2_v2"}
 BINS = (1, 2, 5)

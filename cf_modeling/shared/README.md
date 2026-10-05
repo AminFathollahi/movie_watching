@@ -9,6 +9,6 @@
 | `project_onto_lboes` | Design matrix `data[ROI vertices].T @ eigenvectors`, stacked as `[A left, A right, B left, B right]`, with the band sizes. |
 | `fit_null_r2` | R^2 of the least-squares fit `Y ~ intercept + b * regressor` for every column of `Y`. |
 
-The module imports `generate_leave_one_run_out` from `vicsompy.utils`, so it needs `VICSOMPY_REPO` (see `SETUP.md`).
+The module imports `generate_leave_one_run_out` from `vicsompy.utils`, so it needs `VICSOMPY_REPO` (see the top-level README).
 
 Test: `pytest tests/test_cf_math.py -v`

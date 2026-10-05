@@ -30,9 +30,9 @@ Usage
 -----
 conda run --no-capture-output -n movie python \
     notebooks/feature_extraction/compute_linear_residual_embeddings.py \
-    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \
-    --timing-csv /home/amin/Research/Representation/Movie/data/movie_timing.csv \
-    --run-trs /home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy \
+    --embeddings-dir ../outputs/model_embeddings \
+    --timing-csv ../data/movie_timing.csv \
+    --run-trs ../data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy \
     --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --tr 1.0
 """
 

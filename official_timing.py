@@ -121,7 +121,7 @@ def add_global_time(df: pd.DataFrame, run_trs_npy: str) -> pd.DataFrame:
 
 if __name__ == "__main__":
     import sys
-    _BASE = Path("/home/amin/Research/Representation/Movie")
+    from paths import ROOT as _BASE
     df = load_official_timing(str(_BASE / "data/HCP_7T_Movie_Clip_Timing.csv"))
     df = add_global_time(df, str(_BASE / "data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy"))
     print(df.to_string())

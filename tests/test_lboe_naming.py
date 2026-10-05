@@ -49,7 +49,7 @@ def test_persubject_output_root_honours_override_and_default(monkeypatch, tmp_pa
     monkeypatch.delenv("MOVIE_PERSUBJECT_ROOT")
 
     # Real drive, no override: only meaningful when it's actually mounted.
-    if NAMING.PERSUBJECT_MOUNT.is_mount():
+    if NAMING.PERSUBJECT_MOUNT.is_dir():
         root = persubject_output_root()
         assert root == NAMING.PERSUBJECT_MOUNT / NAMING.PERSUBJECT_SUBPATH
         assert root.is_dir()

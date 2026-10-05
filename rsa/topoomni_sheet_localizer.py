@@ -49,7 +49,7 @@ python rsa/topoomni_sheet_localizer.py \\
     --sheet-model topoomni_layer18_sheet_mp \\
     --cluster-embedding-model pe-av-small-16-frame --cluster-embedding-modality event_t \\
     --auditory-regressor-model whisper_speech_proxy \\
-    --embeddings-dir /home/amin/Research/Representation/Movie/outputs/model_embeddings \\
+    --embeddings-dir $ROOT/outputs/model_embeddings \\
     --bin-sec 5.0 --skip-sec 5.0 --n-min 10 --n-max 375
 """
 

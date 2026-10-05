@@ -6,7 +6,7 @@ echo "DEPRECATED: run_channel_class_rsa.sh is retired (legacy 4-class labels). R
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MOVIE_ROOT="/home/amin/Research/Representation/Movie"
+MOVIE_ROOT="${MOVIE_ROOT:-$(dirname "$ROOT")}"
 DATA="${MOVIE_ROOT}/data"
 OUTPUTS="${MOVIE_ROOT}/outputs"
 HCP="${DATA}/HCP_S1200_GroupAvg_v1"

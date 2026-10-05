@@ -4,15 +4,20 @@ import argparse
 import gc
 import os
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+
 # Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
 # proxy config gets locked in at import time, so stripping these afterward
 # has no effect and local_files_only lookups fail with a bogus "couldn't
 # connect" error even though the model is fully cached locally.
-# /home/amin/hf_models is a symlink through EXTERNAL_USB, which is not
-# attached on this machine; trust_remote_code's dynamic-module cache needs a
-# writable HF_HOME regardless of where the model weights resolve from (see
-# _resolve_model_path() below), so point it at the mounted ADATA mirror.
-os.environ["HF_HOME"] = "/media/amin/ADATA HD710 PRO/hf_models"
+# trust_remote_code's dynamic-module cache needs a writable HF_HOME regardless
+# of where the model weights resolve from (see _resolve_model_path() below),
+# so default it to the models folder.
+os.environ["HF_HOME"] = str(MODELS)
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy",
            "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -36,16 +41,13 @@ from av_pairing import factorial_contrast, fold_confined_pairing, fold_reference
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_ID = "nvidia/omni-embed-nemotron-3b"
-# ~/.cache/huggingface/hub/models--nvidia--omni-embed-nemotron-3b is a dead
-# symlink on this machine: HF_HOME above resolves through
-# /home/amin/hf_models -> /media/amin/EXTERNAL_USB/..., and that drive is
-# not attached. A full mirror of the same snapshot sits on the ADATA HD710
-# PRO drive, which IS mounted -- resolve the snapshot dir directly instead
-# of trusting HF_HOME resolution (same fix as
+# The default Hugging Face cache link can be dead when its drive is not
+# attached; resolve the snapshot dir directly against the models folder
+# instead of trusting HF_HOME resolution (same fix as
 # topo_omni_extract_full_sheet.py's _resolve_model_path()).
 _HF_SNAPSHOT_CANDIDATES = [
     Path.home() / ".cache/huggingface/hub/models--nvidia--omni-embed-nemotron-3b",
-    Path("/media/amin/ADATA HD710 PRO/hf_models/hub/models--nvidia--omni-embed-nemotron-3b"),
+    MODELS / "hub/models--nvidia--omni-embed-nemotron-3b",
 ]
 
 
@@ -62,10 +64,10 @@ def _resolve_model_path() -> str:
 MODEL_PATH      = _resolve_model_path()
 DATA_BASE       = Path(os.environ.get(
     "MOVIE_SEGMENTED_DIR",
-    "/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered",
+    str(EXTERNAL / "data/segmented_stimulus/filtered"),
 ))
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
-TIMING_CSV      = Path("/home/amin/Research/Representation/Movie/data/movie_timing.csv")
+EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"
+TIMING_CSV      = DATA / "movie_timing.csv"
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
 BIN_SEC, SKIP_SEC = 5.0, 5.0

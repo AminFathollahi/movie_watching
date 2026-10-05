@@ -29,8 +29,8 @@ from nilearn import plotting
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cifti_io import get_bm_axis, get_cortex_vertex_indices
+from paths import ROOT as _BASE
 
-_BASE = Path("/home/amin/Research/Representation/Movie")
 _L_INFL = (_BASE / "data/HCP_S1200_GroupAvg_v1/GroupAverage_59k"
            "/CohortAvg.L.inflated_MSMAll.59k_fs_LR.surf.gii")
 _R_INFL = (_BASE / "data/HCP_S1200_GroupAvg_v1/GroupAverage_59k"

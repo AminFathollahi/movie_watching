@@ -18,6 +18,7 @@ CLUSTER_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(CLUSTER_DIR))
 
+from paths import OUTPUTS  # noqa: E402
 from vertex_clustering import (  # noqa: E402
     labels_path, cluster_profiles, profile_correlation_summary, vertex_exclude_labels,
 )
@@ -28,7 +29,7 @@ from channel_timeseries_clustering import (  # noqa: E402
 from rsa.shared.rsa_utils import preprocess_fmri  # noqa: E402
 
 FAMILIES = ("peav", "nemotron_layer18_mp")
-OUTPUT_DIR = Path("/home/amin/Research/Representation/Movie/outputs/cluster")
+OUTPUT_DIR = OUTPUTS / "cluster"
 
 
 def screen_table(ms_dir: Path, filename: str, units_by_bins: np.ndarray,

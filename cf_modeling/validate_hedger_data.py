@@ -13,9 +13,10 @@ import numpy as np
 import nibabel as nib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cf_naming import cf_model_map_stems
+from paths import ROOT as MOVIE_ROOT
 
-MOVIE_ROOT    = Path("/home/amin/Research/Representation/Movie")
 REPO_ROOT     = MOVIE_ROOT / "movie_watching"
 CF_DIR        = REPO_ROOT / "cf_modeling"
 HEDGER_SUB    = MOVIE_ROOT / "data/hedger2026/hcp_movie/hcp_movie/subjects/999999"

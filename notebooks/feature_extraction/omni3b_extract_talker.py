@@ -87,6 +87,11 @@ os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy"):
     os.environ.pop(_v, None)
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+
 # ── Config ────────────────────────────────────────────────────────────────
 # ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-Omni-3B is a dead symlink to
 # an unmounted drive on this machine -- resolve the checkpoint snapshot dir
@@ -94,7 +99,7 @@ for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy"):
 # topo_omni_extract_full_sheet.py's _HF_SNAPSHOT_CANDIDATES).
 _MODEL_SNAPSHOT_CANDIDATES = [
     Path.home() / ".cache/huggingface/hub/models--Qwen--Qwen2.5-Omni-3B",
-    Path("/media/amin/ADATA HD710 PRO/hf_models/hub/models--Qwen--Qwen2.5-Omni-3B"),
+    MODELS / "hub/models--Qwen--Qwen2.5-Omni-3B",
 ]
 
 
@@ -109,14 +114,14 @@ def _resolve_model_path() -> str:
 
 
 _DATA_BASE_CANDIDATES = [
-    Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered"),
-    Path("/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/segmented_stimulus/filtered"),
+    DATA / "segmented_stimulus/filtered",
+    EXTERNAL / "data/segmented_stimulus/filtered",
 ]
 DATA_BASE = next((p for p in _DATA_BASE_CANDIDATES if p.is_dir() and any(p.iterdir())), None)
 assert DATA_BASE is not None, f"No usable segmented_stimulus/filtered directory. Tried: {_DATA_BASE_CANDIDATES}"
 
 MODEL_PATH      = _resolve_model_path()
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
 BIN_SEC, SKIP_SEC = 5.0, 5.0

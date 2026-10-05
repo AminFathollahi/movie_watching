@@ -1,6 +1,6 @@
 # cf_modeling: connective-field models
 
-Connective-field (CF) models of cortical 7T movie-watching fMRI, following Hedger et al. (2025). For a pair of cortical regions of interest (ROIs; Glasser HCP-MMP1 parcels), the activity of every cortical grayordinate (108,441, medial wall excluded) is predicted from the spatial pattern of activity inside each ROI, expressed in a low-dimensional geometric basis. The model classes come from the `vicsompy` repository, which is imported from source and not pip-installed (see `NOTICE` and `SETUP.md`).
+Connective-field (CF) models of cortical 7T movie-watching fMRI, following Hedger et al. (2025). For a pair of cortical regions of interest (ROIs; Glasser HCP-MMP1 parcels), the activity of every cortical grayordinate (108,441, medial wall excluded) is predicted from the spatial pattern of activity inside each ROI, expressed in a low-dimensional geometric basis. The model classes come from the `vicsompy` repository, which is imported from source and not pip-installed (see the top-level README).
 
 ## Method
 
@@ -29,11 +29,11 @@ Connective-field (CF) models of cortical 7T movie-watching fMRI, following Hedge
 | 4 | `overlap.py` | `per_subject` only: statistics across subjects. |
 | optional | `03_functional_masks.py` | Data-driven ROI masks from a finished fit. |
 
-Supporting files: `cf_naming.py` (output-name rules), `bivariate_cifti.py` (colour quantization and legends), `lib/`, `shared/`, and `vendor/` (verbatim vicsompy copies kept for attribution, not imported; see `vendor/DEPRECATED.md`).
+Supporting files: `cf_naming.py` (output-name rules), `bivariate_cifti.py` (colour quantization and legends), `lib/` and `shared/`.
 
 ## Usage
 
-The environment is `movie` (see `SETUP.md`). The runner takes its input and output locations from the CONFIG block at the top of `run_analysis.sh`:
+The environment is `movie` (see the top-level README). The runner takes its input and output locations from the CONFIG block at the top of `run_analysis.sh`:
 
 ```bash
 bash cf_modeling/run_analysis.sh [MODE] [BATCH_SIZE] [START_FROM]

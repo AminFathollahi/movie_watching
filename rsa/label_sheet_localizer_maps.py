@@ -34,11 +34,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cifti_io import merge_into_combined  # noqa: E402
+from paths import OUTPUTS  # noqa: E402
 from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
 from rsa.localizer_naming import base_name as loc_base_name, summary_json_name  # noqa: E402
 
-EMBEDDINGS_DIR = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
-GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/rsa/raw/group_average")
+EMBEDDINGS_DIR = OUTPUTS / "model_embeddings"
+GROUP_DIR = OUTPUTS / "rsa/raw/group_average"
 
 # Must match run_sheet_localizer_brain_maps.sh's BIN_SEC/SKIP_SEC env vars
 # (default 5.0) so the merge looks for the same filenames the searchlight

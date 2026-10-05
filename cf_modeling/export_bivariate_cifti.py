@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import OUTPUTS  # noqa: E402
 
 try:
     from cf_modeling.cf_naming import (
@@ -44,9 +48,7 @@ except ModuleNotFoundError:
     )
 
 
-DEFAULT_OUTPUT_BASE = Path(
-    "/home/amin/Research/Representation/Movie/outputs/cf_modeling"
-)
+DEFAULT_OUTPUT_BASE = OUTPUTS / "cf_modeling"
 
 
 def parse_args() -> argparse.Namespace:

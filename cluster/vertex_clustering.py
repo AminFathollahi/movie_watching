@@ -58,17 +58,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cifti_io import get_bm_axis, load_cifti_data, load_single_map  # noqa: E402
 from io_cluster import GROUP_AVG_CIFTI, write_dlabel  # noqa: E402
+from paths import OUTPUTS  # noqa: E402
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-OUTPUT_DIR = "/home/amin/Research/Representation/Movie/outputs/cluster"
+OUTPUT_DIR = str(OUTPUTS / "cluster")
 REDUCTIONS = ("pca", "mds", "isomap", "tsne", "fastica", "umap")
 CLUSTERERS = ("kmeans", "hdbscan", "birch")
 METRIC_SAMPLE_CAP = 5_000
-MASK_CIFTI = (
-    "/home/amin/Research/Representation/Movie/outputs/sitmulus_regressor_cifti/"
+MASK_CIFTI = str(
+    OUTPUTS / "sitmulus_regressor_cifti/"
     "HCP_movie_stimulus_correlation_5sdelay_normalized.dscalar.nii"
 )
 MASK_THRESHOLD = 0.0

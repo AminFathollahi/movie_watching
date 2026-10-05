@@ -75,7 +75,11 @@ from huggingface_hub import snapshot_download
 from natsort import natsorted
 from tqdm import tqdm
 
-TOPO_OMNI_REPO = Path("/home/amin/Research/Representation/Movie/Model Repos/topo-omni")
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import ROOT, DATA, OUTPUTS  # noqa: E402
+
+TOPO_OMNI_REPO = ROOT / "Model Repos/topo-omni"
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"
 sys.path.insert(0, str(TOPO_OMNI_REPO))
 sys.path.insert(0, str(TOPO_OMNI_REPO / "src"))
@@ -85,10 +89,10 @@ from models.qwen2_5_omni import Qwen2_5OmniThinkerForConditionalGeneration, Cort
 from qwen_vl_utils import process_vision_info
 
 TOPO_MODEL_ID   = "epfl-neuroai/topo-omni"
-DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
-DUMMY_VIDEO     = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/dummy_blank/dummy_black_5s.mp4")
-DUMMY_AUDIO     = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/dummy_blank/dummy_silence_5s.wav")
+DATA_BASE       = DATA / "segmented_stimulus/filtered"
+EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"
+DUMMY_VIDEO     = DATA / "segmented_stimulus/dummy_blank/dummy_black_5s.mp4"
+DUMMY_AUDIO     = DATA / "segmented_stimulus/dummy_blank/dummy_silence_5s.wav"
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
 BIN_SEC, SKIP_SEC = 5.0, 5.0

@@ -16,11 +16,16 @@ import argparse
 import json
 import logging
 import os
+import sys
 from glob import glob
+from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 from scipy import stats as scipy_stats
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import OUTPUTS  # noqa: E402
 
 try:
     from cf_modeling.cf_naming import (
@@ -36,7 +41,7 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
 
-_OUT_BASE = "/home/amin/Research/Representation/Movie/outputs/cf_modeling"
+_OUT_BASE = str(OUTPUTS / "cf_modeling")
 
 FDR_Q = 0.05
 ALPHA = 0.05

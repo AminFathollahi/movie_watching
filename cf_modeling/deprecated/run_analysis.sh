@@ -78,19 +78,21 @@
 set -euo pipefail
 DEPRECATED_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_DIR="$(dirname "$DEPRECATED_DIR")"   # live cf_modeling scripts
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
 
 # =============================================================================
 # CONFIG — all paths and analysis parameters defined here
 # =============================================================================
 
-DATA_BASE="/home/amin/Research/Representation/Movie/data"
-HCP_DIR="${MOVIE_HCP_DIR:-/home/amin/Research/Representation/Movie/data/HCP_S1200_GroupAvg_v1}"
+DATA_BASE="$ROOT/data"
+HCP_DIR="${MOVIE_HCP_DIR:-$DATA_BASE/HCP_S1200_GroupAvg_v1}"
 PYCORTEX_STORE="${DATA_BASE}/hedger2026"
 export PYCORTEX_FILESTORE="$PYCORTEX_STORE"
-OUTPUTS_BASE="/home/amin/Research/Representation/Movie/outputs"
+OUTPUTS_BASE="$ROOT/outputs"
 
 # ── vicsompy source repo (direct import; no pip install) ──────────────────────
-VICSOMPY_REPO="/home/amin/Research/Representation/Movie/Vicarious_somatotopy"
+VICSOMPY_REPO="${VICSOMPY_REPO:-$ROOT/Vicarious_somatotopy}"
 
 # ── Pycortex subject ──────────────────────────────────────────────────────────
 CX_SUB="hcp_999999_draw_NH"
@@ -109,7 +111,7 @@ N_LBOE=100
 STREAM=false
 
 # Raw CIFTI directory (streaming mode only)
-CIFTI_DIR="${MOVIE_RAW_CIFTI_DIR:-/media/amin/ADATA HD710 PRO/Research/Representation/Movie/data/individual-59k}"
+CIFTI_DIR="${MOVIE_RAW_CIFTI_DIR:-$ROOT/external/data/individual-59k}"
 
 # ── Preprocessing flags ───────────────────────────────────────────────────────
 # Applied per run: SG high-pass → PSC (with pre-SG mean) → GSR
@@ -168,7 +170,7 @@ OUTPUT_BASE="${OUTPUTS_BASE}/cf_modeling"
 # subjects/{sub} layout exactly (only the base path differs), so every
 # downstream script (integration_maps.py, overlap.py, ...) needs no changes —
 # they read/write under whatever --output-base they are given.
-HDD_OUTPUT_BASE="/media/amin/ADATA HD710 PRO/cf_modeling"
+HDD_OUTPUT_BASE="${HDD_OUTPUT_BASE:-}"   # required for run_persubject_cca_peav_1pct
 RSA_BASE="${OUTPUTS_BASE}/rsa"
 RSA_MODEL="pe-av-small-16-frame"   # RSA model name used in overlap.py output filenames
 
@@ -997,6 +999,7 @@ run_cca_1pct_all() {
 # once rather than recomputed.
 run_persubject_cca_peav_1pct() {
     local REQUESTED_LBOE="${1:-$N_LBOE}"
+    [ -n "$HDD_OUTPUT_BASE" ] || { echo "Set HDD_OUTPUT_BASE to the external output directory" >&2; exit 1; }
     local ROI_A ROI_B
     ROI_A=$(qualify_lboe_roi "cca_a_peav_1pct" "$REQUESTED_LBOE")
     ROI_B=$(qualify_lboe_roi "cca_p_peav_1pct" "$REQUESTED_LBOE")

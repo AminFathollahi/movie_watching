@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from preprocess_individual import RUN_IDS, get_run_path, preprocess_run, save_dtseries  # noqa: E402
 from cifti_io import save_cifti_map  # noqa: E402 (unused here but re-exported for callers)
+from paths import DATA  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -445,7 +446,7 @@ def make_subcortical_template(structures: list, out_path: Path,
 # =============================================================================
 
 def demo():
-    RAW_DIR = Path("/home/amin/Research/Representation/Movie/data/individual-59k")
+    RAW_DIR = DATA / "individual-59k"
     SUB = "132118"
     CACHE_DIR = ROOT / "outputs_subcortical_selfcheck_cache"
 

@@ -17,7 +17,7 @@ Workflow
       winner  — overlapping vertex goes to whichever ROI has higher R2_nc.
       allow   — both masks keep the overlapping vertex.
       exclude — overlapping vertices are removed from both masks.
-5.  Project grayordinate boolean masks (59412) → full-sphere space (118584)
+5.  Project grayordinate boolean masks (108441) → full-sphere space (118584)
     using the CIFTI BrainModelAxis, then split into L/R (59292 each).
 6.  Save vicsompy-format CSV masks:
       {masks_dir}/{output_roi_a}_{L/R}_mask.csv
@@ -54,6 +54,9 @@ _CF_DIR = Path(__file__).resolve().parent
 if str(_CF_DIR) not in sys.path:
     sys.path.insert(0, str(_CF_DIR))
 
+sys.path.insert(0, str(_CF_DIR.parent))
+from paths import OUTPUTS  # noqa: E402
+
 from lib.data_adapter import grayord_to_sphere_space, N_VERTS_PER_HEM
 from cf_naming import (
     cf_model_map_stems, legacy_cf_model_map_stems, per_subject_mean_stem,
@@ -67,7 +70,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-_OUT_BASE = "/home/amin/Research/Representation/Movie/outputs/cf_modeling"
+_OUT_BASE = str(OUTPUTS / "cf_modeling")
 
 
 # =============================================================================

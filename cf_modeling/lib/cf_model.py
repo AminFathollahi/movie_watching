@@ -18,10 +18,10 @@ CfModel wraps all of this:
                                make_subsurfaces() and the expensive geodesic
                                distance step (create()).
   * make_dm_grayord()        — build design matrix from CIFTI grayordinate data
-                               (59412 verts) after internal sphere-space conversion.
+                               (108441 verts) after internal sphere-space conversion.
   * fit_grayord()            — fit model; Y targets stay in grayordinate space.
   * test_xval_grayord()      — evaluate on test split; returns xval_score and
-                               test_split_scores in grayordinate (59412,) shape.
+                               test_split_scores in grayordinate (108441,) shape.
   * compute_null_r2()        — OLS null model from ROI mean timecourses, matching
                                vicsompy's test_null_model() math exactly.
   * save_all_maps()          — write every R² map as npy and (optionally) CIFTI.
@@ -38,9 +38,9 @@ Usage (see 02_fit_cf_model.py)
 -------------------------------
     nm = CfModel(subject_adapter, analysis_name, yaml=temp_yaml_path)
     nm.inject_subsurfaces([sub_a, sub_b], [roi_a, roi_b], [n_lboe_a, n_lboe_b])
-    nm.make_dm_grayord(train_data, bm_axis)        # (59412, T_train)
+    nm.make_dm_grayord(train_data, bm_axis)        # (108441, T_train)
     nm.prep_pipeline(run_durations=run_onsets_arr)  # LORO-CV onsets
-    nm.fit_grayord(train_data)                      # Y targets: (T_train, 59412)
+    nm.fit_grayord(train_data)                      # Y targets: (T_train, 108441)
     nm.get_params()                                 # betas, train split scores, alphas
     nm.test_xval_grayord(test_data, bm_axis)        # R² on test set
     null_r2 = nm.compute_null_r2(test_data, bm_axis)  # OLS null baseline

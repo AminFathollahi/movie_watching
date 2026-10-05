@@ -79,6 +79,10 @@ os.environ.pop("socks_proxy", None)
 os.environ.pop("ALL_PROXY", None)
 os.environ.pop("all_proxy", None)
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import ROOT, DATA, OUTPUTS, MODELS  # noqa: E402
+
 # topo-omni ships a *custom* modeling file (CorticalAdaptor modules spliced after every
 # audio/vision/text layer). The stock transformers Qwen2_5OmniThinkerForConditionalGeneration
 # class does not know about these adaptors -- loading these weights with the stock class
@@ -89,7 +93,7 @@ os.environ.pop("all_proxy", None)
 # (expects src/ on path), but that file itself does `from src.models.spatial_utils import ...`
 # (expects the repo ROOT on path, treating src/ as a namespace package) -- an inconsistency
 # in the repo's own import style, not a typo; both paths are needed simultaneously.
-TOPO_OMNI_REPO = Path("/home/amin/Research/Representation/Movie/Model Repos/topo-omni")
+TOPO_OMNI_REPO = ROOT / "Model Repos/topo-omni"
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"
 sys.path.insert(0, str(TOPO_OMNI_REPO))
 sys.path.insert(0, str(TOPO_OMNI_REPO / "src"))
@@ -108,7 +112,7 @@ if torch.cuda.is_available():
 
 
 # ── Download topo-omni to external HDD (skip if already present) ─────────────
-EXTERNAL_HF_CACHE = "/media/amin/EXTERNAL_USB/SMAF/hf_models/hub"
+EXTERNAL_HF_CACHE = str(MODELS / "hub")
 TOPO_MODEL_ID     = "epfl-neuroai/topo-omni"
 
 def _weights_present(ext_model_dir: Path) -> bool:
@@ -162,8 +166,8 @@ else:
 MODEL_PATH = snapshot_download(TOPO_MODEL_ID, local_files_only=True)
 print(f"Resolved local snapshot dir: {MODEL_PATH}")
 
-DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+DATA_BASE       = DATA / "segmented_stimulus/filtered"
+EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"
 DIAGNOSTICS_DIR = EMBEDDINGS_BASE / "topoomni_diagnostics"
 
 DEVICE = "cuda"

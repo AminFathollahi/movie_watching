@@ -67,11 +67,17 @@ Run with:
 import gc
 import os
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+
 # Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
 # proxy config gets locked in at import time, so stripping these afterward
 # has no effect and local_files_only lookups fail with a bogus "couldn't
 # connect" error even though the model is fully cached locally.
-os.environ["HF_HOME"] = "/home/amin/hf_models"
+os.environ["HF_HOME"] = str(MODELS)
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy",
            "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -91,8 +97,8 @@ from natsort import natsorted
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_PATH      = "nvidia/omni-embed-nemotron-3b"
-DATA_BASE       = Path("/home/amin/Research/Representation/Movie/data/segmented_stimulus/filtered")
-EMBEDDINGS_BASE = Path("/home/amin/Research/Representation/Movie/outputs/model_embeddings")
+DATA_BASE       = DATA / "segmented_stimulus/filtered"
+EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"
 DEVICE          = "cuda"
 DTYPE           = torch.bfloat16
 BIN_SEC, SKIP_SEC = 5.0, 1.0

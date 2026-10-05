@@ -41,12 +41,12 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cifti_io import get_bm_axis, get_cortex_vertex_indices
+from paths import ROOT as _BASE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 # ── defaults ─────────────────────────────────────────────────────────────────
-_BASE = Path("/home/amin/Research/Representation/Movie")
 _RSA_NPY = (_BASE / "outputs/rsa/raw/group_average/pe-av-small-16-frame_av"
              "/k100_delay5s_bin5s_skip5s_spearman_center"
              "/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_searchlight.npy")

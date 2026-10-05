@@ -5,6 +5,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from paths import OUTPUTS
 
 from rsa.shared.sheet_rsa import (
     ENCODER_ROWS, N_UNITS, SHEET_COLS, TOWER_AUDIO, TOWER_NAMES, TOWER_THINKER,
@@ -78,8 +79,7 @@ def test_true_coords_stay_within_tower_raster_bounds():
     """Separator lines at col 256 (rows 0-159) and row 160 are valid under
     TRUE coordinates only because permute_coordinates reorders units WITHIN
     a block, never across a block boundary. Regression check for that fact."""
-    cache = Path("/home/amin/Research/Representation/Movie/outputs/rsa/"
-                "cca_seed_sheet_rsa/topoomni_true_coords_seed42.npy")
+    cache = OUTPUTS / "rsa/cca_seed_sheet_rsa/topoomni_true_coords_seed42.npy"
     if not cache.exists():
         return
     coords = load_true_coords(cache)

@@ -104,6 +104,18 @@ def save_cifti_multimap(data_2d: np.ndarray, map_names: list,
     nib.save(img, output_path)
 
 
+def update_cifti_multimap(data_2d: np.ndarray, map_names: list,
+                          template_path: str, output_path: str) -> None:
+    """Add maps to a multi-map dscalar, replacing maps of the same name; creates the file if absent."""
+    import os
+    maps = {}
+    if os.path.exists(output_path):
+        img = nib.load(str(output_path))
+        maps = dict(zip(img.header.get_axis(0).name, img.get_fdata(dtype=np.float32)))
+    maps.update(zip(map_names, np.asarray(data_2d, dtype=np.float32)))
+    save_cifti_multimap(np.stack(list(maps.values())), list(maps), template_path, output_path)
+
+
 def get_combined_map_names(combined_path) -> list:
     """Return the scalar map names in an existing combined CIFTI dscalar.
 

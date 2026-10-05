@@ -10,10 +10,12 @@ import numpy as np
 import pandas as pd
 
 from encoding.shared.encoding_utils import apply_hrf_to_segment, build_fmri_arrays, spm_hrf
-from encoding.shared.fold_evaluator import ALL_SUBSETS, FEATURE_SCALINGS, evaluate_split
+from encoding.shared.fold_evaluator import ALL_SUBSETS, evaluate_split
 
 log = logging.getLogger(__name__)
 REPEATED_VALIDATION_CLIPS = ("video5", "video9", "video14", "video18")
+RESPONSE_SCALINGS = ("run", "train", "clip", "none")
+FEATURE_SCALINGS = ("demean", "zscore", "none")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,14 +26,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fmri-suffix", default="raw")
     parser.add_argument("--subject", default="group_average")
     parser.add_argument(
-        "--split", choices=("fixed", "runwise"), default="runwise",
+        "--split", choices=("fixed", "loro", "loco"), default="loro",
         help="fixed: train on the other clips, test on the repeated clips; "
-             "runwise: drop the repeated clips, outer leave-one-run-out.",
+             "loro: drop the repeated clips, outer leave-one-run-out; "
+             "loco: outer leave-one-clip-out over every clip not in --exclude-video-ids.",
     )
     parser.add_argument(
-        "--feature-scaling", choices=FEATURE_SCALINGS, default="center",
-        help="zscore: subtract the training mean and divide by the training standard deviation "
-             "(Hedger et al.); center: subtract the training mean only (Gallant-lab tutorials).",
+        "--feature-scaling", choices=FEATURE_SCALINGS, default="demean",
+        help="Embeddings are scaled over the same rows and with the same statistics as the responses "
+             "(--response-scaling): demean subtracts the mean, zscore also divides by the standard deviation, "
+             "none leaves them as extracted.",
+    )
+    parser.add_argument(
+        "--response-scaling", choices=RESPONSE_SCALINGS, default="run",
+        help="run: z-score each grayordinate within each run (held-out clips of --split fixed on their own statistics; "
+             "not allowed with --split loco, whose held-out clip would enter its run's statistics); "
+             "train: z-score each run with the mean and standard deviation of its training rows of the fold; "
+             "clip: subtract each clip's own mean; none: binned responses as preprocessed.",
+    )
+    parser.add_argument(
+        "--n-components", type=int, default=0,
+        help="Project each band onto its first N principal components of the fold's training rows (0: all features).",
     )
     parser.add_argument("--timing-csv", required=True)
     parser.add_argument("--embeddings-dir", required=True)
@@ -110,6 +125,7 @@ def reject_global_scramble(*names):
 
 def load_inputs(args) -> dict:
     reject_global_scramble(args.model, args.audio_model, args.video_model, args.joint_model_template)
+    check_scalings(args)
     timing = pd.read_csv(args.timing_csv)
     metadata = sample_metadata(timing, args.bin_sec, args.skip_sec)
     bands = set("".join(args.subsets))
@@ -125,7 +141,7 @@ def load_inputs(args) -> dict:
     joint_names = {}
     if "j" in bands and args.joint_model_template:
         if args.split == "fixed":
-            raise ValueError("--joint-model-template is defined per held-out run; use --split runwise")
+            raise ValueError("--joint-model-template is defined per held-out run; use --split loro")
         joint_names = {
             run: args.joint_model_template.format(run=run)
             for run in sorted(pd.unique(metadata["run_id"]))
@@ -151,7 +167,7 @@ def load_inputs(args) -> dict:
     run_trs_path = Path(args.preprocessed_dir) / f"{args.subject}_{args.fmri_suffix}_run_trs.npy"
     y_train, y_test, run_onsets = build_fmri_arrays(
         str(fmri_path), str(run_trs_path), timing, sorted(excluded), args.bin_sec, args.tr,
-        delay_sec=args.delay_sec, skip_sec=args.skip_sec,
+        delay_sec=args.delay_sec, skip_sec=args.skip_sec, zscore=args.response_scaling == "run",
     )
     if y_train.shape[0] != int(keep.sum()) or y_test.shape[0] != int((~keep).sum()):
         raise ValueError("fMRI rows do not align with embedding rows")
@@ -165,13 +181,23 @@ def load_inputs(args) -> dict:
     targets = np.empty((len(metadata), y_train.shape[1]), dtype=np.float32)
     targets[keep] = y_train
     targets[~keep] = y_test
+    if args.response_scaling == "clip":
+        for _, rows in metadata.groupby("video_id", sort=False).indices.items():
+            targets[rows] -= targets[rows].mean(axis=0)
     rows = metadata["row_index"].to_numpy(dtype=int)
     if len({values.shape[1] for values in joint.values()}) > 1:
         raise ValueError("Joint embeddings have inconsistent feature dimensions")
+    embeddings = {band: values[rows] for band, values in embeddings.items()}
+    joint = {run: values[rows] for run, values in joint.items()}
+    if args.response_scaling in ("run", "clip") and args.feature_scaling != "none":
+        groups = (metadata["video_id"] if args.response_scaling == "clip"
+                  else metadata["run_id"].astype(str) + metadata["keep"].astype(str)).to_numpy()
+        embeddings = {band: scale_groups(values, groups, args.feature_scaling) for band, values in embeddings.items()}
+        joint = {run: scale_groups(values, groups, args.feature_scaling) for run, values in joint.items()}
     return {
-        "a": embeddings["a"][rows] if "a" in embeddings else None,
-        "v": embeddings["v"][rows] if "v" in embeddings else None,
-        "joint": {run: values[rows] for run, values in joint.items()},
+        "a": embeddings.get("a"),
+        "v": embeddings.get("v"),
+        "joint": joint,
         "targets": targets,
         "metadata": metadata,
         "keep": keep,
@@ -186,10 +212,53 @@ def make_folds(data: dict, split: str) -> list[tuple[str, np.ndarray, np.ndarray
     keep, run_ids = data["keep"], data["metadata"]["run_id"].to_numpy()
     if split == "fixed":
         return [("fixed", keep, ~keep)]
+    if split == "loco":
+        run_ids = data["metadata"]["video_id"].to_numpy()
     return [
         (str(run), keep & (run_ids != run), keep & (run_ids == run))
         for run in pd.unique(run_ids[keep])
     ]
+
+
+def check_scalings(args):
+    if args.split == "loco" and args.response_scaling == "run":
+        raise ValueError("--split loco needs --response-scaling train: per-run statistics would include the held-out clip")
+    if (args.response_scaling, args.feature_scaling) in {("clip", "zscore"), ("none", "demean"), ("none", "zscore")}:
+        raise ValueError(f"--feature-scaling {args.feature_scaling} has no counterpart in --response-scaling {args.response_scaling}")
+
+
+def scale_groups(values, groups, scaling="zscore") -> np.ndarray:
+    """Each group of rows on its own mean (and standard deviation for zscore)."""
+    out = np.asarray(values, dtype=np.float64).copy()
+    for group in np.unique(groups):
+        rows = groups == group
+        out[rows] -= out[rows].mean(axis=0)
+        if scaling == "zscore":
+            spread = out[rows].std(axis=0)
+            spread[spread == 0] = 1.0
+            out[rows] /= spread
+    return out.astype(np.float32)
+
+
+def scale_on_training_rows(values, run_ids, train_mask, test_mask, scaling="zscore") -> np.ndarray:
+    """Each run with the mean (and standard deviation for zscore) of its training rows in the fold."""
+    out = np.asarray(values, dtype=np.float32).copy()
+    for run in np.unique(run_ids[train_mask | test_mask]):
+        rows = run_ids == run
+        train = np.asarray(values[rows & train_mask], dtype=np.float64)
+        if not len(train):
+            raise ValueError(f"run {run} has no training rows; --response-scaling train needs a split that tests on single clips")
+        spread = train.std(axis=0) if scaling == "zscore" else np.ones(train.shape[1])
+        spread[spread == 0] = 1.0
+        out[rows] = (values[rows] - train.mean(axis=0)) / spread
+    return out
+
+
+def training_components(values, train_mask, n_components) -> np.ndarray:
+    """Scores on the first n_components principal axes of the training rows."""
+    train = np.asarray(values[train_mask], dtype=np.float64)
+    _, _, components = np.linalg.svd(train - train.mean(axis=0), full_matrices=False)
+    return (np.asarray(values, dtype=np.float64) @ components[:n_components].T).astype(np.float32)
 
 
 def fit_folds(data: dict, args, subsets: tuple[str, ...]):
@@ -202,8 +271,20 @@ def fit_folds(data: dict, args, subsets: tuple[str, ...]):
             if joint is None:
                 raise KeyError(f"No joint embeddings configured for held-out run {label}")
         log.info("Fitting %s split, fold %s", args.split, label)
+        targets, audio, video = data["targets"], data["a"], data["v"]
+        if args.response_scaling == "train":
+            targets = scale_on_training_rows(targets, run_ids, train_mask, test_mask)
+            if args.feature_scaling != "none":
+                audio, video, joint = (
+                    None if x is None else scale_on_training_rows(x, run_ids, train_mask, test_mask, args.feature_scaling)
+                    for x in (audio, video, joint)
+                )
+        if getattr(args, "n_components", 0):
+            audio, video, joint = (
+                None if x is None else training_components(x, train_mask, args.n_components) for x in (audio, video, joint)
+            )
         yield label, test_mask, evaluate_split(
-            data["a"], data["v"], joint, data["targets"], run_ids, train_mask, test_mask,
+            audio, video, joint, targets, run_ids, train_mask, test_mask,
             alphas, label=label, subsets=subsets, n_iter=args.n_iter, backend=args.backend,
-            model_random_state=args.model_random_state, feature_scaling=args.feature_scaling,
+            model_random_state=args.model_random_state,
         )

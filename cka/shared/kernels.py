@@ -12,9 +12,12 @@ import numpy as np
 import torch
 
 from cifti_io import get_bm_axis, get_cortex_vertex_indices
+from encoding.shared.fold_evaluator import ALL_SUBSETS, partition_variance
 
 log = logging.getLogger(__name__)
 NOISE_FLOOR = 1e-3
+COMPONENTS = "avj"
+RESIDUAL_FLOOR = 1e-6
 
 
 def default_device() -> str:
@@ -181,22 +184,64 @@ def prefetch(ut, jobs, depth=3, workers=2):
         yield q.get()
 
 
+def component_grams(embeddings, whiten):
+    """Unit-norm component Gram columns (K*K, C) and their C x C cosines, plain and whitened."""
+    plain, white = [], []
+    for x in embeddings:
+        centered = x - x.mean(0, keepdims=True)
+        for out, matrix in ((plain, centered), (white, whiten @ centered)):
+            gram = matrix @ matrix.T
+            out.append((gram / np.linalg.norm(gram)).ravel())
+    columns = [np.stack(grams, 1) for grams in (plain, white)]
+    return [c.astype(np.float32) for c in columns], [c.T @ c for c in columns]
+
+
+def semipartial_coefficients(gram):
+    """Rows x: coefficients on (c_A, c_V, c_J) giving the cosine of G_cv with the residual of G_x on the other two, and the residual norms ||r_x||."""
+    coefficients, norms = np.zeros((3, 3)), np.zeros(3)
+    for x in range(3):
+        others = [i for i in range(3) if i != x]
+        beta = np.linalg.pinv(gram[np.ix_(others, others)]) @ gram[others, x]
+        coefficients[x, x], coefficients[x, others] = 1.0, -beta
+        norms[x] = np.sqrt(max(1.0 - gram[x, others] @ beta, 0.0))
+    return coefficients, norms
+
+
+def semipartial(cka, cosines):
+    """Correlations (3, n) of the brain matrix with the residual of each component matrix on the other two.
+
+    cka (3, n): cosines of the brain matrix with the a, v, j matrices; cosines (3, 3) among them. Nothing is fitted to the brain.
+    """
+    coefficients, norms = semipartial_coefficients(cosines)
+    used = norms >= RESIDUAL_FLOOR
+    scale = np.where(used[:, None], coefficients / np.where(used, norms, 1.0)[:, None], 0.0)
+    return scale @ np.asarray(cka, np.float64)
+
+
+def commonality(cka, cosines):
+    """Commonality partition of the brain matrix over the a, v, j matrices (Seibold & McPhee 1979).
+
+    R2(S) = c_S' R_SS^-1 c_S is the squared multiple correlation of the brain matrix with the component matrices in S
+    (c: cosines with the brain, R: cosines among the components); the seven regions follow by inclusion-exclusion,
+    as in the encoding partition. Returns {name: (n,)} with r2_{subset}, the seven regions and shared_av.
+    """
+    c = np.asarray(cka, np.float64)
+    r2 = {}
+    for subset in ALL_SUBSETS:
+        rows = [COMPONENTS.index(band) for band in subset]
+        r2[subset] = np.einsum("in,ij,jn->n", c[rows], np.linalg.pinv(cosines[np.ix_(rows, rows)]), c[rows])
+    return {**{f"r2_{k}": v for k, v in r2.items()}, **partition_variance(r2), "shared_av": r2["a"] + r2["v"] - r2["av"]}
+
+
 def cv_pass(ut, ncols, embeddings, whiten, verts, device, batch=32):
-    """Cross-validated CKA with and without autoregressive whitening; {(model, measure): map}."""
+    """Cross-validated CKA, plain and whitened with the window noise covariance; {(name, measure): map}."""
     torch.backends.cuda.matmul.allow_tf32 = False
     _, n_groups, n_windows = ut.shape
     names = list(embeddings)
     w = torch.from_numpy(whiten.astype(np.float32)).to(device)
-    plain, white = [], []
-    for name in names:
-        centered = embeddings[name] - embeddings[name].mean(0, keepdims=True)
-        whitened = whiten @ centered
-        plain.append(model_gram(embeddings[name]))
-        gram = whitened @ whitened.T
-        white.append((gram / np.linalg.norm(gram)).astype(np.float32).ravel())
-    plain = torch.from_numpy(np.stack(plain, 1)).to(device)
-    white = torch.from_numpy(np.stack(white, 1)).to(device)
-    out = {(name, m): np.zeros(ncols.shape[0], np.float32) for name in names for m in ("cv", "cv-ar")}
+    plain, white = (torch.from_numpy(c).to(device) for c in component_grams(embeddings.values(), whiten)[0])
+    n_total = ncols.shape[0]
+    out = {(name, m): np.zeros(n_total, np.float32) for name in names for m in ("cv", "cv-ar")}
     jobs = list(searchlight_batches(ncols, verts, batch))
     log.info("cv pass: %d batches of up to %d searchlights, %d vertices, M %d, K %d",
              len(jobs), batch, len(verts), n_groups, n_windows)
@@ -204,22 +249,34 @@ def cv_pass(ut, ncols, embeddings, whiten, verts, device, batch=32):
         n_batch, size = hood.shape[:2]
         y = torch.from_numpy(hood).to(device).reshape(n_batch, size * n_groups, n_windows)
         gram = cv_gram(y, n_groups, size)
-        centered = double_center(gram).reshape(n_batch, -1)
-        plain_score = (centered @ plain) / torch.linalg.norm(centered, dim=1).clamp(min=1e-20)[:, None]
-        whitened = (w @ gram @ w).reshape(n_batch, -1)
-        white_score = (whitened @ white) / torch.linalg.norm(whitened, dim=1).clamp(min=1e-20)[:, None]
-        for jn, name in enumerate(names):
-            out[(name, "cv")][bv] = plain_score[:, jn].cpu().numpy()
-            out[(name, "cv-ar")][bv] = white_score[:, jn].cpu().numpy()
+        for measure, matrix, model in (("cv", double_center(gram), plain), ("cv-ar", w @ gram @ w, white)):
+            flat = matrix.reshape(n_batch, -1)
+            score = (flat @ model) / torch.linalg.norm(flat, dim=1).clamp(min=1e-20)[:, None]
+            for jn, name in enumerate(names):
+                out[(name, measure)][bv] = score[:, jn].cpu().numpy()
         if j % 200 == 0:
             log.info("  batch %d/%d", j, len(jobs))
     return out
 
 
-def loglik(r, n_windows):
-    n_pairs = n_windows * (n_windows - 1) / 2
-    return (-(n_pairs / 2) * np.log1p(-np.minimum(r.astype(np.float64) ** 2, 1 - 1e-12))).astype(np.float32)
+def subject_pass(y, rest, ncols, columns, whiten, verts, device, batch=32):
+    """CKA of one subject's cross-validated Gram matrix sym(y rest') with each component Gram column.
 
-
-def loglik_diff(r_a, r_b, n_windows):
-    return (loglik(r_a, n_windows).astype(np.float64) - loglik(r_b, n_windows)).astype(np.float32)
+    y, rest (V, K): the subject and the sum of the other subjects; columns: (plain, whitened), each (K*K, C).
+    Returns the cosines (2, C, V) and the Gram norms (2, V), plain then whitened.
+    """
+    y, rest = (torch.from_numpy(np.ascontiguousarray(x, dtype=np.float32)) for x in (y, rest))
+    w = torch.from_numpy(whiten.astype(np.float32)).to(device)
+    columns = [torch.from_numpy(c).to(device) for c in columns]
+    cosines = np.zeros((2, columns[0].shape[1], ncols.shape[0]), np.float32)
+    norms = np.zeros((2, ncols.shape[0]), np.float32)
+    for bv, cols in searchlight_batches(ncols, verts, batch):
+        index = torch.from_numpy(cols)
+        cross = torch.bmm(y[index].to(device).transpose(1, 2), rest[index].to(device)) / cols.shape[1]
+        gram = (cross + cross.transpose(1, 2)) / 2
+        for i, matrix in enumerate((double_center(gram), w @ gram @ w)):
+            flat = matrix.reshape(len(bv), -1)
+            norm = torch.linalg.norm(flat, dim=1).clamp(min=1e-20)
+            cosines[i][:, bv] = ((flat @ columns[i]) / norm[:, None]).T.cpu().numpy()
+            norms[i, bv] = norm.cpu().numpy()
+    return cosines, norms

@@ -29,10 +29,9 @@ from rsa.shared.rsa_utils import preprocess_fmri
 PROJECT = ROOT.parent
 GLASSER = "Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii"
 ENCODING_MODEL_MAPS = ("r2_a", "r2_v", "r2_j", "r2_av", "r2_avj")
-SPLITS = ("fixed", "runwise")
-CORES = (("fixed unique_j", "fixed:unique_j", "fixed:unique_j"),
-         ("runwise unique_j", "runwise:unique_j", "runwise:unique_j"),
-         ("fixed r2_avj", "fixed:r2_avj", "fixed:unique_j"))
+SPLITS = ("loro",)
+CORES = (("loro unique_j", "loro:unique_j", "loro:unique_j"),
+         ("loro r2_avj", "loro:r2_avj", "loro:unique_j"))
 
 
 def build_parser():
@@ -44,11 +43,13 @@ def build_parser():
     p.add_argument("--tr", type=float, default=1.0)
     p.add_argument("--k", type=int, default=100)
     p.add_argument("--scaling", choices=("center", "zscore"), default="center")
+    p.add_argument("--encoding-scaling", choices=("demean", "zscore"), default="demean")
     p.add_argument("--encoding-tag", default="unimodal_own")
     p.add_argument("--fmri-suffix", default="raw")
     p.add_argument("--subject", default="group_average")
     p.add_argument("--rsa-dir", default=str(PROJECT / "outputs/rsa"))
     p.add_argument("--cka-dir", default=str(PROJECT / "outputs/cka"))
+    p.add_argument("--cka-tag", default="unimodal_own")
     p.add_argument("--encoding-dir", default=str(PROJECT / "outputs/encoding"))
     p.add_argument("--data-dir", default=str(PROJECT / "data"))
     p.add_argument("--geodesic-cache-dir", default=None, help="Default: {rsa-dir}/_geodesic_cache.")
@@ -73,36 +74,32 @@ def load_maps(path, axis):
 
 def map_paths(args, model):
     config = lambda method: searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec, method, args.scaling)
-    root = lambda base: Path(base) / args.fmri_suffix / args.subject / f"{model}_av"
     rsa = lambda method, suffix="": f"{searchlight_stem(args.fmri_suffix, args.k, args.delay_sec, args.bin_sec, args.skip_sec, method, args.scaling)}{suffix}_maps.dscalar.nii"
     cka = lambda method, suffix="": f"cka_59k_{args.fmri_suffix}_{config(method)}{suffix}_maps.dscalar.nii"
-    rsa_dir, cka_dir = root(args.rsa_dir), root(args.cka_dir)
+    group = lambda base: Path(base) / args.fmri_suffix / args.subject
+    rsa_dir, cka_dir = group(args.rsa_dir) / f"{model}_av", group(args.cka_dir) / model
+    models = lambda method: f"cka_59k_{args.fmri_suffix}_{config(method)}_{args.cka_tag}_models.dscalar.nii"
     return {
         "corr-spearman": rsa_dir / rsa("spearman"),
         "euclid-spearman": rsa_dir / "diagnostics" / rsa("euclid-spearman"),
         "cka": cka_dir / "diagnostics" / cka("noncv"),
         "corr-spearman_nr": rsa_dir / "diagnostics" / rsa("corr-spearman", "_norepeats"),
         "cka_nr": cka_dir / "diagnostics" / cka("noncv", "_norepeats"),
-        "cka-cv": cka_dir / cka("cv"),
-        "cka-cv-ar": cka_dir / cka("cv-ar"),
-        "cka-cv-loglik": cka_dir / cka("cv-loglik"),
-        "cka-cv-ar-loglik": cka_dir / cka("cv-ar-loglik"),
+        "cka-cv": cka_dir / models("cv"),
+        "cka-cv-ar": cka_dir / models("cv-ar"),
     }
-
-
-def difference_path(args, a, b, measure):
-    method = f"{measure}-loglik-diff_{a}_av_minus_{b}_av"
-    config = searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec, method, args.scaling)
-    return Path(args.cka_dir) / args.fmri_suffix / args.subject / f"cka_59k_{args.fmri_suffix}_{config}_maps.dscalar.nii"
 
 
 def load_model_maps(args, model, axis):
     paths = map_paths(args, model)
-    maps = {name: next(iter(load_maps(path, axis).values())) for name, path in paths.items()}
+    maps = {}
+    for name, path in paths.items():
+        found = load_maps(path, axis)
+        maps[name] = found.get("cka_j", next(iter(found.values())))
     folder = Path(args.encoding_dir) / args.subject / model / f"delay{args.delay_sec:.0f}s_bin{args.bin_sec:.0f}s_skip{args.skip_sec:.0f}s"
     encoding = {}
     for split in SPLITS:
-        stem = f"encoding_r2_{split}_{args.scaling}_{args.encoding_tag}"
+        stem = f"encoding_r2_{split}_{args.encoding_scaling}_{args.encoding_tag}"
         models, partition = load_maps(folder / f"{stem}_models.dscalar.nii", axis), load_maps(folder / f"{stem}_partition.dscalar.nii", axis)
         encoding.update({f"{split}:{name}": models[name] for name in ENCODING_MODEL_MAPS})
         encoding[f"{split}:unique_j"] = partition["unique_j"]
@@ -144,7 +141,7 @@ def core_bins(core, ncols):
 
 
 def model_tables(model, maps, encoding, labels, names, ncols, h, n_windows, args):
-    rsa = {k: v for k, v in maps.items() if not k.endswith("loglik")}
+    rsa = maps
     allm = {**rsa, **encoding}
     columns = list(allm)
     ranks = {k: rankdata(v) for k, v in allm.items()}
@@ -152,10 +149,6 @@ def model_tables(model, maps, encoding, labels, names, ncols, h, n_windows, args
     out = [f"\n## Model: {model}\n"]
     out.append(md_table(f"Table 1. Mean, 95th percentile and maximum of each map over {n} grayordinates.", ["map", "mean", "95th percentile", "max"],
                         [[k, f"{v.mean():.4f}", f"{np.percentile(v, 95):.4f}", f"{v.max():.4f}"] for k, v in rsa.items()]))
-    pairs = n_windows * (n_windows - 1) / 2
-    out.append(md_table(f"Table 2. Log-likelihood maps, Lambda = -(J/2) log(1 - r^2) with r the cka-cv or cka-cv-ar value and J = K(K-1)/2 = {pairs:.0f} window pairs (K = {n_windows} windows); mean, 95th percentile and maximum over {n} grayordinates.",
-                        ["map", "mean", "95th percentile", "max"],
-                        [[k, f"{maps[k].mean():.1f}", f"{np.percentile(maps[k], 95):.1f}", f"{maps[k].max():.1f}"] for k in ("cka-cv-loglik", "cka-cv-ar-loglik")]))
     out.append(md_table(f"Table 3a. Spatial Pearson correlation across {n} grayordinates of each map (row) with every RSA, CKA and encoding map (column; encoding = split:map).",
                         ["map"] + columns, [[a] + [f"{np.corrcoef(allm[a], allm[b])[0, 1]:.3f}" for b in columns] for a in rsa]))
     out.append(md_table("Table 3b. Same as 3a with Spearman rank correlation.",
@@ -189,25 +182,19 @@ def model_tables(model, maps, encoding, labels, names, ncols, h, n_windows, args
     return out
 
 
-def difference_tables(args, axis, labels, names, n_windows):
+def difference_tables(args, axis, labels, names):
     out = []
     for a, b in itertools.combinations(args.models, 2):
-        diffs = {}
-        for measure in ("cv", "cv-ar"):
-            path = difference_path(args, a, b, measure)
-            if path.exists():
-                diffs[f"cka-{measure}-loglik-diff"] = next(iter(load_maps(path, axis).values()))
-        if not diffs:
-            continue
-        pairs = n_windows * (n_windows - 1) / 2
+        first, second = (load_model_maps(args, model, axis)[0] for model in (a, b))
+        diffs = {k: first[k] - second[k] for k in ("cka-cv", "cka-cv-ar")}
         out.append(f"\n## Model difference: {a} minus {b}\n")
-        out.append(md_table(f"Table 8. dl = Lambda_{a} - Lambda_{b} = (J/2) log((1 - r_{b}^2)/(1 - r_{a}^2)), J = {pairs:.0f}; positive favours {a}. Mean, 5th and 95th percentile, number of grayordinates with dl > 0 and dl < 0 (n = {len(labels)}).",
-                            ["map", "mean", "5th percentile", "95th percentile", "n dl > 0", "n dl < 0"],
-                            [[k, f"{v.mean():.1f}", f"{np.percentile(v, 5):.1f}", f"{np.percentile(v, 95):.1f}", int((v > 0).sum()), int((v < 0).sum())] for k, v in diffs.items()]))
+        out.append(md_table(f"Table 8. Difference of the joint-embedding maps, {a} minus {b}; positive favours {a}. Mean, 5th and 95th percentile, number of grayordinates with a positive and a negative difference (n = {len(labels)}).",
+                            ["map", "mean", "5th percentile", "95th percentile", "n > 0", "n < 0"],
+                            [[k, f"{v.mean():.4f}", f"{np.percentile(v, 5):.4f}", f"{np.percentile(v, 95):.4f}", int((v > 0).sum()), int((v < 0).sum())] for k, v in diffs.items()]))
         for k, v in diffs.items():
             favour_a, favour_b = top_parcels(v, labels, names), top_parcels(v, labels, names, largest=False)
-            out.append(md_table(f"Table 9 ({k}). Top 10 Glasser parcels by parcel mean of dl, favouring {a} (highest) and {b} (lowest).", ["rank", f"{a} favoured", f"{b} favoured"],
-                                [[i + 1, f"{favour_a[i][0]} {favour_a[i][1]:.1f}", f"{favour_b[i][0]} {favour_b[i][1]:.1f}"] for i in range(10)]))
+            out.append(md_table(f"Table 9 ({k}). Top 10 Glasser parcels by parcel mean of the difference, favouring {a} (highest) and {b} (lowest).", ["rank", f"{a} favoured", f"{b} favoured"],
+                                [[i + 1, f"{favour_a[i][0]} {favour_a[i][1]:.4f}", f"{favour_b[i][0]} {favour_b[i][1]:.4f}"] for i in range(10)]))
     return out
 
 
@@ -229,11 +216,11 @@ def main():
                               str(surfaces / "CohortAvg.R.midthickness_MSMAll.59k_fs_LR.surf.gii"), args.workbench,
                               args.geodesic_cache_dir or str(Path(args.rsa_dir) / "_geodesic_cache"), args.subject, args.k)
     h = neighbourhood_homogeneity(fmri, ncols)
-    report = [f"# Measure comparison: RSA, CKA and encoding (group average, bin {args.bin_sec:g} s, skip {args.skip_sec:g} s, delay {args.delay_sec:g} s, k = {args.k}, model {args.scaling}, encoding tag {args.encoding_tag})\n"]
+    report = [f"# Measure comparison: RSA, CKA and encoding (group average, bin {args.bin_sec:g} s, skip {args.skip_sec:g} s, delay {args.delay_sec:g} s, k = {args.k}, model {args.scaling}, encoding {args.encoding_scaling}, tag {args.encoding_tag})\n"]
     for model in args.models:
         maps, encoding = load_model_maps(args, model, axis)
         report += model_tables(model, maps, encoding, labels, names, ncols, h, n_windows, args)
-    report += difference_tables(args, axis, labels, names, n_windows)
+    report += difference_tables(args, axis, labels, names)
     Path(args.output).write_text("\n".join(report))
     print(f"wrote {args.output}")
 

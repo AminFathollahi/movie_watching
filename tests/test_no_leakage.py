@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from encoding.shared.splits import load_inputs
-from encoding.shared.fold_evaluator import ALL_SUBSETS, FEATURE_SCALINGS, evaluate_split, standardize_bands
+from encoding.shared.fold_evaluator import ALL_SUBSETS, evaluate_split
 
 ALPHAS = np.logspace(-2, 3, 6)
 
@@ -22,10 +22,10 @@ def _data(seed=0):
     return runs, audio, video, joint, targets
 
 
-def _fit(runs, audio, video, joint, targets, feature_scaling="zscore"):
+def _fit(runs, audio, video, joint, targets):
     return evaluate_split(
         audio, video, joint, targets, runs, runs != 3, runs == 3, ALPHAS,
-        subsets=ALL_SUBSETS, n_iter=4, backend="numpy", feature_scaling=feature_scaling,
+        subsets=ALL_SUBSETS, n_iter=4, backend="numpy",
     )
 
 
@@ -34,25 +34,23 @@ def _same_fit(first, second):
         np.testing.assert_array_equal(value, second.arrays[key], err_msg=key)
 
 
-@pytest.mark.parametrize("scaling", FEATURE_SCALINGS)
-def test_perturbing_test_features_leaves_every_fitted_quantity_unchanged(scaling):
+def test_perturbing_test_features_leaves_every_fitted_quantity_unchanged():
     runs, audio, video, joint, targets = _data()
-    first = _fit(runs, audio, video, joint, targets, scaling)
+    first = _fit(runs, audio, video, joint, targets)
     noisy = [band.copy() for band in (audio, video, joint)]
     for band in noisy:
         band[runs == 3] += np.random.default_rng(1).normal(scale=5, size=band[runs == 3].shape)
-    second = _fit(runs, *noisy, targets, scaling)
+    second = _fit(runs, *noisy, targets)
     _same_fit(first, second)
     assert not np.allclose(first.predictions["avj"], second.predictions["avj"])
 
 
-@pytest.mark.parametrize("scaling", FEATURE_SCALINGS)
-def test_perturbing_test_responses_leaves_predictions_and_fit_unchanged(scaling):
+def test_perturbing_test_responses_leaves_predictions_and_fit_unchanged():
     runs, audio, video, joint, targets = _data()
-    first = _fit(runs, audio, video, joint, targets, scaling)
+    first = _fit(runs, audio, video, joint, targets)
     changed = targets.copy()
     changed[runs == 3] += np.random.default_rng(2).normal(scale=5, size=changed[runs == 3].shape)
-    second = _fit(runs, audio, video, joint, changed, scaling)
+    second = _fit(runs, audio, video, joint, changed)
     _same_fit(first, second)
     for key in ALL_SUBSETS:
         np.testing.assert_array_equal(first.predictions[key], second.predictions[key])
@@ -86,27 +84,6 @@ def test_global_scramble_models_are_rejected(field):
         load_inputs(args)
 
 
-def test_center_scaling_subtracts_the_training_mean_without_dividing():
-    rng = np.random.default_rng(0)
-    train, test = rng.normal(loc=3.0, scale=2.0, size=(30, 4)), rng.normal(loc=8.0, size=(10, 4))
-    (train_c,), (test_c,), _ = standardize_bands([train], [test], scale=False)
-    np.testing.assert_allclose(train_c.mean(axis=0), 0, atol=1e-5)
-    np.testing.assert_allclose(train_c.std(axis=0), train.std(axis=0), rtol=1e-4)
-    np.testing.assert_allclose(test_c, test - train.mean(axis=0), atol=1e-4)
-
-
-def test_features_are_standardized_with_training_statistics_only():
-    rng = np.random.default_rng(0)
-    train, test = rng.normal(loc=3.0, scale=2.0, size=(30, 4)), rng.normal(loc=8.0, size=(10, 4))
-    (train_z,), (test_z,), _ = standardize_bands([train], [test])
-    np.testing.assert_allclose(train_z.mean(axis=0), 0, atol=1e-5)
-    np.testing.assert_allclose(train_z.std(axis=0), 1, atol=1e-5)
-    np.testing.assert_allclose(test_z, (test - train.mean(axis=0)) / train.std(axis=0), atol=1e-4)
-    perturbed = test + rng.normal(scale=9, size=test.shape)
-    (train_p,), _, _ = standardize_bands([train], [perturbed])
-    np.testing.assert_array_equal(train_z, train_p)
-
-
 def test_fixed_split_response_normalization_uses_training_clips_only():
     import pandas as pd
 
@@ -130,3 +107,83 @@ def test_fixed_split_response_normalization_uses_training_clips_only():
     np.testing.assert_array_equal(train_a, train_b)
     assert not np.allclose(test_a, test_b)
     np.testing.assert_allclose(test_a.mean(axis=0), 0, atol=1e-5)
+
+
+def test_training_row_response_scaling_ignores_the_held_out_clip():
+    from encoding.shared.splits import scale_on_training_rows
+
+    rng = np.random.default_rng(0)
+    runs = np.repeat([1, 2], 6)
+    targets = (rng.normal(size=(12, 3)) + 100 * runs[:, None]).astype(np.float32)
+    test = np.zeros(12, bool)
+    test[:2] = True
+    scaled = scale_on_training_rows(targets, runs, ~test, test)
+    for run in (1, 2):
+        rows = (runs == run) & ~test
+        np.testing.assert_allclose(scaled[rows].mean(0), 0, atol=1e-4)
+        np.testing.assert_allclose(scaled[rows].std(0), 1, atol=1e-4)
+    changed = targets.copy()
+    changed[test] += 50
+    again = scale_on_training_rows(changed, runs, ~test, test)
+    np.testing.assert_array_equal(again[~test], scaled[~test])
+    expected = np.broadcast_to(50 / targets[(runs == 1) & ~test].std(0), (2, 3))
+    np.testing.assert_allclose(again[test] - scaled[test], expected, rtol=1e-3)
+    with pytest.raises(ValueError, match="no training rows"):
+        scale_on_training_rows(targets, runs, runs == 2, runs == 1)
+
+
+def test_run_scaling_uses_each_run_of_the_features_only():
+    from encoding.shared.splits import scale_groups
+
+    rng = np.random.default_rng(4)
+    runs = np.repeat([1, 2, 3], 5)
+    x = rng.normal(3, 2, (15, 4))
+    demeaned = scale_groups(x, runs, "demean")
+    zscored = scale_groups(x, runs, "zscore")
+    for run in (1, 2, 3):
+        part = x[runs == run]
+        np.testing.assert_allclose(demeaned[runs == run], part - part.mean(0), atol=1e-5)
+        np.testing.assert_allclose(zscored[runs == run], (part - part.mean(0)) / part.std(0), atol=1e-5)
+    shifted = x.copy()
+    shifted[runs == 3] += 7.0
+    np.testing.assert_array_equal(scale_groups(shifted, runs, "demean")[runs != 3], demeaned[runs != 3])
+
+
+def test_training_row_feature_scaling_matches_the_responses_and_ignores_the_held_out_clip():
+    from encoding.shared.splits import scale_on_training_rows
+
+    rng = np.random.default_rng(5)
+    runs = np.repeat([1, 2], 6)
+    x = rng.normal(3, 2, (12, 4))
+    test = np.zeros(12, bool)
+    test[:2] = True
+    demeaned = scale_on_training_rows(x, runs, ~test, test, "demean")
+    for run in (1, 2):
+        train = x[(runs == run) & ~test]
+        np.testing.assert_allclose(demeaned[runs == run], x[runs == run] - train.mean(0), atol=1e-5)
+    np.testing.assert_array_equal(scale_on_training_rows(x, runs, ~test, test, "zscore"), scale_on_training_rows(x, runs, ~test, test))
+    changed = x.copy()
+    changed[test] += 50
+    np.testing.assert_array_equal(scale_on_training_rows(changed, runs, ~test, test, "demean")[~test], demeaned[~test])
+
+
+@pytest.mark.parametrize("split,response,feature", [("loco", "run", "demean"), ("loro", "clip", "zscore"), ("loro", "none", "demean")])
+def test_scalings_without_a_leak_free_or_matching_counterpart_are_rejected(split, response, feature):
+    from encoding.shared.splits import check_scalings
+
+    with pytest.raises(ValueError):
+        check_scalings(SimpleNamespace(split=split, response_scaling=response, feature_scaling=feature))
+
+
+def test_principal_components_come_from_training_rows_only():
+    from encoding.shared.splits import training_components
+
+    rng = np.random.default_rng(6)
+    x = rng.normal(size=(40, 6)) @ rng.normal(size=(6, 6))
+    train = np.arange(40) < 30
+    scores = training_components(x, train, 3)
+    _, _, axes = np.linalg.svd(x[train] - x[train].mean(0), full_matrices=False)
+    np.testing.assert_allclose(np.abs(scores), np.abs(x @ axes[:3].T), rtol=1e-4, atol=1e-4)
+    changed = x.copy()
+    changed[~train] += 100
+    np.testing.assert_allclose(training_components(changed, train, 3)[train], scores[train], atol=1e-4)

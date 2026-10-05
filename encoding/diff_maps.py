@@ -39,8 +39,8 @@ log = logging.getLogger(__name__)
 
 GROUP_DIR = Path("/home/amin/Research/Representation/Movie/outputs/encoding/group_average")
 CONFIG = "delay5s_bin5s_skip5s"
-SPLITS = ("fixed", "runwise")
-SCALINGS = ("zscore", "center")
+SPLITS = ("loro",)
+SCALINGS = ("demean",)
 
 # Same native-AV model roster as rsa/run_diff_study.sh's BASE_MODELS.
 BASE_MODELS = [

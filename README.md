@@ -10,6 +10,28 @@ Analyses:
 - Clustering of stimulus states and of vertex time series.
 - Seed-based connectivity from RSA-defined regions.
 
+## Current status (5 October 2026)
+
+The current question is where cortex integrates audio and video during movie watching, and whether the joint embedding of an audiovisual model (J) predicts responses beyond audio-only (A) and video-only (V) embeddings. The two audiovisual models are PE-AV (Perception Encoder Audio-Visual, small) and Nemotron (layer 18, mean-pooled). Each is compared with its own audio and video embeddings, and with eight pairs of separately trained audio and video encoders.
+
+Recent changes:
+
+- Encoding embeddings are now scaled over the same rows and with the same statistics as the fMRI responses, and every encoding map was refitted under two cross-validation schemes: leaving out one run (4 folds) and leaving out one clip (15 folds). Leave-one-subject-out encoding was dropped.
+- The eight control pairs were refitted with one layer per encoder, chosen by a single-encoder screen.
+- New encoding maps: `shared_av`, the variance audio and video explain in common, and a summary comparing the model's own audio and video with the eight pairs.
+- CKA gained a commonality analysis, the CKA counterpart of the encoding variance partition, for the group average and for single subjects.
+- A dimension test (each band reduced to 32 or 128 principal components) lowered R² without changing the reliability of the `unique_j` maps, so the full embeddings are kept.
+
+Headline results (group average of 175 subjects, 5-s windows, held-out R² averaged over the 108,441 cortical grayordinates; leave-one-run-out / leave-one-clip-out):
+
+- Audio and video embeddings together explain about a tenth of the response variance: R²(AV) 0.100 / 0.099 for PE-AV's own embeddings and 0.119 / 0.117 for Nemotron's.
+- The joint embedding adds almost nothing beyond the same model's audio and video embeddings: `unique_j` = R²(AVJ) − R²(AV) is +0.0008 / −0.0003 for PE-AV and +0.0017 / +0.0013 for Nemotron. Beyond separately trained encoders, Nemotron's J adds 0.015–0.041, and these maps agree across the two schemes (r 0.72–0.86).
+- Separately trained encoder pairs predict as well as PE-AV: the best pair (w2v-BERT 2.0 with V-JEPA 2 ViT-L) reaches R²(AV) 0.106 / 0.099, against 0.101 / 0.098 for PE-AV's full model. Nemotron's full model (0.121 / 0.118) is above every pair on average and above all eight at 36% of grayordinates.
+- Joint training does not give PE-AV's audio and video more shared brain-predictive variance than every separately trained pair: one pair (OpenBEATs with V-JEPA 2 ViT-L) shares as much as PE-AV's own audio and video, and PE-AV's own pair shares more than all eight control pairs at 17% / 15% of grayordinates.
+- CKA and encoding agree on the shared audio-video part: the CKA commonality `shared_av` map correlates 0.66 with the encoding one across cortex. Against an independent audiovisual localizer (the Lorax conjunction map, AV above both A and V), the CKA semi-partial map of PE-AV's J correlates 0.41 and the encoding R²(AV) map 0.34.
+
+Module details and per-pair tables are in [`encoding/README.md`](encoding/README.md) and [`cka/README.md`](cka/README.md). The full write-up, with methods from first principles and references, is kept with the outputs (`RSA_Encoding_CKA_explained.pdf`); earlier RSA, connective-field and clustering results are in `outputs/results_report.pdf`.
+
 ## Repository layout
 
 | Path | Contents |
@@ -33,7 +55,6 @@ Analyses:
 | `make_average.sh` | Group-average midthickness and inflated surfaces from the subject list |
 | `verify_subjects.py` | Checks that every listed subject has all four raw CIFTIs and both midthickness surfaces |
 | `SETUP.md` | Environment and path setup |
-| `PROJECT_OVERVIEW.md` | Scientific scope and where each result lives |
 
 ## Environments
 
@@ -61,8 +82,8 @@ Paths are set in the `CONFIG` block at the top of each runner script. Defaults:
 
 | Item | Default location |
 |---|---|
-| Data root | `/home/amin/Research/Representation/Movie/data` |
-| Output root | `/home/amin/Research/Representation/Movie/outputs` |
+| Data root | `../data`, next to the repository |
+| Output root | `../outputs`, next to the repository |
 | Raw CIFTIs, one file per subject and run (`{sub}_tfMRI_MOVIE{1-4}_7T_{AP\|PA}_Atlas_1.6mm_hp2000_clean.dtseries.nii`) | `individual-59k/` on the external drive |
 | Subject list (one ID per line, `#` comments) | `data/subjects.txt` |
 | Per-subject midthickness and inflated surfaces | `data/midthickness_1.6/`, `data/Inflated_1.6/` |

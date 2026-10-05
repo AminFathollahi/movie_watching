@@ -8,6 +8,7 @@
 #   bash encoding/analysis.sh preprocess
 #   bash encoding/analysis.sh variance_partition [--models M...] [--bins B...]
 #                             [--variants split:scaling...] [--controls SET...|none|all]
+#                             [--subsets S...] [--response-scaling run|none]
 #   bash encoding/analysis.sh screen [--audio-models M...] [--video-models M...]
 #                             [--bins B...] [--variants split:scaling...]
 #   bash encoding/analysis.sh factorial_interaction [--models M...] [--bins 5]
@@ -28,7 +29,8 @@
 #   factorial_interaction  Crossed-pair interaction representation
 #
 # Defaults: --models pe-av-small-16-frame nemotron_layer18_mp, --bins 5 2 1,
-# --variants fixed:center, --controls all.
+# --variants loro:demean, --controls all, --subsets all seven (a v j av aj vj
+# avj); a fit with fewer subsets adds its maps to those already stored.
 #
 # Excluded subjects
 #   Subjects without individual midthickness surfaces are listed in
@@ -84,12 +86,7 @@ TIMING_CSV="${DATA_BASE}/movie_timing.csv"
 # Convention: {EMBEDDINGS_DIR}/{model_name}/bin{B}s_skip{S}s/{model_name}_{modality}.npy
 EMBEDDINGS_DIR="${OUTPUTS_BASE}/model_embeddings"
 
-# CIFTI template (59k grayordinate space).
-# Must be a 59k cortex-only file (29696 L + 29716 R = 59412 vertices).
-# The preprocessed group-average dtseries has 108441 grayordinates (full
-# subcortical + cortical) and cannot be used as a template — nibabel will
-# raise a shape mismatch error at save time.  Use the static HCP curvature
-# dscalar which always exists and has the correct BrainModelAxis.
+# CIFTI template whose brain-model axis defines the output grayordinates.
 TEMPLATE_CIFTI="/home/amin/Research/Representation/Movie/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii"
 
 # Output root
@@ -111,11 +108,11 @@ PARTITION_MODEL_RANDOM_STATE=0
 # Control sets: "name audio_model video_model"; the name is the output tag.
 CONTROL_SETS=(
     "mae dasheng-0.6b-d75 videomaev2-large-d75"
-    "mae-large dasheng-1.2b-d75 videomaev2-giant-d50"
-    "latent openbeats-large-i2-d75 vjepa2-vitl"
-    "large-mixed dasheng-1.2b-d75 vjepa2-vitg"
-    "speech-wavlm wavlm-large-d75 vjepa2-vitl"
-    "speech-w2vbert w2v-bert-2.0-d75 vjepa2-vitl"
+    "mae-large dasheng-1.2b videomaev2-giant-d50"
+    "latent openbeats-large-i2 vjepa2-vitl-d75"
+    "large-mixed dasheng-1.2b vjepa2-vitg-d75"
+    "speech-wavlm wavlm-large-d75 vjepa2-vitl-d75"
+    "speech-w2vbert w2v-bert-2.0-d75 vjepa2-vitl-d75"
     "text-contrastive clap-larger pe-core-l14"
     "text-asr whisper-large-v3 pe-core-l14"
 )
@@ -127,8 +124,11 @@ OWN_SETS=(
 
 MODELS=(pe-av-small-16-frame nemotron_layer18_mp)
 BINS=(5 2 1)
-VARIANTS=(fixed:center)
+VARIANTS=(loro:demean)
+LOCO_EXCLUDED="video9,video14,video18"
 CONTROLS=(all)
+SUBSETS=()
+RESPONSE_SCALING=(run)
 AUDIO_MODELS=()
 VIDEO_MODELS=()
 read -ra PAIRING_SEEDS <<< "${PAIRING_SEEDS:-0}"
@@ -148,6 +148,8 @@ parse_options() {
             --bins) BINS=(); target=BINS ;;
             --variants) VARIANTS=(); target=VARIANTS ;;
             --controls) CONTROLS=(); target=CONTROLS ;;
+            --subsets) SUBSETS=(); target=SUBSETS ;;
+            --response-scaling) RESPONSE_SCALING=(); target=RESPONSE_SCALING ;;
             --audio-models) AUDIO_MODELS=(); target=AUDIO_MODELS ;;
             --video-models) VIDEO_MODELS=(); target=VIDEO_MODELS ;;
             --*) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -219,8 +221,12 @@ fit_variants() {
     local VARIANT
     for VARIANT in "${VARIANTS[@]}"; do
         log "Fit (${VARIANT%%:*}, ${VARIANT##*:}) $*"
+        local SPLIT_ARGS=()
+        [ "${VARIANT%%:*}" = loco ] && SPLIT_ARGS=(--exclude-video-ids "$LOCO_EXCLUDED")
+        [ ${#SUBSETS[@]} -gt 0 ] && SPLIT_ARGS+=(--subsets "${SUBSETS[@]}")
         run_python "${SCRIPT_DIR}/variance_partition.py" \
-            --split "${VARIANT%%:*}" --feature-scaling "${VARIANT##*:}" \
+            --split "${VARIANT%%:*}" --feature-scaling "${VARIANT##*:}" "${SPLIT_ARGS[@]}" \
+            --response-scaling "${RESPONSE_SCALING[0]}" \
             --preprocessed-dir "$PREPROCESSED_DIR" \
             --fmri-suffix "$FMRI_SUFFIX" \
             --subject group_average \
@@ -232,6 +238,7 @@ fit_variants() {
             --delay-sec "$DELAY_SEC" --tr "$TR" \
             --n-iter "$PARTITION_N_ITER" \
             --model-random-state "$PARTITION_MODEL_RANDOM_STATE" \
+            --backend "$BACKEND" \
             "$@" || { log "FAILED: $*"; FAILURES=$((FAILURES + 1)); }
     done
 }
@@ -294,7 +301,7 @@ run_interaction_control_fit() {
         TEMPLATE_ARGS=(--joint-model-template "$JOINT_TEMPLATE")
     fi
     run_python "${SCRIPT_DIR}/variance_partition.py" \
-        --split runwise --feature-scaling zscore \
+        --split loro --feature-scaling demean \
         --preprocessed-dir "$PREPROCESSED_DIR" \
         --fmri-suffix "$FMRI_SUFFIX" \
         --subject group_average \
@@ -307,6 +314,7 @@ run_interaction_control_fit() {
         --delay-sec "$DELAY_SEC" --tr "$TR" \
         --n-iter "$PARTITION_N_ITER" \
         --model-random-state "$PARTITION_MODEL_RANDOM_STATE" \
+        --backend "$BACKEND" \
         --template-cifti "$TEMPLATE_CIFTI" \
         "${TEMPLATE_ARGS[@]}"
 }

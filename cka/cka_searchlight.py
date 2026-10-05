@@ -2,16 +2,20 @@
 
     python cka/cka_searchlight.py partitions --raw-dir DIR --subjects-list FILE --partitions-dir DIR ...
     python cka/cka_searchlight.py run --models M [M ...] --partitions-dir DIR --output-dir DIR ...
+    python cka/cka_searchlight.py subjects --models M [M ...] --raw-dir DIR --subjects-list FILE --output-dir DIR ...
+    python cka/cka_searchlight.py aggregate --models M [M ...] --subjects-list FILE --output-dir DIR ...
+    python cka/cka_searchlight.py commonality --models M [M ...] --output-dir DIR ...
 
 `partitions` averages the preprocessed responses of disjoint subject groups. `run` writes the
-non-cross-validated, cross-validated and whitened cross-validated CKA maps, their log-likelihoods
-and the log-likelihood differences between models (see cka/README.md).
+non-cross-validated, cross-validated and whitened cross-validated CKA maps of the joint, audio and
+video embeddings, and the semi-partial and commonality maps. `subjects` writes the cross-validated maps of each
+subject against the other subjects and `aggregate` the subject semi-partial and commonality maps, and the mean,
+standard error and random-effects maps of all three (see cka/README.md).
 """
 
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import logging
 import os
@@ -22,6 +26,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import nibabel as nib
 import numpy as np
 import pandas as pd
 
@@ -30,7 +35,7 @@ SCRIPT_DIR = str(Path(__file__).resolve().parent)
 sys.path = [path for path in sys.path if path != SCRIPT_DIR]
 sys.path.insert(0, str(ROOT))
 
-from cifti_io import get_bm_axis, load_cifti_data, save_cifti_map
+from cifti_io import get_bm_axis, load_cifti_data, save_cifti_map, save_cifti_multimap
 from cka.shared import kernels
 from rsa.shared.naming import DEFAULT_MODEL_NORM, MODEL_NORMS, searchlight_config
 from rsa.shared.rsa_utils import preprocess_fmri, process_model_embeddings
@@ -55,24 +60,35 @@ def build_parser():
     common.add_argument("--delay-sec", type=float, default=5.0)
     common.add_argument("--tr", type=float, default=1.0)
 
-    part = sub.add_parser("partitions", parents=[common], help="Average disjoint subject groups into partition responses.")
+    individual = argparse.ArgumentParser(add_help=False)
+    individual.add_argument("--subjects-list", required=True)
+    individual.add_argument("--limit", type=int, default=0, help="Use only the first N listed subjects.")
+
+    maps = argparse.ArgumentParser(add_help=False)
+    maps.add_argument("--models", nargs="+", required=True, help="Joint embedding models; `{model}_av.npy` is used.")
+    maps.add_argument("--audio-model", help="Model supplying `_a.npy` for every model (default: the model itself).")
+    maps.add_argument("--video-model", help="Model supplying `_v.npy` for every model (default: the model itself).")
+    maps.add_argument("--tag", default="unimodal_own", help="Inserted after the scaling in the audio, video and joint output names.")
+    maps.add_argument("--embeddings-dir", required=True)
+    maps.add_argument("--output-dir", required=True)
+    maps.add_argument("--left-surface", required=True)
+    maps.add_argument("--right-surface", required=True)
+    maps.add_argument("--workbench", required=True)
+    maps.add_argument("--geodesic-cache-dir", required=True)
+    maps.add_argument("--k", type=int, default=100)
+    maps.add_argument("--feature-scaling", choices=MODEL_NORMS, default=DEFAULT_MODEL_NORM)
+    maps.add_argument("--max-vertices", type=int, default=0, help="Evaluate only this many evenly spaced grayordinates.")
+
+    part = sub.add_parser("partitions", parents=[common, individual], help="Average disjoint subject groups into partition responses.")
     part.add_argument("--raw-dir", required=True)
-    part.add_argument("--subjects-list", required=True)
-    part.add_argument("--limit", type=int, default=0, help="Use only the first N listed subjects.")
     part.add_argument("--checkpoint-every", type=int, default=20)
 
-    run = sub.add_parser("run", parents=[common], help="Compute the CKA maps for each model.")
-    run.add_argument("--models", nargs="+", required=True, help="Embedding models; `{model}_av.npy` is used.")
-    run.add_argument("--embeddings-dir", required=True)
-    run.add_argument("--output-dir", required=True)
-    run.add_argument("--left-surface", required=True)
-    run.add_argument("--right-surface", required=True)
-    run.add_argument("--workbench", required=True)
-    run.add_argument("--geodesic-cache-dir", required=True)
-    run.add_argument("--k", type=int, default=100)
-    run.add_argument("--feature-scaling", choices=MODEL_NORMS, default=DEFAULT_MODEL_NORM)
+    run = sub.add_parser("run", parents=[common, maps], help="CKA maps of the joint, audio and video embeddings of each model.")
     run.add_argument("--exclude-video-ids", default=REPEATED_CLIPS, help="Clips dropped for the `norepeats` diagnostic.")
-    run.add_argument("--max-vertices", type=int, default=0, help="Evaluate only this many evenly spaced grayordinates.")
+    subjects = sub.add_parser("subjects", parents=[common, individual, maps], help="Cross-validated CKA maps of each subject.")
+    subjects.add_argument("--raw-dir", required=True)
+    sub.add_parser("aggregate", parents=[common, individual, maps], help="Mean and standard error of the subject maps.")
+    sub.add_parser("commonality", parents=[common, maps], help="Commonality maps of the stored group-average CKA maps.")
     return parser
 
 
@@ -95,15 +111,16 @@ def load_group_average(args):
     return binned, timing, run_trs
 
 
-def load_embeddings(args, timing, run_trs):
+def load_embedding(args, model, kind, timing, run_trs):
     folder = f"bin{args.bin_sec:.0f}s_skip{args.skip_sec:.0f}s"
-    return {
-        model: np.nan_to_num(process_model_embeddings(
-            str(Path(args.embeddings_dir) / model / folder / f"{model}_av.npy"), timing, bin_sec=args.bin_sec, tr=args.tr,
-            run_trs=run_trs, delay_sec=args.delay_sec, hrf=False, skip_sec=args.skip_sec,
-            model_norm=args.feature_scaling).astype(np.float64))
-        for model in args.models
-    }
+    return np.nan_to_num(process_model_embeddings(
+        str(Path(args.embeddings_dir) / model / folder / f"{model}_{kind}.npy"), timing, bin_sec=args.bin_sec, tr=args.tr,
+        run_trs=run_trs, delay_sec=args.delay_sec, hrf=False, skip_sec=args.skip_sec,
+        model_norm=args.feature_scaling).astype(np.float64))
+
+
+def load_embeddings(args, timing, run_trs):
+    return {model: load_embedding(args, model, "av", timing, run_trs) for model in args.models}
 
 
 def partitions(args):
@@ -228,60 +245,289 @@ def partitions(args):
     log.info("saved %s %s", final, sums.shape)
 
 
-def save_map(array, args, directory, work, method, name, suffix=""):
+def save_map(array, args, directory, method, name, suffix=""):
     stem = map_stem(args, method, suffix)
-    np.save(work / f"{stem}.npy", array)
+    directory.mkdir(parents=True, exist_ok=True)
     save_cifti_map(array, args.template_cifti, str(directory / f"{stem}_maps.dscalar.nii"), name)
 
 
-def run(args):
-    device = kernels.default_device()
-    out = Path(args.output_dir) / args.fmri_suffix / args.subject
-    work = out / "work"
+MEASURES = {
+    "cv": "CKA between the window-centered cross-validated Gram matrix of all {m} groups and the component Gram matrix "
+          "(whitened unbiased RDM cosine with independent noise, Diedrichsen et al. 2021, eq. 21)",
+    "cv-ar": "CKA between the cross-validated Gram matrix of all {m} groups and the component Gram matrix, both whitened "
+             "with the inverse square root of the window noise covariance (whitened unbiased RDM cosine with the window "
+             "noise covariance, Diedrichsen et al. 2021)",
+}
+COMPONENT_MAPS = ["cka_a", "cka_v", "cka_j"]
+
+
+def component_models(args, model):
+    return args.audio_model or model, args.video_model or model
+
+
+def write_provenance(path, entries):
+    path.write_text(json.dumps(entries, indent=2) + "\n")
+
+
+def save_models(args, cka, model, directory, measure, definition, **entries):
+    stem = f"{map_stem(args, measure)}_{args.tag}"
+    directory.mkdir(parents=True, exist_ok=True)
+    save_cifti_multimap(cka, COMPONENT_MAPS, args.template_cifti, str(directory / f"{stem}_models.dscalar.nii"))
+    audio, video = component_models(args, model)
+    write_provenance(directory / f"{stem}_provenance.json", {
+        "audio_model": audio, "video_model": video, "joint_model": f"{model}_av", "tag": args.tag,
+        "k": args.k, "bin_sec": args.bin_sec, "delay_sec": args.delay_sec, "feature_scaling": args.feature_scaling,
+        "measure": measure, "cka": definition, **entries,
+    })
+    return stem
+
+
+SEMIPARTIAL = ("sp_x: correlation of the brain matrix with the residual of the x matrix after least-squares regression on the "
+               "other two component matrices; nothing is fitted to the brain")
+SEMIPARTIAL_MAPS = ["sp_a", "sp_v", "sp_j"]
+
+
+def save_semipartial(args, cka, cosines, directory, stem):
+    values = kernels.semipartial(cka, cosines).astype(np.float32)
+    save_cifti_multimap(values, SEMIPARTIAL_MAPS, args.template_cifti, str(directory / f"{stem}_semipartial.dscalar.nii"))
+    return values
+
+
+COMMONALITY = ("r2_S = c_S' R_SS^-1 c_S, the squared multiple correlation of the brain matrix with the component matrices in "
+               "subset S (c: CKA values, R: cosines among the component matrices); unique_x, shared_*_only and shared_avj by "
+               "inclusion-exclusion over the seven r2_S (commonality analysis, Seibold & McPhee 1979); shared_av = r2_a + r2_v - r2_av. "
+               "r2_S is quadratic in the CKA values, so noise in them adds a positive bias that is larger for single subjects "
+               "than for the group average")
+COMMONALITY_MAPS = [f"r2_{k}" for k in ("a", "v", "j", "av", "aj", "vj", "avj")] + [
+    "unique_a", "unique_v", "unique_j", "shared_av_only", "shared_aj_only", "shared_vj_only", "shared_avj", "shared_av"]
+
+
+def save_commonality(args, cka, cosines, directory, stem):
+    parts = kernels.commonality(cka, cosines)
+    values = np.stack([parts[name] for name in COMMONALITY_MAPS]).astype(np.float32)
+    save_cifti_multimap(values, COMMONALITY_MAPS, args.template_cifti, str(directory / f"{stem}_commonality.dscalar.nii"))
+    return values
+
+
+def component_cosines(components, joint, whiten):
+    return dict(zip(MEASURES, kernels.component_grams((*components, joint), whiten)[1]))
+
+
+def semipartial_provenance(cosines):
+    norms = kernels.semipartial_coefficients(cosines)[1]
+    return dict(
+        semipartial=SEMIPARTIAL, component_cosines={"order": "a, v, j", "matrix": cosines.tolist()},
+        residual_norms=dict(zip(("sp_a", "sp_v", "sp_j"), norms.tolist())),
+        zeroed_semipartial_maps=[f"sp_{c}" for c, n in zip("avj", norms) if n < kernels.RESIDUAL_FLOOR],
+    )
+
+
+def setup(args):
+    root = Path(args.output_dir) / args.fmri_suffix
+    out, work = root / args.subject, root / "intermediate"
     work.mkdir(parents=True, exist_ok=True)
     binned, timing, run_trs = load_group_average(args)
     embeddings = load_embeddings(args, timing, run_trs)
     videos, runs = kernels.window_index(timing, run_trs, args.bin_sec, args.skip_sec, args.delay_sec, args.tr)
-    n_windows = len(videos)
     assert not np.isnan(binned).any()
-    assert n_windows == binned.shape[0] == next(iter(embeddings.values())).shape[0], (n_windows, binned.shape)
+    assert len(videos) == binned.shape[0] == next(iter(embeddings.values())).shape[0], (len(videos), binned.shape)
     ncols = kernels.neighbour_columns(args.template_cifti, args.left_surface, args.right_surface, args.workbench,
                                       args.geodesic_cache_dir, args.subject, args.k)
     n_vertices = ncols.shape[0]
     verts = np.linspace(0, n_vertices - 1, args.max_vertices).astype(int) if args.max_vertices else np.arange(n_vertices)
     np.save(work / "vertices.npy", verts)
-    directories = {model: out / f"{model}_av" for model in args.models}
-    for model, directory in directories.items():
-        (directory / "diagnostics").mkdir(parents=True, exist_ok=True)
-        (work / f"{model}_av").mkdir(exist_ok=True)
+    components = {
+        model: tuple(load_embedding(args, name, kind, timing, run_trs) for name, kind in zip(component_models(args, model), "av"))
+        for model in args.models
+    }
+    return types.SimpleNamespace(root=root, out=out, work=work, binned=binned, timing=timing, run_trs=run_trs, embeddings=embeddings,
+                                 components=components, videos=videos, runs=runs, ncols=ncols, verts=verts,
+                                 device=kernels.default_device())
 
-    keep = ~np.isin(videos, args.exclude_video_ids.split(","))
-    for suffix, rows in (("", slice(None)), ("_norepeats", keep)):
-        grams = {model: kernels.model_gram(x[rows]) for model, x in embeddings.items()}
-        maps = kernels.noncv_pass(binned[rows], grams, ncols, verts, device)
-        for model, array in maps.items():
-            save_map(array, args, directories[model] / "diagnostics", work / f"{model}_av", "noncv", "cka", suffix)
-        log.info("non-cross-validated pass%s: %d windows", suffix, binned[rows].shape[0])
 
+def whitener_path(args, work):
+    return work / f"{partition_path(args).stem}_whitener.npy"
+
+
+def cross_validated(args, s):
     t0 = time.time()
     ut = kernels.to_vmk(partition_path(args))
-    assert ut.shape[0] == n_vertices and ut.shape[2] == n_windows, (ut.shape, n_vertices, n_windows)
+    assert ut.shape[0] == s.ncols.shape[0] and ut.shape[2] == len(s.videos), (ut.shape, s.ncols.shape, len(s.videos))
     log.info("partitions loaded %s in %.0fs", ut.shape, time.time() - t0)
-    whiten = kernels.noise_model(ut, np.bincount(runs, minlength=len(run_trs)), work, partition_path(args).stem, device)
-    results = kernels.cv_pass(ut, ncols, embeddings, whiten, verts, device)
+    whiten = kernels.noise_model(ut, np.bincount(s.runs, minlength=len(s.run_trs)), s.work, partition_path(args).stem, s.device)
+    embeddings = {(model, c): x for model in args.models for c, x in zip("avj", (*s.components[model], s.embeddings[model]))}
+    return kernels.cv_pass(ut, s.ncols, embeddings, whiten, s.verts, s.device), whiten
+
+
+def run(args):
+    s = setup(args)
+    n_windows = len(s.videos)
+
+    keep = ~np.isin(s.videos, args.exclude_video_ids.split(","))
+    for suffix, rows in (("", slice(None)), ("_norepeats", keep)):
+        grams = {model: kernels.model_gram(x[rows]) for model, x in s.embeddings.items()}
+        maps = kernels.noncv_pass(s.binned[rows], grams, s.ncols, s.verts, s.device)
+        for model, array in maps.items():
+            save_map(array, args, s.out / model / "diagnostics", "noncv", "cka", suffix)
+        log.info("non-cross-validated pass%s: %d windows", suffix, s.binned[rows].shape[0])
+
+    t0 = time.time()
+    results, whiten = cross_validated(args, s)
     for model in args.models:
-        for measure in ("cv", "cv-ar"):
-            r = results[(model, measure)]
-            save_map(r, args, directories[model], work / f"{model}_av", measure, f"cka-{measure}")
-            save_map(kernels.loglik(r, n_windows), args, directories[model], work / f"{model}_av", f"{measure}-loglik", f"cka-{measure}-loglik")
-    for a, b in itertools.combinations(args.models, 2):
-        for measure in ("cv", "cv-ar"):
-            diff = kernels.loglik_diff(results[(a, measure)], results[(b, measure)], n_windows)
-            save_map(diff, args, out, work, f"{measure}-loglik-diff_{a}_av_minus_{b}_av", f"cka-{measure}-loglik-diff")
+        cosines = component_cosines(s.components[model], s.embeddings[model], whiten)
+        for measure, definition in MEASURES.items():
+            cka = np.stack([results[((model, c), measure)] for c in "avj"])
+            stem = save_models(args, cka, model, s.out / model, measure, definition.format(m=args.n_partitions),
+                               n_groups=args.n_partitions, n_windows=n_windows, commonality=COMMONALITY, **semipartial_provenance(cosines[measure]))
+            save_semipartial(args, cka, cosines[measure], s.out / model, stem)
+            save_commonality(args, cka, cosines[measure], s.out / model, stem)
     log.info("done in %.0fs", time.time() - t0)
+
+
+def commonality(args):
+    for model in args.models:
+        directory = Path(args.output_dir) / args.fmri_suffix / args.subject / model
+        for measure in MEASURES:
+            stem = f"{map_stem(args, measure)}_{args.tag}"
+            provenance = json.loads((directory / f"{stem}_provenance.json").read_text())
+            cka = nib.load(directory / f"{stem}_models.dscalar.nii")
+            assert list(cka.header.get_axis(0).name) == COMPONENT_MAPS
+            save_commonality(args, np.array(cka.get_fdata(dtype=np.float32)), np.array(provenance["component_cosines"]["matrix"]), directory, stem)
+            write_provenance(directory / f"{stem}_provenance.json", {**provenance, "commonality": COMMONALITY})
+            log.info("%s %s commonality", model, measure)
+
+
+SUBJECT_CKA = ("CKA between the cross-validated Gram matrix of one subject, the symmetrized products of the subject's responses "
+               "with the summed responses of the other {n} subjects, and the component Gram matrix")
+
+
+def subjects(args):
+    from preprocess_individual import load_subjects, preprocess_subject
+
+    s = setup(args)
+    whiten = np.load(whitener_path(args, s.work))
+    listed = load_subjects(args.subjects_list)
+    fmri = load_cifti_data(str(Path(args.preprocessed_dir) / f"{args.subject}_{args.fmri_suffix}_cortex_59k.dtseries.nii"))
+    mean = preprocess_fmri(fmri, s.timing, s.run_trs, args.bin_sec, args.tr, args.delay_sec, skip_sec=args.skip_sec, normalize=False)
+    sd = np.concatenate([np.broadcast_to(rows.std(0), rows.shape) for rows in np.split(mean, np.cumsum(np.bincount(s.runs))[:-1])])
+    sd = np.where(sd < 1e-10, 1.0, sd)
+    total = len(listed) * mean / sd
+    columns = [np.concatenate(parts, 1) for parts in zip(*(
+        kernels.component_grams((*s.components[model], s.embeddings[model]), whiten)[0] for model in args.models))]
+    root = s.root / "subjects"
+    stems = {measure: f"{map_stem(args, measure)}_{args.tag}" for measure in MEASURES}
+    flags = types.SimpleNamespace(sg_filter=False, psc=False, gsr=False)
+
+    def done(subject):
+        return all((root / subject / model / f"{stem}_models.dscalar.nii").exists() for model in args.models for stem in stems.values())
+
+    def load_binned(subject):
+        data, _, subject_trs = preprocess_subject(subject, Path(args.raw_dir), args.tr, flags)
+        if not np.array_equal(subject_trs, s.run_trs):
+            raise ValueError(f"run_trs {subject_trs.tolist()} != {s.run_trs.tolist()}")
+        return preprocess_fmri(data, s.timing, subject_trs, args.bin_sec, args.tr, args.delay_sec, skip_sec=args.skip_sec, normalize=False) / sd
+
+    pending = [subject for subject in (listed[:args.limit] if args.limit else listed) if not done(subject)]
+    log.info("%d subjects listed, %d pending", len(listed), len(pending))
+    executor = ThreadPoolExecutor(1)
+    queue_ = deque((subject, executor.submit(load_binned, subject)) for subject in pending[:2])
+    next_index, failed, t0 = min(2, len(pending)), {}, time.time()
+    while queue_:
+        subject, future = queue_.popleft()
+        if next_index < len(pending):
+            queue_.append((pending[next_index], executor.submit(load_binned, pending[next_index])))
+            next_index += 1
+        try:
+            y = future.result()
+        except Exception as error:
+            failed[subject] = repr(error)
+            log.warning("skipped %s: %r", subject, error)
+            continue
+        cosines, norms = kernels.subject_pass(y.T, (total - y).T, s.ncols, columns, whiten, s.verts, s.device)
+        for m, model in enumerate(args.models):
+            work = s.work / "subjects" / subject / model
+            work.mkdir(parents=True, exist_ok=True)
+            for i, (measure, definition) in enumerate(MEASURES.items()):
+                np.save(work / f"{stems[measure]}_gram_norm.npy", norms[i])
+                save_models(args, cosines[i, 3 * m:3 * m + 3], model, root / subject / model, measure,
+                            SUBJECT_CKA.format(n=len(listed) - 1) + ("" if measure == "cv" else ", both whitened"),
+                            n_subjects=len(listed), n_windows=len(s.videos))
+        log.info("[%d/%d] %s; elapsed %.0fs", pending.index(subject) + 1, len(pending), subject, time.time() - t0)
+    executor.shutdown()
+    if failed:
+        raise RuntimeError(f"{len(failed)} subjects failed: {failed}")
+
+
+def t_map(x):
+    return x.mean(0) / (x.std(0, ddof=1) / np.sqrt(len(x)) + 1e-30)
+
+
+def fisher_z(values):
+    return np.arctanh(np.clip(values.astype(np.float64), -0.999999, 0.999999))
+
+
+def random_effects(values, names, correlations=True):
+    """One-sample t maps over subjects (subjects, maps, grayordinates), on Fisher z for correlations; for the `cka` maps
+    also the paired differences with the joint map."""
+    z = fisher_z(values) if correlations else values.astype(np.float64)
+    out = {f"t_{name}": t_map(z[:, i]) for i, name in enumerate(names)}
+    if "cka_j" in names:
+        joint = names.index("cka_j")
+        for i, name in enumerate(names):
+            if i != joint:
+                difference = z[:, joint] - z[:, i]
+                out[f"diff_j_minus_{name[4:]}"] = difference.mean(0)
+                out[f"t_j_minus_{name[4:]}"] = t_map(difference)
+    return out
+
+
+RANDOM_EFFECTS = ("subjects as the random factor, on Fisher z = arctanh of the subject values: t_x = mean / standard error over "
+                  "subjects (n - 1 degrees of freedom); in the models file diff_j_minus_x and t_j_minus_x are the mean and t of "
+                  "the within-subject difference z_j - z_x")
+
+
+def aggregate(args):
+    from preprocess_individual import load_subjects
+
+    listed = load_subjects(args.subjects_list)
+    listed = listed[:args.limit] if args.limit else listed
+    root = Path(args.output_dir) / args.fmri_suffix
+    timing = pd.read_csv(args.timing_csv)
+    run_trs = np.load(Path(args.preprocessed_dir) / f"{args.subject}_{args.fmri_suffix}_run_trs.npy")
+    whiten = np.load(whitener_path(args, root / "intermediate"))
+    for model in args.models:
+        components = tuple(load_embedding(args, name, kind, timing, run_trs) for name, kind in zip(component_models(args, model), "av"))
+        cosines = component_cosines(components, load_embedding(args, model, "av", timing, run_trs), whiten)
+        directory = root / "subject_mean" / model
+        directory.mkdir(parents=True, exist_ok=True)
+        for measure in MEASURES:
+            stem = f"{map_stem(args, measure)}_{args.tag}"
+            cka, semipartial, common = [], [], []
+            for subject in listed:
+                image = nib.load(root / "subjects" / subject / model / f"{stem}_models.dscalar.nii")
+                assert list(image.header.get_axis(0).name) == COMPONENT_MAPS, f"{subject} holds other maps"
+                cka.append(image.get_fdata(dtype=np.float32))
+                semipartial.append(save_semipartial(args, cka[-1], cosines[measure], root / "subjects" / subject / model, stem))
+                common.append(save_commonality(args, cka[-1], cosines[measure], root / "subjects" / subject / model, stem))
+            for kind, names, x in (("models", COMPONENT_MAPS, np.stack(cka)), ("semipartial", SEMIPARTIAL_MAPS, np.stack(semipartial)),
+                                   ("commonality", COMMONALITY_MAPS, np.stack(common))):
+                for suffix, prefix, array in (("", "mean", x.mean(0)), ("_sem", "sem", x.std(0, ddof=1) / np.sqrt(len(listed)))):
+                    save_cifti_multimap(array, [f"{prefix}_{name}" for name in names], args.template_cifti,
+                                        str(directory / f"{stem}_{kind}{suffix}.dscalar.nii"))
+                effects = random_effects(x, names, correlations=kind != "commonality")
+                save_cifti_multimap(np.stack(list(effects.values())).astype(np.float32), list(effects), args.template_cifti,
+                                    str(directory / f"{stem}_{kind}_random_effects.dscalar.nii"))
+            write_provenance(directory / f"{stem}_provenance.json", {
+                "n_subjects": len(listed), "subjects": listed, "tag": args.tag, "measure": measure,
+                "mean": "mean over subjects of the subject maps", "sem": "standard deviation over subjects / sqrt(n_subjects)",
+                "random_effects": RANDOM_EFFECTS + "; commonality maps are not correlations and use the raw values",
+                "commonality": COMMONALITY, **semipartial_provenance(cosines[measure]),
+            })
+            log.info("%s %s: %d subjects", model, measure, len(listed))
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     arguments = build_parser().parse_args()
-    {"partitions": partitions, "run": run}[arguments.command](arguments)
+    {"partitions": partitions, "run": run, "subjects": subjects, "aggregate": aggregate,
+     "commonality": commonality}[arguments.command](arguments)

@@ -61,12 +61,19 @@ def test_fold_masks_cover_both_split_variants():
     data = {"keep": keep, "metadata": pd.DataFrame({"run_id": run_ids})}
     (name, train, test), = make_folds(data, "fixed")
     assert name == "fixed" and train.sum() == 16 and test.sum() == 4 and not (train & test).any()
-    folds = make_folds(data, "runwise")
+    folds = make_folds(data, "loro")
     assert [label for label, *_ in folds] == ["1", "2", "3", "4"]
     for label, train, test in folds:
         assert not (train & test).any()
         assert not (train | test)[~keep].any()
         assert (run_ids[test] == int(label)).all() and (run_ids[train] != int(label)).all()
+    clips = np.array([f"video{i}" for i in np.repeat(np.arange(10), 2)])
+    data["metadata"]["video_id"] = clips
+    folds = make_folds(data, "loco")
+    assert [label for label, *_ in folds] == list(pd.unique(clips[keep]))
+    for label, train, test in folds:
+        assert (clips[test] == label).all() and (clips[train] != label).all()
+        assert not (train | test)[~keep].any() and (train | test).sum() == keep.sum()
 
 
 

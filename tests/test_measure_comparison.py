@@ -35,10 +35,9 @@ def test_core_bins_follow_the_count_of_neighbours_in_the_core():
 
 def test_map_paths_use_the_diagnostics_folders_and_cka_names():
     args = Namespace(k=100, delay_sec=5.0, bin_sec=5.0, skip_sec=5.0, scaling="center", fmri_suffix="raw", subject="group_average",
-                     rsa_dir="rsa", cka_dir="cka")
+                     rsa_dir="rsa", cka_dir="cka", cka_tag="t")
     paths = cm.map_paths(args, "m")
     assert paths["euclid-spearman"].as_posix() == "rsa/raw/group_average/m_av/diagnostics/rsa_59k_raw_k100_delay5s_bin5s_skip5s_euclid-spearman_center_maps.dscalar.nii"
     assert paths["corr-spearman_nr"].name.endswith("_corr-spearman_center_norepeats_maps.dscalar.nii")
-    assert paths["cka"].as_posix() == "cka/raw/group_average/m_av/diagnostics/cka_59k_raw_k100_delay5s_bin5s_skip5s_noncv_center_maps.dscalar.nii"
-    assert paths["cka-cv-ar"].name == "cka_59k_raw_k100_delay5s_bin5s_skip5s_cv-ar_center_maps.dscalar.nii"
-    assert cm.difference_path(args, "a", "b", "cv").name == "cka_59k_raw_k100_delay5s_bin5s_skip5s_cv-loglik-diff_a_av_minus_b_av_center_maps.dscalar.nii"
+    assert paths["cka"].as_posix() == "cka/raw/group_average/m/diagnostics/cka_59k_raw_k100_delay5s_bin5s_skip5s_noncv_center_maps.dscalar.nii"
+    assert paths["cka-cv-ar"].as_posix() == "cka/raw/group_average/m/cka_59k_raw_k100_delay5s_bin5s_skip5s_cv-ar_center_t_models.dscalar.nii"

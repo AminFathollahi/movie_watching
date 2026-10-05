@@ -47,7 +47,7 @@ DELAY_SEC=5.0
 TR=1.0
 N_ITER=20
 BACKEND="torch_cuda"
-VARIANTS=(fixed:zscore fixed:center runwise:zscore runwise:center)
+VARIANTS=(loro:demean)
 
 run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }

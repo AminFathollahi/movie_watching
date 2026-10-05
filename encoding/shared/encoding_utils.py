@@ -53,7 +53,7 @@ def spm_hrf(tr: float, oversampling: int = 16) -> np.ndarray:
 def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
                          test_video_ids: list, bin_sec: float, tr: float,
                          run_trs: np.ndarray, delay_sec: float = 0.0,
-                         skip_sec: float = None) -> tuple:
+                         skip_sec: float = None, zscore: bool = True) -> tuple:
     """Extract movie segments from continuous fMRI, z-score per run, bin, split.
 
     Uses global onset_sec from timing_df (same convention as rsa_utils.preprocess_fmri):
@@ -62,6 +62,7 @@ def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
 
     Responses are z-scored per run (Hedger et al. 2025): each run's training bins
     with their own mean/std, and each run's held-out clips with their own mean/std.
+    With zscore=False the binned responses are returned unscaled.
 
     Args:
         fmri          : (n_vertices, T_total) float32 — full continuous preprocessed signal
@@ -134,19 +135,22 @@ def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
         # ── Z-score per run: training bins and held-out clips separately ─────
         if run_train_segs:
             run_train = np.concatenate(run_train_segs, axis=0).astype(np.float32)
-            mu = run_train.mean(axis=0, keepdims=True)
-            sd = run_train.std(axis=0,  keepdims=True)
-            sd[sd == 0] = 1.0
-            run_train = (run_train - mu) / sd
+            if zscore:
+                mu = run_train.mean(axis=0, keepdims=True)
+                sd = run_train.std(axis=0,  keepdims=True)
+                sd[sd == 0] = 1.0
+                run_train = (run_train - mu) / sd
             run_onsets.append(n_train_bins)
             train_segs.append(run_train)
             n_train_bins += run_train.shape[0]
 
         if run_test_segs:
             run_test = np.concatenate(run_test_segs, axis=0).astype(np.float32)
-            test_sd = run_test.std(axis=0, keepdims=True)
-            test_sd[test_sd == 0] = 1.0
-            test_segs.append((run_test - run_test.mean(axis=0, keepdims=True)) / test_sd)
+            if zscore:
+                test_sd = run_test.std(axis=0, keepdims=True)
+                test_sd[test_sd == 0] = 1.0
+                run_test = (run_test - run_test.mean(axis=0, keepdims=True)) / test_sd
+            test_segs.append(run_test)
 
     Y_train = (np.concatenate(train_segs, axis=0) if train_segs
                else np.empty((0, n_verts), dtype=np.float32))
@@ -159,7 +163,7 @@ def build_fmri_arrays(cifti_path: str, run_trs_path: str,
                        timing_df: pd.DataFrame,
                        test_video_ids: list, bin_sec: float, tr: float,
                        delay_sec: float = 0.0,
-                       skip_sec: float = None) -> tuple:
+                       skip_sec: float = None, zscore: bool = True) -> tuple:
     """Load continuous preprocessed CIFTI and build binned train/test arrays.
 
     Loads the full-run CIFTI (all 4 runs concatenated) produced by
@@ -185,7 +189,7 @@ def build_fmri_arrays(cifti_path: str, run_trs_path: str,
     fmri = img.get_fdata(dtype=np.float32).T   # (n_vertices, T_total)
     run_trs = np.load(run_trs_path)
     return _bin_and_split_fmri(fmri, timing_df, test_video_ids,
-                                bin_sec, tr, run_trs, delay_sec, skip_sec)
+                                bin_sec, tr, run_trs, delay_sec, skip_sec, zscore)
 
 
 # =============================================================================
@@ -208,6 +212,11 @@ def apply_hrf_to_segment(segment: np.ndarray, hrf_kernel: np.ndarray) -> np.ndar
         conv = fftconvolve(segment[:, j], hrf_kernel, mode="full")
         out[:, j] = conv[: len(segment)]
     return out
+
+
+def load_cifti_maps(path: str) -> dict:
+    image = nib.load(path)
+    return dict(zip(image.header.get_axis(0).name, np.array(image.get_fdata(dtype=np.float32))))
 
 
 def save_cifti_maps(maps: dict, template_path: str, output_path: str) -> None:

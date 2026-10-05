@@ -36,26 +36,6 @@ def run_splitter(groups: np.ndarray):
     return PredefinedSplit(fold_ids)
 
 
-def standardize_bands(
-    train_bands: list[np.ndarray], test_bands: list[np.ndarray], scale: bool = True
-) -> tuple[list[np.ndarray], list[np.ndarray], list[dict[str, np.ndarray]]]:
-    if len(train_bands) != len(test_bands) or not train_bands:
-        raise ValueError("train_bands and test_bands must be nonempty and matched")
-    train_out, test_out, stats = [], [], []
-    for train, test in zip(train_bands, test_bands):
-        train = np.asarray(train, dtype=np.float64)
-        test = np.asarray(test, dtype=np.float64)
-        if train.ndim != 2 or test.ndim != 2 or train.shape[1] != test.shape[1]:
-            raise ValueError("each train/test band must be 2D with matching features")
-        mean = train.mean(axis=0, keepdims=True)
-        spread = train.std(axis=0, keepdims=True) if scale else np.ones_like(mean)
-        spread[spread < 1e-12] = 1.0
-        train_out.append(((train - mean) / spread).astype(np.float32))
-        test_out.append(((test - mean) / spread).astype(np.float32))
-        stats.append({"mean": mean, "scale": spread})
-    return train_out, test_out, stats
-
-
 def fit_group_ridge(
     train_bands: list[np.ndarray],
     y_train: np.ndarray,
@@ -108,7 +88,6 @@ def _pearson_per_target(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
     return score
 
 
-FEATURE_SCALINGS = ("zscore", "center")
 BANDS = ("a", "v", "j")
 ALL_SUBSETS = ("a", "v", "j", "av", "aj", "vj", "avj")
 
@@ -163,10 +142,7 @@ def evaluate_split(
     n_iter: int = 20,
     backend: str = "torch_cuda",
     model_random_state: int = 0,
-    feature_scaling: str = "zscore",
 ) -> FoldResult:
-    if feature_scaling not in FEATURE_SCALINGS:
-        raise ValueError(f"Unknown feature_scaling {feature_scaling!r}; use {FEATURE_SCALINGS}")
     bad = set(subsets) - set(ALL_SUBSETS)
     if bad:
         raise ValueError(f"Unknown band subsets {sorted(bad)}; use {ALL_SUBSETS}")
@@ -187,11 +163,8 @@ def evaluate_split(
     if np.unique(train_runs).size < 2:
         raise ValueError("Inner run-wise CV needs at least two training runs")
 
-    train_bands, test_bands, _ = standardize_bands(
-        [band[train_mask] for band in raw.values()], [band[test_mask] for band in raw.values()],
-        scale=feature_scaling == "zscore",
-    )
-    train_z, test_z = dict(zip(raw, train_bands)), dict(zip(raw, test_bands))
+    train_x = {band: np.asarray(value[train_mask], dtype=np.float32) for band, value in raw.items()}
+    test_x = {band: np.asarray(value[test_mask], dtype=np.float32) for band, value in raw.items()}
     y_train = np.asarray(targets[train_mask], dtype=np.float32)
     y_test = np.asarray(targets[test_mask], dtype=np.float32)
 
@@ -199,8 +172,8 @@ def evaluate_split(
     selected_backend = backend
     for subset in subsets:
         prediction, model, selected_backend, _ = fit_group_ridge(
-            [train_z[band] for band in subset], y_train,
-            [test_z[band] for band in subset], train_runs, alphas,
+            [train_x[band] for band in subset], y_train,
+            [test_x[band] for band in subset], train_runs, alphas,
             n_iter=n_iter, backend=backend, random_state=model_random_state,
         )
         predictions[subset] = prediction
@@ -223,7 +196,6 @@ def evaluate_split(
             "n_iter": int(n_iter),
             "alphas": np.asarray(alphas).tolist(),
             "model_random_state": int(model_random_state),
-            "feature_scaling": feature_scaling,
         },
         arrays=fitted_arrays,
     )

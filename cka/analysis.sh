@@ -7,7 +7,7 @@
 # Usage
 # -----
 #   bash cka/analysis.sh partitions [--bins B...]
-#   bash cka/analysis.sh run|subjects|aggregate|commonality [--models M...] [--bins B...]
+#   bash cka/analysis.sh run|noncv|subjects|aggregate|commonality [--models M...] [--bins B...]
 #                         [--variants SCALING...] [--max-vertices N] [--output-dir DIR]
 #                         [--controls own|SET...]   audio and video from the model itself
 #                         (own, the default) or from a control set of CONTROL_SETS
@@ -16,11 +16,12 @@
 #   partitions   Averages the preprocessed responses of N_PARTITIONS disjoint
 #                subject groups from RAW_DIR into one array per bin
 #                (resumable; written to PARTITIONS_DIR).
-#   run          Non-cross-validated CKA (diagnostics), cross-validated CKA with
+#   run          Non-cross-validated CKA, cross-validated CKA with
 #                and without whitening by the window noise covariance of the
 #                joint, audio and video embeddings (tag TAG), and the
 #                semi-partial and commonality maps, for each model, bin and
 #                variant. Needs the partitions of the same bin.
+#   noncv        Only the non-cross-validated CKA, semi-partial and commonality maps of `run`.
 #   subjects     Cross-validated CKA of the joint, audio and video embeddings
 #                for every subject against the other subjects (resumable).
 #                Needs RAW_DIR and the noise model written by `run`.
@@ -138,10 +139,10 @@ run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 # DISPATCH
 # =============================================================================
 case "$MODE" in
-    partitions|run|subjects|aggregate|commonality) ;;
+    partitions|run|noncv|subjects|aggregate|commonality) ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Use: partitions | run | subjects | aggregate | commonality" >&2
+        echo "Use: partitions | run | noncv | subjects | aggregate | commonality" >&2
         exit 1 ;;
 esac
 

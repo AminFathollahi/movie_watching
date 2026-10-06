@@ -2,15 +2,17 @@
 
     python cka/cka_searchlight.py partitions --raw-dir DIR --subjects-list FILE --partitions-dir DIR ...
     python cka/cka_searchlight.py run --models M [M ...] --partitions-dir DIR --output-dir DIR ...
+    python cka/cka_searchlight.py noncv --models M [M ...] --partitions-dir DIR --output-dir DIR ...
     python cka/cka_searchlight.py subjects --models M [M ...] --raw-dir DIR --subjects-list FILE --output-dir DIR ...
     python cka/cka_searchlight.py aggregate --models M [M ...] --subjects-list FILE --output-dir DIR ...
     python cka/cka_searchlight.py commonality --models M [M ...] --output-dir DIR ...
 
 `partitions` averages the preprocessed responses of disjoint subject groups. `run` writes the
 non-cross-validated, cross-validated and whitened cross-validated CKA maps of the joint, audio and
-video embeddings, and the semi-partial and commonality maps. `subjects` writes the cross-validated maps of each
-subject against the other subjects and `aggregate` the subject semi-partial and commonality maps, and the mean,
-standard error and random-effects maps of all three (see cka/README.md).
+video embeddings, and the semi-partial and commonality maps; `noncv` only the non-cross-validated
+ones. `subjects` writes the cross-validated maps of each subject against the other subjects and
+`aggregate` the subject semi-partial and commonality maps, and the mean, standard error and
+random-effects maps of all three (see cka/README.md).
 """
 
 from __future__ import annotations
@@ -85,6 +87,7 @@ def build_parser():
 
     run = sub.add_parser("run", parents=[common, maps], help="CKA maps of the joint, audio and video embeddings of each model.")
     run.add_argument("--exclude-video-ids", default=REPEATED_CLIPS, help="Clips dropped for the `norepeats` diagnostic.")
+    sub.add_parser("noncv", parents=[run], add_help=False, help="Non-cross-validated maps of `run` only.")
     subjects = sub.add_parser("subjects", parents=[common, individual, maps], help="Cross-validated CKA maps of each subject.")
     subjects.add_argument("--raw-dir", required=True)
     sub.add_parser("aggregate", parents=[common, individual, maps], help="Mean and standard error of the subject maps.")
@@ -258,6 +261,7 @@ MEASURES = {
              "with the inverse square root of the window noise covariance (whitened unbiased RDM cosine with the window "
              "noise covariance, Diedrichsen et al. 2021)",
 }
+NONCV = "CKA between the window-centered Gram matrix of the group-average responses and the component Gram matrix (noise-biased)"
 COMPONENT_MAPS = ["cka_a", "cka_v", "cka_j"]
 
 
@@ -349,28 +353,43 @@ def whitener_path(args, work):
     return work / f"{partition_path(args).stem}_whitener.npy"
 
 
+def all_embeddings(args, s):
+    return {(model, c): x for model in args.models for c, x in zip("avj", (*s.components[model], s.embeddings[model]))}
+
+
 def cross_validated(args, s):
     t0 = time.time()
     ut = kernels.to_vmk(partition_path(args))
     assert ut.shape[0] == s.ncols.shape[0] and ut.shape[2] == len(s.videos), (ut.shape, s.ncols.shape, len(s.videos))
     log.info("partitions loaded %s in %.0fs", ut.shape, time.time() - t0)
     whiten = kernels.noise_model(ut, np.bincount(s.runs, minlength=len(s.run_trs)), s.work, partition_path(args).stem, s.device)
-    embeddings = {(model, c): x for model in args.models for c, x in zip("avj", (*s.components[model], s.embeddings[model]))}
-    return kernels.cv_pass(ut, s.ncols, embeddings, whiten, s.verts, s.device), whiten
+    return kernels.cv_pass(ut, s.ncols, all_embeddings(args, s), whiten, s.verts, s.device), whiten
+
+
+def noncv(args, s=None):
+    s = s or setup(args)
+    keep = ~np.isin(s.videos, args.exclude_video_ids.split(","))
+    grams = {model: kernels.model_gram(x[keep]) for model, x in s.embeddings.items()}
+    for model, array in kernels.noncv_pass(s.binned[keep], grams, s.ncols, s.verts, s.device).items():
+        save_map(array, args, s.out / model / "diagnostics", "noncv", "cka", "_norepeats")
+
+    grams = {key: kernels.model_gram(x) for key, x in all_embeddings(args, s).items()}
+    results = kernels.noncv_pass(s.binned, grams, s.ncols, s.verts, s.device)
+    for model in args.models:
+        columns = np.stack([grams[(model, c)] for c in "avj"]).astype(np.float64)
+        cosines = columns @ columns.T
+        cka = np.stack([results[(model, c)] for c in "avj"])
+        stem = save_models(args, cka, model, s.out / model, "noncv", NONCV, n_windows=len(s.videos), commonality=COMMONALITY,
+                           **semipartial_provenance(cosines))
+        save_semipartial(args, cka, cosines, s.out / model, stem)
+        save_commonality(args, cka, cosines, s.out / model, stem)
+    log.info("non-cross-validated pass: %d windows, %d without repeats", len(s.videos), keep.sum())
+    return s
 
 
 def run(args):
-    s = setup(args)
+    s = noncv(args)
     n_windows = len(s.videos)
-
-    keep = ~np.isin(s.videos, args.exclude_video_ids.split(","))
-    for suffix, rows in (("", slice(None)), ("_norepeats", keep)):
-        grams = {model: kernels.model_gram(x[rows]) for model, x in s.embeddings.items()}
-        maps = kernels.noncv_pass(s.binned[rows], grams, s.ncols, s.verts, s.device)
-        for model, array in maps.items():
-            save_map(array, args, s.out / model / "diagnostics", "noncv", "cka", suffix)
-        log.info("non-cross-validated pass%s: %d windows", suffix, s.binned[rows].shape[0])
-
     t0 = time.time()
     results, whiten = cross_validated(args, s)
     for model in args.models:
@@ -529,5 +548,5 @@ def aggregate(args):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     arguments = build_parser().parse_args()
-    {"partitions": partitions, "run": run, "subjects": subjects, "aggregate": aggregate,
+    {"partitions": partitions, "run": run, "noncv": noncv, "subjects": subjects, "aggregate": aggregate,
      "commonality": commonality}[arguments.command](arguments)

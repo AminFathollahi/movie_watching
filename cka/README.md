@@ -22,7 +22,7 @@ Noise is autocorrelated within runs. Its window covariance is Σ = (1 / ((M − 
 
 ### Non-cross-validated CKA (`noncv`)
 
-CKA(H Y Yᵀ H, G) on the group-average responses keeps the noise bias and is written as a diagnostic only, with all windows and with the four repeated clips dropped.
+CKA(H Y Yᵀ H, G) on the group-average responses Y keeps the noise bias. It is written for A, V and J with the semi-partial and commonality maps (R from the unwhitened matrices; its R²(S) include the noise bias), and for J as a diagnostic with the four repeated clips dropped.
 
 ### Semi-partial correlation
 
@@ -30,7 +30,7 @@ Let c = (c_A, c_V, c_J) be the CKA values of the brain matrix with the three mod
 
 sp_x = [R⁻¹ c]_x / √[R⁻¹]_xx.
 
-Nothing is fitted to the brain; for `cv-ar`, R uses the whitened matrices. A component in the span of the other two (residual norm below 10⁻⁶) gets a zero map.
+Nothing is fitted to the brain; for `cv` and `noncv`, R uses the plain matrices, for `cv-ar` the whitened ones. A component in the span of the other two (residual norm below 10⁻⁶) gets a zero map.
 
 ### Commonality
 
@@ -51,11 +51,11 @@ bash cka/analysis.sh partitions --bins 5
 bash cka/analysis.sh run --models pe-av-small-16-frame nemotron_layer18_mp --bins 5
 ```
 
-`partitions` builds the (M, K, 108,441) group-response array once per bin (about 7 GB at 5 s, held in memory by `run`); `run` writes the group maps. `subjects` writes the per-subject maps (it needs the whitener from `run`), and `aggregate` the subject semi-partial and commonality maps and the statistics over subjects. Main options: `--models`, `--bins`, `--variants center|zscore`, `--controls own|SET...` (A and V from the model itself, tag `unimodal_own`, or from a control set listed in `encoding/README.md`, tagged with its name). Roots are set in the `CONFIG` block of `cka/analysis.sh`; `python cka/cka_searchlight.py {partitions,run,subjects,aggregate,commonality} --help` lists all arguments.
+`partitions` builds the (M, K, 108,441) group-response array once per bin (about 7 GB at 5 s, held in memory by `run`); `run` writes the group maps, and `noncv` only the `noncv` maps of `run` (no partitions needed). `subjects` writes the per-subject maps (it needs the whitener from `run`), and `aggregate` the subject semi-partial and commonality maps and the statistics over subjects. Main options: `--models`, `--bins`, `--variants center|zscore`, `--controls own|SET...` (A and V from the model itself, tag `unimodal_own`, or from a control set listed in `encoding/README.md`, tagged with its name). Roots are set in the `CONFIG` block of `cka/analysis.sh`; `python cka/cka_searchlight.py {partitions,run,noncv,subjects,aggregate,commonality} --help` lists all arguments.
 
 ## Outputs
 
-Under `outputs/cka/raw/`, `{stem}` = `cka_59k_raw_k{k}_delay{D}s_bin{B}s_skip{B}s_{measure}_{scaling}`, with `{measure}` = `cv` or `cv-ar`.
+Under `outputs/cka/raw/`, `{stem}` = `cka_59k_raw_k{k}_delay{D}s_bin{B}s_skip{B}s_{measure}_{scaling}`, with `{measure}` = `cv`, `cv-ar` or, for the group average, `noncv`.
 
 | File | Contents |
 |---|---|
@@ -63,7 +63,7 @@ Under `outputs/cka/raw/`, `{stem}` = `cka_59k_raw_k{k}_delay{D}s_bin{B}s_skip{B}
 | `group_average/{model}/{stem}_{tag}_semipartial.dscalar.nii` | `sp_a`, `sp_v`, `sp_j` |
 | `group_average/{model}/{stem}_{tag}_commonality.dscalar.nii` | `r2_a` … `r2_avj`, the seven regions, `shared_av` |
 | `group_average/{model}/{stem}_{tag}_provenance.json` | sources, settings, definitions, component cosines |
-| `group_average/{model}/diagnostics/` | `noncv` maps of J, with and without (`_norepeats`) the repeated clips |
+| `group_average/{model}/diagnostics/` | `noncv` map of J without the repeated clips (`_norepeats`) |
 | `subjects/{subject}/{model}/` | the `models`, `semipartial` and `commonality` maps of one subject |
 | `subject_mean/{model}/{stem}_{tag}_{kind}[_sem].dscalar.nii` | `mean_{map}`, `sem_{map}` over subjects |
 | `subject_mean/{model}/{stem}_{tag}_{kind}_random_effects.dscalar.nii` | `t_{map}`; for `models` also `diff_j_minus_a`, `t_j_minus_a`, `diff_j_minus_v`, `t_j_minus_v` |

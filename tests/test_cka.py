@@ -224,6 +224,21 @@ def test_semipartial_is_zero_for_a_component_in_the_span_of_the_others():
         assert measure == "cv-ar" or kernels.semipartial_coefficients(cosine)[1][2] < 1e-6
 
 
+def test_noncv_semipartial_matches_explicit_residualization_on_the_matrices():
+    ut, ncols, xs, _ = _signal_problem(12, 1.0)
+    fmri = ut.mean(1).T
+    grams = {c: kernels.model_gram(x) for c, x in zip("avj", xs)}
+    out = kernels.noncv_pass(fmri, grams, ncols, np.arange(len(ut)), "cpu")
+    columns = np.stack(list(grams.values()), 1).astype(np.float64)
+    assert np.abs(columns.T @ columns - kernels.component_grams(xs, np.eye(len(fmri)))[1][0]).max() < 1e-6
+    sp = kernels.semipartial(np.stack([out[c] for c in "avj"]), columns.T @ columns)
+    for v in range(len(ut)):
+        hood = fmri[:, _valid(ncols[v])].astype(np.float64)
+        hood = hood - hood.mean(0)
+        target = (hood @ hood.T).ravel()
+        assert np.abs(sp[:, v] - _brute_semipartial(target / np.linalg.norm(target), columns)).max() < 1e-4
+
+
 def test_random_effects_match_scipy_t_tests():
     from scipy import stats
 

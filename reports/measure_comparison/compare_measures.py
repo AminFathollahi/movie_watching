@@ -82,11 +82,9 @@ def map_paths(args, model):
     return {
         "corr-spearman": rsa_dir / rsa("spearman"),
         "euclid-spearman": rsa_dir / "diagnostics" / rsa("euclid-spearman"),
-        "cka": cka_dir / "diagnostics" / cka("noncv"),
+        "cka": cka_dir / models("noncv"),
         "corr-spearman_nr": rsa_dir / "diagnostics" / rsa("corr-spearman", "_norepeats"),
         "cka_nr": cka_dir / "diagnostics" / cka("noncv", "_norepeats"),
-        "cka-cv": cka_dir / models("cv"),
-        "cka-cv-ar": cka_dir / models("cv-ar"),
     }
 
 
@@ -186,7 +184,7 @@ def difference_tables(args, axis, labels, names):
     out = []
     for a, b in itertools.combinations(args.models, 2):
         first, second = (load_model_maps(args, model, axis)[0] for model in (a, b))
-        diffs = {k: first[k] - second[k] for k in ("cka-cv", "cka-cv-ar")}
+        diffs = {"cka": first["cka"] - second["cka"]}
         out.append(f"\n## Model difference: {a} minus {b}\n")
         out.append(md_table(f"Table 8. Difference of the joint-embedding maps, {a} minus {b}; positive favours {a}. Mean, 5th and 95th percentile, number of grayordinates with a positive and a negative difference (n = {len(labels)}).",
                             ["map", "mean", "5th percentile", "95th percentile", "n > 0", "n < 0"],

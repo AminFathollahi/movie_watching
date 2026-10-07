@@ -20,7 +20,7 @@ Changes in this round:
 - The control encoders were refitted at the layer that best predicts cortex on its own.
 - Encoding now reports the variance A and V explain in common, for a model's own A and V and for each control pair.
 - CKA has a commonality decomposition that matches the encoding variance partition.
-- Reducing each embedding to 32 or 128 principal components lowered prediction without making the J maps more reliable, so the full embeddings are kept.
+- Reducing each embedding to 32 or 128 principal components changed prediction by less than 0.003 and did not make the J maps more reliable, so the full embeddings are kept.
 
 Results so far (group average of 175 subjects, mean held-out R² over the 108,441 cortical grayordinates, leave-one-run-out / leave-one-clip-out):
 
@@ -28,7 +28,7 @@ Results so far (group average of 175 subjects, mean held-out R² over the 108,44
 - Adding J to the model's own A and V changes R² by less than 0.002 (PE-AV +0.0008 / −0.0003, Nemotron +0.0017 / +0.0013). Added to separately trained encoders, Nemotron's J contributes 0.015 to 0.041, with similar maps under both splits.
 - Separately trained encoders match PE-AV. The best pair (w2v-BERT 2.0 audio, V-JEPA 2 ViT-L video) reaches 0.106 / 0.099, against 0.101 / 0.098 for PE-AV with A, V and J. Nemotron (0.121 / 0.118) is ahead of every pair on average.
 - The variance shared by A and V is no larger for PE-AV's own encoders than for the best separately trained pair (OpenBEATs audio, V-JEPA 2 ViT-L video).
-- CKA and encoding give similar maps of the part shared by A and V (r = 0.66 across cortex). Both resemble an audiovisual conjunction map from an independent localizer experiment: r = 0.41 for the CKA map of J beyond A and V, 0.34 for encoding R²(AV).
+- CKA and encoding give similar maps of the part shared by A and V (r = 0.62 across cortex). Both resemble an audiovisual conjunction map from an independent localizer experiment: r = 0.39 for the CKA map of J beyond A and V, 0.38 for encoding R²(AV).
 
 Per-pair numbers are in [`encoding/README.md`](encoding/README.md) and [`cka/README.md`](cka/README.md).
 
@@ -38,7 +38,7 @@ Per-pair numbers are in [`encoding/README.md`](encoding/README.md) and [`cka/REA
 |---|---|
 | [`rsa/`](rsa/README.md) | RSA pipeline (`analysis.sh`) and its validation, control and integration analyses |
 | [`encoding/`](encoding/README.md) | Banded ridge encoding and variance partition (`analysis.sh`) |
-| [`cka/`](cka/README.md) | Searchlight centered kernel alignment, cross-validated across subject groups (`analysis.sh`) |
+| [`cka/`](cka/README.md) | Searchlight centered kernel alignment of the group-average and single-subject responses (`analysis.sh`) |
 | [`cf_modeling/`](cf_modeling/README.md) | Connective-field models and ROI-mean connectivity maps (`run_analysis.sh`); retired analyses are in `cf_modeling/deprecated/` |
 | [`cluster/`](cluster/README.md) | Temporal-state and spatial-network clustering, vertex time-series clustering (`cluster.sh`, `run_vertex_clustering.sh`) |
 | [`connectivity/`](connectivity/README.md) | Seed-based whole-cortex connectivity from RSA-derived border ROIs (`seed_connectivity.py`) |

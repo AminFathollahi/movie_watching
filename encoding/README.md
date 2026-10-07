@@ -112,7 +112,7 @@ Three control pairs have a higher mean R²(AV) than PE-AV's R²(AVJ) under leave
 
 Where PE-AV's own R²(AV) exceeds 0.05, its own A and V share 0.038 / 0.043. The `latent` pair shares as much (PE-AV larger at 50% / 48% of these grayordinates), and the mean over all eight pairs is lower by 0.012 / 0.006. A model's own A and V share more than all eight pairs at 17% / 15% of cortex for PE-AV and 14% / 16% for Nemotron.
 
-Between the two splits, the R²(AVJ) maps correlate 0.93 to 0.96 and the shared AV maps 0.51 to 0.82. Reducing each band to 32 or 128 principal components (fitted on training rows) lowers R² and leaves the between-split agreement of unique J unchanged.
+Between the two splits, the R²(AVJ) maps correlate 0.93 to 0.96 and the shared AV maps 0.51 to 0.82. Reducing each band to 32 or 128 principal components (fitted on training rows) changes R²(AVJ) by −0.003 to +0.002 and leaves the between-split agreement of unique J unchanged (0.21 to 0.45, against 0.28 to 0.40 with the full embeddings).
 
 ## Tests
 

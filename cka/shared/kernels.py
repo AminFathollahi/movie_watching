@@ -1,11 +1,7 @@
-"""Searchlight centered kernel alignment (CKA): window indexing, kernels and likelihoods."""
+"""Searchlight centered kernel alignment (CKA): window indexing, Gram matrices, semi-partial and commonality maps."""
 
 from __future__ import annotations
 
-import json
-import logging
-import queue
-import threading
 from pathlib import Path
 
 import numpy as np
@@ -14,8 +10,6 @@ import torch
 from cifti_io import get_bm_axis, get_cortex_vertex_indices
 from encoding.shared.fold_evaluator import ALL_SUBSETS, partition_variance
 
-log = logging.getLogger(__name__)
-NOISE_FLOOR = 1e-3
 COMPONENTS = "avj"
 RESIDUAL_FLOOR = 1e-6
 
@@ -99,101 +93,41 @@ def noncv_pass(fmri, grams, ncols, verts, device, batch=64):
     return out
 
 
-def to_vmk(path):
-    """Load an (M, K, V) partition array as a contiguous (V, M, K) array."""
-    partitions = np.load(path, mmap_mode="r")
-    n_groups, n_windows, n_vertices = partitions.shape
-    out = np.empty((n_vertices, n_groups, n_windows), np.float32)
-    for c0 in range(0, n_vertices, 4096):
-        out[c0:c0 + 4096] = np.ascontiguousarray(partitions[:, :, c0:c0 + 4096].transpose(2, 0, 1))
-    return out
+def noise_ceiling_pass(subjects, ncols, verts, device, batch=1024):
+    """Lower and upper bounds on the mean over subjects of the subject CKA (Nili et al. 2014).
 
+    subjects: one (V, K) response array per subject (memory maps are fine). With b_s the unit-norm, window-centered Gram
+    matrix of subject s in a searchlight and B the mean of the b_s, upper = mean_s cos(b_s, B) and
+    lower = mean_s cos(b_s, B_-s), B_-s = (N B - b_s) / (N - 1).
+    """
+    n, n_windows = len(subjects), subjects[0].shape[1]
+    lower, upper = np.zeros(ncols.shape[0], np.float32), np.zeros(ncols.shape[0], np.float32)
+    for bv, cols in searchlight_batches(ncols, verts, batch):
+        needed, local = np.unique(cols, return_inverse=True)
+        local = torch.from_numpy(local.reshape(cols.shape)).to(device)
+        data = torch.empty((n, len(needed), n_windows), dtype=torch.float16, device=device)
+        for s, y in enumerate(subjects):
+            data[s] = torch.from_numpy(np.asarray(y[needed], np.float16))
 
-def whitener(sigma):
-    """Symmetric inverse square root of the window-centered noise covariance and its diagnostics."""
-    n = sigma.shape[0]
-    centering = np.eye(n) - 1.0 / n
-    values, vectors = np.linalg.eigh(centering @ sigma @ centering)
-    null = np.argmax(np.abs(vectors.sum(0)))
-    null_value = float(values[null])
-    keep = np.arange(n) != null
-    values, vectors = values[keep], vectors[:, keep]
-    mean = values.mean()
-    floored = np.maximum(values, NOISE_FLOOR * mean)
-    stats = {
-        "eigenvalue_min": float(values.min()), "eigenvalue_max": float(values.max()),
-        "eigenvalue_mean": float(mean), "n_floored": int((values < NOISE_FLOOR * mean).sum()),
-        "dropped_null_eigenvalue": null_value, "mean_variance": float(np.diag(sigma).mean()),
-    }
-    return (vectors / np.sqrt(floored)) @ vectors.T, stats
+        def scaled(s):
+            hood = data[s][local].float()
+            hood = hood - hood.mean(2, keepdim=True)
+            norm = torch.linalg.norm(torch.bmm(hood, hood.transpose(1, 2)), dim=(1, 2)).clamp(min=1e-10)
+            return hood / norm.sqrt()[:, None, None]
 
-
-def noise_covariance(ut, device, chunk=2048):
-    """Covariance between windows of the deviations of each partition from the partition mean."""
-    n_vertices, n_groups, n_windows = ut.shape
-    total = np.zeros((n_windows, n_windows))
-    for c0 in range(0, n_vertices, chunk):
-        y = torch.from_numpy(ut[c0:c0 + chunk]).to(device)
-        d = (y - y.mean(1, keepdim=True)).reshape(-1, n_windows)
-        total += (d.T @ d).double().cpu().numpy()
-    return total / (n_groups - 1) / n_vertices
-
-
-def noise_model(ut, run_windows, work_dir, stem, device):
-    sigma = noise_covariance(ut, device)
-    whiten, stats = whitener(sigma)
-    corr = sigma / np.outer(np.sqrt(np.diag(sigma)), np.sqrt(np.diag(sigma)))
-    run = np.repeat(np.arange(len(run_windows)), run_windows)
-    n = len(run)
-
-    def lag(lag_):
-        return float(np.mean([corr[i, i + lag_] for i in range(n - lag_) if run[i] == run[i + lag_]]))
-
-    stats = {"lag1_mean_corr_within_runs": lag(1), "lag2_mean_corr_within_runs": lag(2),
-             "cross_run_mean_abs_corr": float(np.abs(corr[run[:, None] != run[None, :]]).mean()), **stats}
-    work_dir.mkdir(parents=True, exist_ok=True)
-    np.save(work_dir / f"{stem}_noise_covariance.npy", sigma)
-    np.save(work_dir / f"{stem}_whitener.npy", whiten)
-    (work_dir / f"{stem}_noise_stats.json").write_text(json.dumps(stats, indent=1))
-    log.info("noise covariance: %s", json.dumps(stats))
-    return whiten
-
-
-def cv_gram(y, n_groups, n_vertices):
-    """Cross-validated Gram matrix over windows: (S'S - Z'Z) / (M (M - 1) P), summing over group pairs m != n."""
-    n_batch, _, n_windows = y.shape
-    group_sum = y.reshape(n_batch, n_vertices, n_groups, n_windows).sum(2)
-    return (torch.bmm(group_sum.transpose(1, 2), group_sum) - torch.bmm(y.transpose(1, 2), y)) / (
-        n_groups * (n_groups - 1) * n_vertices)
-
-
-def double_center(g):
-    return g - g.mean(1, keepdim=True) - g.mean(2, keepdim=True) + g.mean((1, 2), keepdim=True)
-
-
-def prefetch(ut, jobs, depth=3, workers=2):
-    q = queue.Queue(depth)
-
-    def work(chunk):
-        for bv, cols in chunk:
-            q.put((bv, ut[cols]))
-
-    for i in range(workers):
-        threading.Thread(target=work, args=(jobs[i::workers],), daemon=True).start()
-    for _ in range(len(jobs)):
-        yield q.get()
-
-
-def component_grams(embeddings, whiten):
-    """Unit-norm component Gram columns (K*K, C) and their C x C cosines, plain and whitened."""
-    plain, white = [], []
-    for x in embeddings:
-        centered = x - x.mean(0, keepdims=True)
-        for out, matrix in ((plain, centered), (white, whiten @ centered)):
-            gram = matrix @ matrix.T
-            out.append((gram / np.linalg.norm(gram)).ravel())
-    columns = [np.stack(grams, 1) for grams in (plain, white)]
-    return [c.astype(np.float32) for c in columns], [c.T @ c for c in columns]
+        mean = torch.zeros((len(bv), n_windows, n_windows), device=device)
+        for s in range(n):
+            h = scaled(s)
+            mean.baddbmm_(h.transpose(1, 2), h, alpha=1.0 / n)
+        square = mean.square().sum((1, 2))
+        low, up = torch.zeros_like(square), torch.zeros_like(square)
+        for s in range(n):
+            h = scaled(s)
+            dot = (torch.bmm(h, mean) * h).sum((1, 2))
+            up += dot / square.sqrt()
+            low += (n * dot - 1) / (n * n * square - 2 * n * dot + 1).clamp(min=1e-20).sqrt()
+        lower[bv], upper[bv] = (low / n).cpu().numpy(), (up / n).cpu().numpy()
+    return lower, upper
 
 
 def semipartial_coefficients(gram):
@@ -231,52 +165,3 @@ def commonality(cka, cosines):
         rows = [COMPONENTS.index(band) for band in subset]
         r2[subset] = np.einsum("in,ij,jn->n", c[rows], np.linalg.pinv(cosines[np.ix_(rows, rows)]), c[rows])
     return {**{f"r2_{k}": v for k, v in r2.items()}, **partition_variance(r2), "shared_av": r2["a"] + r2["v"] - r2["av"]}
-
-
-def cv_pass(ut, ncols, embeddings, whiten, verts, device, batch=32):
-    """Cross-validated CKA, plain and whitened with the window noise covariance; {(name, measure): map}."""
-    torch.backends.cuda.matmul.allow_tf32 = False
-    _, n_groups, n_windows = ut.shape
-    names = list(embeddings)
-    w = torch.from_numpy(whiten.astype(np.float32)).to(device)
-    plain, white = (torch.from_numpy(c).to(device) for c in component_grams(embeddings.values(), whiten)[0])
-    n_total = ncols.shape[0]
-    out = {(name, m): np.zeros(n_total, np.float32) for name in names for m in ("cv", "cv-ar")}
-    jobs = list(searchlight_batches(ncols, verts, batch))
-    log.info("cv pass: %d batches of up to %d searchlights, %d vertices, M %d, K %d",
-             len(jobs), batch, len(verts), n_groups, n_windows)
-    for j, (bv, hood) in enumerate(prefetch(ut, jobs)):
-        n_batch, size = hood.shape[:2]
-        y = torch.from_numpy(hood).to(device).reshape(n_batch, size * n_groups, n_windows)
-        gram = cv_gram(y, n_groups, size)
-        for measure, matrix, model in (("cv", double_center(gram), plain), ("cv-ar", w @ gram @ w, white)):
-            flat = matrix.reshape(n_batch, -1)
-            score = (flat @ model) / torch.linalg.norm(flat, dim=1).clamp(min=1e-20)[:, None]
-            for jn, name in enumerate(names):
-                out[(name, measure)][bv] = score[:, jn].cpu().numpy()
-        if j % 200 == 0:
-            log.info("  batch %d/%d", j, len(jobs))
-    return out
-
-
-def subject_pass(y, rest, ncols, columns, whiten, verts, device, batch=32):
-    """CKA of one subject's cross-validated Gram matrix sym(y rest') with each component Gram column.
-
-    y, rest (V, K): the subject and the sum of the other subjects; columns: (plain, whitened), each (K*K, C).
-    Returns the cosines (2, C, V) and the Gram norms (2, V), plain then whitened.
-    """
-    y, rest = (torch.from_numpy(np.ascontiguousarray(x, dtype=np.float32)) for x in (y, rest))
-    w = torch.from_numpy(whiten.astype(np.float32)).to(device)
-    columns = [torch.from_numpy(c).to(device) for c in columns]
-    cosines = np.zeros((2, columns[0].shape[1], ncols.shape[0]), np.float32)
-    norms = np.zeros((2, ncols.shape[0]), np.float32)
-    for bv, cols in searchlight_batches(ncols, verts, batch):
-        index = torch.from_numpy(cols)
-        cross = torch.bmm(y[index].to(device).transpose(1, 2), rest[index].to(device)) / cols.shape[1]
-        gram = (cross + cross.transpose(1, 2)) / 2
-        for i, matrix in enumerate((double_center(gram), w @ gram @ w)):
-            flat = matrix.reshape(len(bv), -1)
-            norm = torch.linalg.norm(flat, dim=1).clamp(min=1e-20)
-            cosines[i][:, bv] = ((flat @ columns[i]) / norm[:, None]).T.cpu().numpy()
-            norms[i, bv] = norm.cpu().numpy()
-    return cosines, norms

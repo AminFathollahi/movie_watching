@@ -8,8 +8,7 @@ Compares the searchlight maps that representational similarity analysis (RSA), c
 |---|---|
 | `corr-spearman` | RSA with correlation-distance RDMs and Spearman comparison (`rsa/`) |
 | `euclid-spearman`, `corr-spearman_nr` | RSA diagnostics: squared Euclidean distance; repeated clips dropped |
-| `cka`, `cka_nr` | non-cross-validated CKA of J, all windows and repeated clips dropped (`cka/`) |
-| `cka-cv`, `cka-cv-ar` | `cka_j` of the cross-validated and whitened cross-validated CKA (`cka/`, tag `--cka-tag`) |
+| `cka`, `cka_nr` | `cka_j` of the non-cross-validated CKA (`cka/`, tag `--cka-tag`) and its diagnostic with the repeated clips dropped |
 | `loro:{map}` | leave-one-run-out encoding maps `r2_a`, `r2_v`, `r2_j`, `r2_av`, `r2_avj` and `unique_j` (`encoding/`, tag `--encoding-tag`) |
 
 The script also reads the group-average responses, the Glasser parcellation and the geodesic neighbor cache of `rsa/`.
@@ -25,7 +24,7 @@ For each model the report gives:
 - neighborhood homogeneity h, the mean pairwise Pearson correlation over windows of the binned responses of a grayordinate's k neighbors, and each map's correlation with h and mean per decile of h;
 - the effect of dropping the repeated clips on `corr-spearman` and `cka`.
 
-For each pair of models it gives the distribution of the difference of their `cka-cv` and `cka-cv-ar` maps and the ten parcels most favoring each model.
+For each pair of models it gives the distribution of the difference of their `cka` maps and the ten parcels most favoring each model.
 
 ## Usage
 

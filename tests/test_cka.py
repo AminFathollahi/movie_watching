@@ -3,69 +3,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
-import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cka.shared import kernels
 from rsa.shared.rsa_utils import preprocess_fmri
-
-
-def _contrasts(n):
-    pairs = [(i, j) for i in range(n) for j in range(i)]
-    c = np.zeros((len(pairs), n))
-    for row, (i, j) in enumerate(pairs):
-        c[row, i], c[row, j] = 1, -1
-    return c
-
-
-def _ar1_covariance(rng, n, rho=0.6):
-    sigma = rho ** np.abs(np.subtract.outer(np.arange(n), np.arange(n)))
-    scale = (1 + 0.3 * rng.random(n)) ** 0.5
-    return sigma * scale[:, None] * scale[None, :]
-
-
-def test_low_signal_likelihood_is_linear_cka_numerator():
-    rng = np.random.default_rng(0)
-    n = 7
-    c = _contrasts(n)
-    v = (c @ c.T) ** 2
-    h = np.eye(n) - 1 / n
-    grams = [(lambda u: u @ u.T)(rng.standard_normal((n, p)) + 3.0) for p in (30, 12)]
-    d = [np.diag(c @ g @ c.T) for g in grams]
-    lhs = d[0] @ np.linalg.pinv(v) @ d[1]
-    rhs = np.sum((h @ grams[0] @ h) * (h @ grams[1] @ h))
-    assert abs(lhs - rhs) / abs(rhs) < 1e-8
-
-
-def test_whitened_likelihood_identity_and_inverse_square_root():
-    rng = np.random.default_rng(1)
-    n = 7
-    sigma = _ar1_covariance(rng, n)
-    sigma = (sigma + sigma.T) / 2
-    c = _contrasts(n)
-    h = np.eye(n) - 1 / n
-    inverse = np.linalg.pinv(h @ sigma @ h)
-    grams = [(lambda u: u @ u.T)(rng.standard_normal((n, p)) + 3.0) for p in (30, 12)]
-    d = [np.diag(c @ g @ c.T) for g in grams]
-    lhs = d[0] @ np.linalg.pinv((c @ sigma @ c.T) ** 2) @ d[1]
-    assert abs(lhs - np.trace(inverse @ grams[0] @ inverse @ grams[1])) / abs(lhs) < 1e-8
-    whiten, stats = kernels.whitener(sigma)
-    assert np.abs(whiten @ whiten - inverse).max() < 1e-8
-    v = (c @ sigma @ c.T) ** 2
-    wuc = d[0] @ np.linalg.pinv(v) @ d[1] / np.sqrt((d[0] @ np.linalg.pinv(v) @ d[0]) * (d[1] @ np.linalg.pinv(v) @ d[1]))
-    assert abs(wuc - _cka(whiten @ grams[0] @ whiten, whiten @ grams[1] @ whiten)) < 1e-8
-    assert stats["n_floored"] == 0 and abs(stats["dropped_null_eigenvalue"]) < 1e-10
-
-
-def test_cv_gram_matches_sum_over_group_pairs():
-    rng = np.random.default_rng(2)
-    groups, windows, vertices = 5, 7, 4
-    u = rng.standard_normal((groups, windows, vertices))
-    naive = sum(u[m] @ u[n].T for m in range(groups) for n in range(groups) if m != n) / (groups * (groups - 1) * vertices)
-    y = torch.from_numpy(u.transpose(2, 0, 1).reshape(vertices * groups, windows)[None])
-    assert np.abs(kernels.cv_gram(y, groups, vertices)[0].numpy() - naive).max() < 1e-10
 
 
 def test_window_index_matches_preprocess_fmri():
@@ -115,80 +57,13 @@ def test_noncv_pass_matches_direct_cka():
     assert np.allclose(subset[[2, 5]], out[[2, 5]]) and not subset[[0, 1, 3]].any()
 
 
-def test_cv_pass_matches_direct_cka():
-    rng, ncols = _neighbourhoods()
-    groups, windows = 4, 6
-    ut = rng.standard_normal((12, groups, windows)).astype(np.float32)
-    embeddings = {"a": rng.standard_normal((windows, 5)), "b": rng.standard_normal((windows, 3))}
-    whiten = _ar1_covariance(rng, windows)
-    whiten = np.linalg.inv(np.linalg.cholesky(whiten)).T
-    whiten = (whiten + whiten.T) / 2
-    out = kernels.cv_pass(ut, ncols, embeddings, whiten, np.arange(12), "cpu", batch=5)
-    h = np.eye(windows) - 1 / windows
-    for v in range(12):
-        hood = ut[_valid(ncols[v])].astype(np.float64)
-        gram = sum(hood[:, m].T @ hood[:, n] for m in range(groups) for n in range(groups) if m != n)
-        gram /= groups * (groups - 1) * hood.shape[0]
-        for name, x in embeddings.items():
-            xc = x - x.mean(0)
-            assert abs(out[(name, "cv")][v] - _cka(h @ gram @ h, xc @ xc.T)) < 1e-4
-            xw = whiten @ xc
-            assert abs(out[(name, "cv-ar")][v] - _cka(whiten @ gram @ whiten, xw @ xw.T)) < 1e-4
-
-
-def _group_matrices(hood):
-    return [hood[:, m, :].T.astype(np.float64) for m in range(hood.shape[1])]
-
-
-def _cv_matrix(ys):
-    groups, p = len(ys), ys[0].shape[1]
-    return sum(ys[m] @ ys[n].T for m in range(groups) for n in range(groups) if m != n) / (groups * (groups - 1) * p)
-
-
-def _signal_problem(seed, signal, windows=9, groups=6, vertices=8, size=3):
+def _signal_problem(seed, windows=9, vertices=8, size=3):
     rng = np.random.default_rng(seed)
     xa, xv, xj = (rng.standard_normal((windows, d)) for d in (5, 4, 6))
     base = np.stack([xa @ rng.standard_normal((5, vertices)), xv @ rng.standard_normal((4, vertices)), xj @ rng.standard_normal((6, vertices))])
-    truth = signal * np.einsum("c,cwv->wv", rng.uniform(0.2, 1.0, 3), base)
-    ut = (truth.T[:, None, :] + rng.standard_normal((vertices, groups, windows))).astype(np.float32)
+    fmri = np.einsum("c,cwv->wv", rng.uniform(0.2, 1.0, 3), base) + rng.standard_normal((windows, vertices))
     ncols = np.stack([rng.permutation(vertices)[:size] for _ in range(vertices)]).astype(np.int32)
-    whiten = np.linalg.inv(np.linalg.cholesky(_ar1_covariance(rng, windows))).T
-    return ut, ncols, (xa, xv, xj), (whiten + whiten.T) / 2
-
-
-def test_subject_maps_average_to_the_cross_validated_gram():
-    ut, ncols, xs, whiten = _signal_problem(11, 1.0, vertices=10)
-    groups = ut.shape[1]
-    (plain, white), _ = kernels.component_grams(xs, whiten)
-    passes = [kernels.subject_pass(ut[:, m], ut.sum(1) - ut[:, m], ncols, (plain, white), whiten, np.arange(len(ut)), "cpu", batch=4)
-              for m in range(groups)]
-    numerator = np.mean([cosines * norms[:, None] for cosines, norms in passes], 0) / (groups - 1)
-    out = kernels.cv_pass(ut, ncols, dict(zip("avj", xs)), whiten, np.arange(len(ut)), "cpu", batch=4)
-    for i, measure in enumerate(("cv", "cv-ar")):
-        for v in range(len(ut)):
-            hood = torch.from_numpy(ut[_valid(ncols[v])]).reshape(1, -1, ut.shape[2])
-            gram = kernels.cv_gram(hood, groups, hood.shape[1] // groups)
-            norm = np.linalg.norm(kernels.double_center(gram).numpy() if measure == "cv" else whiten @ gram[0].numpy().astype(np.float64) @ whiten)
-            assert np.abs(numerator[i][:, v] / norm - [out[(c, measure)][v] for c in "avj"]).max() < 1e-4
-    cosines, norms = passes[0]
-    hood = ut[_valid(ncols[0])]
-    cross = hood[:, 0].T @ (hood.sum(1) - hood[:, 0]) / len(hood)
-    target = (cross + cross.T) / 2
-    target = target - target.mean(0) - target.mean(1)[:, None] + target.mean()
-    assert np.abs(cosines[0][:, 0] - plain.T @ target.ravel() / np.linalg.norm(target)).max() < 1e-5
-
-
-def _brute_cosines(hood, whiten, xs, measure):
-    target = _cv_matrix(_group_matrices(hood))
-    windows = target.shape[0]
-    left = np.eye(windows) - 1 / windows if measure == "cv" else whiten
-    grams = []
-    for x in xs:
-        z = left @ (x - x.mean(0)) if measure == "cv-ar" else (np.eye(windows) - 1 / windows) @ (x - x.mean(0))
-        gram = z @ z.T
-        grams.append((gram / np.linalg.norm(gram)).ravel())
-    target = (left @ target @ left).ravel()
-    return target / np.linalg.norm(target), np.stack(grams, 1)
+    return fmri.astype(np.float32), ncols, (xa, xv, xj)
 
 
 def _brute_semipartial(target, grams):
@@ -202,58 +77,26 @@ def _brute_semipartial(target, grams):
 
 
 def test_semipartial_matches_explicit_residualization_on_the_matrices():
-    ut, ncols, xs, whiten = _signal_problem(10, 1.0)
-    out = kernels.cv_pass(ut, ncols, dict(zip("avj", xs)), whiten, np.arange(len(ut)), "cpu", batch=3)
-    _, cosines = kernels.component_grams(xs, whiten)
-    for measure, cosine in zip(("cv", "cv-ar"), cosines):
-        sp = kernels.semipartial(np.stack([out[(c, measure)] for c in "avj"]), cosine)
-        for v in range(len(ut)):
-            target, grams = _brute_cosines(ut[_valid(ncols[v])], whiten, xs, measure)
-            assert np.abs(grams.T @ grams - cosine).max() < 1e-6
-            assert np.abs(sp[:, v] - _brute_semipartial(target, grams)).max() < 1e-4
-
-
-def test_semipartial_is_zero_for_a_component_in_the_span_of_the_others():
-    ut, ncols, (xa, xv, _), whiten = _signal_problem(11, 1.0)
-    scaled = [(x - x.mean(0)) / np.sqrt(np.linalg.norm((x - x.mean(0)) @ (x - x.mean(0)).T)) for x in (xa, xv)]
-    xj = np.concatenate(scaled, 1)
-    out = kernels.cv_pass(ut, ncols, {"a": xa, "v": xv, "j": xj}, whiten, np.arange(len(ut)), "cpu", batch=3)
-    for measure, cosine in zip(("cv", "cv-ar"), kernels.component_grams((xa, xv, xj), whiten)[1]):
-        sp = kernels.semipartial(np.stack([out[(c, measure)] for c in "avj"]), cosine)
-        assert measure == "cv-ar" or np.all(sp[2] == 0)
-        assert measure == "cv-ar" or kernels.semipartial_coefficients(cosine)[1][2] < 1e-6
-
-
-def test_noncv_semipartial_matches_explicit_residualization_on_the_matrices():
-    ut, ncols, xs, _ = _signal_problem(12, 1.0)
-    fmri = ut.mean(1).T
+    fmri, ncols, xs = _signal_problem(12)
     grams = {c: kernels.model_gram(x) for c, x in zip("avj", xs)}
-    out = kernels.noncv_pass(fmri, grams, ncols, np.arange(len(ut)), "cpu")
+    out = kernels.noncv_pass(fmri, grams, ncols, np.arange(fmri.shape[1]), "cpu")
     columns = np.stack(list(grams.values()), 1).astype(np.float64)
-    assert np.abs(columns.T @ columns - kernels.component_grams(xs, np.eye(len(fmri)))[1][0]).max() < 1e-6
     sp = kernels.semipartial(np.stack([out[c] for c in "avj"]), columns.T @ columns)
-    for v in range(len(ut)):
+    for v in range(fmri.shape[1]):
         hood = fmri[:, _valid(ncols[v])].astype(np.float64)
         hood = hood - hood.mean(0)
         target = (hood @ hood.T).ravel()
         assert np.abs(sp[:, v] - _brute_semipartial(target / np.linalg.norm(target), columns)).max() < 1e-4
 
 
-def test_random_effects_match_scipy_t_tests():
-    from scipy import stats
-
-    from cka.cka_searchlight import random_effects
-
-    values = np.random.default_rng(0).uniform(-0.2, 0.6, (12, 3, 5)).astype(np.float32)
-    out = random_effects(values, ["cka_a", "cka_v", "cka_j"])
-    z = np.arctanh(values.astype(np.float64))
-    np.testing.assert_allclose(out["t_cka_v"], stats.ttest_1samp(z[:, 1], 0).statistic, rtol=1e-5)
-    np.testing.assert_allclose(out["t_j_minus_a"], stats.ttest_rel(z[:, 2], z[:, 0]).statistic, rtol=1e-5)
-    np.testing.assert_allclose(out["diff_j_minus_v"], (z[:, 2] - z[:, 1]).mean(0), rtol=1e-5)
-    assert list(out) == ["t_cka_a", "t_cka_v", "t_cka_j", "diff_j_minus_a", "t_j_minus_a", "diff_j_minus_v", "t_j_minus_v"]
-    sp = random_effects(values, ["sp_a", "sp_v", "sp_j"])
-    assert list(sp) == ["t_sp_a", "t_sp_v", "t_sp_j"]
-    np.testing.assert_allclose(sp["t_sp_j"], stats.ttest_1samp(z[:, 2], 0).statistic, rtol=1e-5)
+def test_semipartial_is_zero_for_a_component_in_the_span_of_the_others():
+    fmri, ncols, (xa, xv, _) = _signal_problem(11)
+    scaled = [(x - x.mean(0)) / np.sqrt(np.linalg.norm((x - x.mean(0)) @ (x - x.mean(0)).T)) for x in (xa, xv)]
+    grams = {c: kernels.model_gram(x) for c, x in zip("avj", (xa, xv, np.concatenate(scaled, 1)))}
+    out = kernels.noncv_pass(fmri, grams, ncols, np.arange(fmri.shape[1]), "cpu")
+    columns = np.stack(list(grams.values()), 1).astype(np.float64)
+    sp = kernels.semipartial(np.stack([out[c] for c in "avj"]), columns.T @ columns)
+    assert np.all(sp[2] == 0) and kernels.semipartial_coefficients(columns.T @ columns)[1][2] < 1e-6
 
 
 def test_commonality_r2_is_the_least_squares_fit_of_the_brain_matrix_and_its_unique_j_is_sp_j_squared():
@@ -274,11 +117,32 @@ def test_commonality_r2_is_the_least_squares_fit_of_the_brain_matrix_and_its_uni
     np.testing.assert_allclose(parts["shared_av"], parts["shared_av_only"] + parts["shared_avj"], rtol=1e-8)
 
 
-def test_commonality_random_effects_use_raw_values():
-    from scipy import stats
+def test_pool_gives_mean_standard_error_and_fractions():
+    from cka.cka_searchlight import pool
 
-    from cka.cka_searchlight import random_effects
+    values = np.random.default_rng(1).uniform(0, 0.2, (12, 3, 5))
+    out = pool(values, ["cka_a", "cka_v", "cka_j"])
+    assert list(out[""]) == ["mean_cka_a", "mean_cka_v", "mean_cka_j", "frac_j_gt_a", "frac_j_gt_v"]
+    np.testing.assert_allclose(out[""]["mean_cka_v"], values[:, 1].mean(0))
+    np.testing.assert_allclose(out["_sem"]["sem_cka_j"], values[:, 2].std(0, ddof=1) / np.sqrt(12))
+    np.testing.assert_allclose(out[""]["frac_j_gt_a"], (values[:, 2] > values[:, 0]).sum(0) / 12)
+    assert list(pool(values, ["sp_a", "sp_v", "sp_j"])[""]) == ["mean_sp_a", "mean_sp_v", "mean_sp_j"]
 
-    values = np.random.default_rng(1).normal(0.01, 0.02, (12, 2, 5))
-    out = random_effects(values, ["unique_j", "shared_av"], correlations=False)
-    np.testing.assert_allclose(out["t_shared_av"], stats.ttest_1samp(values[:, 1], 0).statistic, rtol=1e-5)
+
+def test_noise_ceiling_matches_brute_force():
+    rng, ncols = _neighbourhoods()
+    windows, n = 7, 5
+    shared = rng.standard_normal((12, windows))
+    subjects = [(shared + rng.standard_normal((12, windows))).astype(np.float16) for _ in range(n)]
+    lower, upper = kernels.noise_ceiling_pass(subjects, ncols, np.arange(12), "cpu", batch=4)
+    for v in range(12):
+        grams = []
+        for y in subjects:
+            hood = y[_valid(ncols[v])].T.astype(np.float64)
+            hood = hood - hood.mean(0)
+            gram = hood @ hood.T
+            grams.append(gram / np.linalg.norm(gram))
+        mean = np.mean(grams, 0)
+        assert abs(upper[v] - np.mean([_cka(g, mean) for g in grams])) < 1e-5
+        others = [_cka(g, (n * mean - g) / (n - 1)) for g in grams]
+        assert abs(lower[v] - np.mean(others)) < 1e-5

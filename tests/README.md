@@ -13,7 +13,7 @@ python -m pytest tests
 | `test_fold_evaluator.py` | R², Pearson r, folds, variance partition |
 | `test_variance_partition.py` | Embedding sources, output names, screening, incremental fits, partition maps |
 | `test_no_leakage.py` | Fits independent of held-out rows; training-row scaling and components; refused scalings |
-| `test_cka.py` | CKA estimators, whitener, searchlight and subject passes, semi-partial, commonality, random effects |
+| `test_cka.py` | Window index, searchlight CKA, semi-partial, commonality, pooling of subject maps |
 | `test_measure_comparison.py` | Homogeneity, ring bins and map paths of the measure comparison |
 | `test_rsa.py` | RDM construction and comparison, response binning |
 | `test_model_norm.py` | Per-run embedding normalization and its naming |

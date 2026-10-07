@@ -2,32 +2,24 @@
 # cka/analysis.sh
 # ==========================
 # Master runner for the searchlight centered kernel alignment (CKA) analyses
-# (group-average data).
+# (group-average and single-subject data).
 #
 # Usage
 # -----
-#   bash cka/analysis.sh partitions [--bins B...]
-#   bash cka/analysis.sh run|noncv|subjects|aggregate|commonality [--models M...] [--bins B...]
+#   bash cka/analysis.sh run|subjects|aggregate|noise-ceiling [--models M...] [--bins B...]
 #                         [--variants SCALING...] [--max-vertices N] [--output-dir DIR]
 #                         [--controls own|SET...]   audio and video from the model itself
 #                         (own, the default) or from a control set of CONTROL_SETS
 #                         [--limit N] [--k N]   N grayordinates per searchlight
 #
-#   partitions   Averages the preprocessed responses of N_PARTITIONS disjoint
-#                subject groups from RAW_DIR into one array per bin
-#                (resumable; written to PARTITIONS_DIR).
-#   run          Non-cross-validated CKA, cross-validated CKA with
-#                and without whitening by the window noise covariance of the
-#                joint, audio and video embeddings (tag TAG), and the
-#                semi-partial and commonality maps, for each model, bin and
-#                variant. Needs the partitions of the same bin.
-#   noncv        Only the non-cross-validated CKA, semi-partial and commonality maps of `run`.
-#   subjects     Cross-validated CKA of the joint, audio and video embeddings
-#                for every subject against the other subjects (resumable).
-#                Needs RAW_DIR and the noise model written by `run`.
-#   aggregate    Semi-partial and commonality maps of every subject, and the
-#                mean, standard error and random-effects maps over subjects.
-#   commonality  Commonality maps of the stored group-average CKA maps (no searchlight).
+#   run          CKA of the group-average responses with the joint, audio and
+#                video embeddings (tag TAG), and the semi-partial and
+#                commonality maps, for each model, bin and variant.
+#   subjects     The maps of `run` from each subject's own responses
+#                (resumable). Needs RAW_DIR.
+#   aggregate    Mean and standard error of the subject maps.
+#   noise-ceiling  Lower and upper bounds on the subject-mean CKA from the
+#                binned subject responses (cached in CACHE_DIR, about 24 GB).
 #
 # Defaults: --models pe-av-small-16-frame nemotron_layer18_mp, --bins 5,
 # --variants center. --max-vertices 0 evaluates every grayordinate.
@@ -49,7 +41,7 @@ PREPROCESSING_FLAG="raw"
 SUBJECT="group_average"
 # Group-average preprocessed CIFTI and run lengths
 PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/${PREPROCESSING_FLAG}"
-# Raw 7T CIFTI files of the individual subjects (input to partitions)
+# Raw 7T CIFTI files of the individual subjects (input to subjects)
 RAW_DIR="${EXTERNAL_BASE}/data/individual-59k"
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 TIMING_CSV="${DATA_BASE}/movie_timing.csv"
@@ -66,15 +58,14 @@ RIGHT_SURFACE="${HCP_DIR}/GroupAverage_59k/CohortAvg.R.midthickness_MSMAll.59k_f
 WORKBENCH="/opt/workbench/bin_linux64/wb_command"
 GEODESIC_CACHE_DIR="${OUTPUTS_BASE}/rsa/_geodesic_cache"
 
-# Output root; the partition arrays (6.8 GB each) stay off the home SSD
+# Output root and the binned subject responses of noise-ceiling
 OUTPUT_DIR="${OUTPUTS_BASE}/cka"
-PARTITIONS_DIR="${EXTERNAL_BASE}/outputs/cka/partitions"
+CACHE_DIR="${OUTPUTS_BASE}/cka/raw/intermediate/subject_responses"
 
 # ── Analysis parameters ────────────────────────────────────────────────────
 TR=1.0
 DELAY_SEC=5.0
 K=100
-N_PARTITIONS=25
 # Window stride equals the window length (no overlap).
 
 MODELS=(pe-av-small-16-frame nemotron_layer18_mp)
@@ -139,10 +130,10 @@ run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 # DISPATCH
 # =============================================================================
 case "$MODE" in
-    partitions|run|noncv|subjects|aggregate|commonality) ;;
+    run|subjects|aggregate|noise-ceiling) ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Use: partitions | run | noncv | subjects | aggregate | commonality" >&2
+        echo "Use: run | subjects | aggregate | noise-ceiling" >&2
         exit 1 ;;
 esac
 
@@ -153,15 +144,17 @@ for BIN_SEC in "${BINS[@]}"; do
     COMMON=(
         --preprocessed-dir "$PREPROCESSED_DIR" --fmri-suffix "$PREPROCESSING_FLAG" --subject "$SUBJECT"
         --timing-csv "$TIMING_CSV" --template-cifti "$TEMPLATE_CIFTI"
-        --partitions-dir "$PARTITIONS_DIR" --n-partitions "$N_PARTITIONS"
         --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" --tr "$TR"
     )
     INDIVIDUAL=(--subjects-list "$SUBJECTS_LIST" --limit "$LIMIT")
     EXTRA=()
     case "$MODE" in
-        partitions)
-            run_python "${SCRIPT_DIR}/cka_searchlight.py" partitions "${COMMON[@]}" "${INDIVIDUAL[@]}" --raw-dir "$RAW_DIR" \
-                || { log "FAILED: partitions bin ${BIN_SEC}"; FAILURES=$((FAILURES + 1)); }
+        noise-ceiling)
+            log "CKA noise ceiling bin ${BIN_SEC}"
+            run_python "${SCRIPT_DIR}/cka_searchlight.py" noise-ceiling "${COMMON[@]}" "${INDIVIDUAL[@]}" --raw-dir "$RAW_DIR" \
+                --cache-dir "$CACHE_DIR" --output-dir "$OUTPUT_DIR" --left-surface "$LEFT_SURFACE" --right-surface "$RIGHT_SURFACE" \
+                --workbench "$WORKBENCH" --geodesic-cache-dir "$GEODESIC_CACHE_DIR" --k "$K" --max-vertices "$MAX_VERTICES" \
+                || { log "FAILED: noise-ceiling bin ${BIN_SEC}"; FAILURES=$((FAILURES + 1)); }
             continue ;;
         subjects) EXTRA=("${INDIVIDUAL[@]}" --raw-dir "$RAW_DIR") ;;
         aggregate) EXTRA=("${INDIVIDUAL[@]}") ;;

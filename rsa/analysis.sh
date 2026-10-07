@@ -26,8 +26,7 @@
 #                              → noise ceiling.
 #               groupstats     Re-run post-hoc analyses on existing per-subject
 #                              maps: inter-subject crossnobis (all subjects at
-#                              once), per-subject crossnobis, group stats t-test,
-#                              noise ceiling.
+#                              once), group stats t-test, noise ceiling.
 #               all            avg + persubject + groupstats
 #
 #   METHOD      all          Searchlight + Glasser parcel RSA (default)
@@ -712,31 +711,6 @@ _run_one_subject() {
                 fi
             fi
 
-            # Crossnobis RSA (disk mode only — needs pre-saved per-subject CIFTIs)
-            if { [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "searchlight" ]; } \
-               && [ "$_RSA_STREAM" = "false" ]; then
-                conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
-                    "${_RSA_SCRIPT_DIR}/crossnobis_searchlight.py" \
-                    --preprocessed-dir   "$_RSA_PREPROCESSED_DIR" \
-                    --fmri-suffix        "$_RSA_FMRI_SUFFIX" \
-                    --timing-csv         "$_RSA_TIMING_CSV" \
-                    --embeddings-dir     "$_RSA_EMBEDDINGS_DIR" \
-                    --template-cifti     "$_RSA_TEMPLATE_CIFTI" \
-                    --left-surface       "$LEFT_SURF" \
-                    --right-surface      "$RIGHT_SURF" \
-                    --workbench          "$_RSA_WORKBENCH" \
-                    --output-dir         "$_RSA_OUTPUT_DIR" \
-                    --subject            "$SUB" \
-                    --model              "$MODEL_NAME" \
-                    --modality           "$MOD" \
-                    --k                  "$_RSA_K" \
-                    --bin-sec            "$_RSA_CROSSNOBIS_BIN_SEC" \
-                    --skip-sec           "$_RSA_CROSSNOBIS_SKIP_SEC" \
-                    --delay-sec          "$_RSA_DELAY_SEC" \
-                    --tr                 "$_RSA_TR" \
-                    --geodesic-cache-dir "$_RSA_GEODESIC_CACHE_DIR" \
-                    >> "$LOG" 2>&1 || STATUS=$?
-            fi
         done
     done
 
@@ -754,75 +728,6 @@ _run_one_subject() {
     fi
 }
 export -f _run_one_subject
-
-# Worker for per-subject crossnobis — always disk mode, parallel-safe.
-_run_crossnobis_one_subject() {
-    local SUB="$1"
-
-    local LOG_DIR="${_RSA_OUTPUT_DIR}/subject_data/${SUB}"
-    mkdir -p "$LOG_DIR"
-    local LOG="${LOG_DIR}/pipeline.log"
-
-    local DELAY_INT="${_RSA_DELAY_SEC%.*}"
-    local CN_BIN_INT="${_RSA_CROSSNOBIS_BIN_SEC%.*}"
-    local CN_SKIP_INT="${_RSA_CROSSNOBIS_SKIP_SEC%.*}"
-    local STATUS=0
-
-    IFS=';' read -ra MODEL_ENTRIES <<< "$_RSA_MODELS_STR"
-    for MODEL_ENTRY in "${MODEL_ENTRIES[@]}"; do
-        IFS=':' read -r MODEL_NAME MODALITIES_ENTRY <<< "$MODEL_ENTRY"
-        IFS=',' read -ra MODS <<< "$MODALITIES_ENTRY"
-
-        for MOD in "${MODS[@]}"; do
-            local EMB="${_RSA_EMBEDDINGS_DIR}/${MODEL_NAME}/bin${CN_BIN_INT}s_skip${CN_SKIP_INT}s/${MODEL_NAME}_${MOD}.npy"
-            if [ ! -f "$EMB" ]; then
-                echo "[$(date +%H:%M:%S)] ${SUB}: skip ${MODEL_NAME}/${MOD} crossnobis: embedding not found" \
-                    | tee -a "$LOG"
-                continue
-            fi
-
-            local CN_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/k${_RSA_K}_delay${DELAY_INT}s_bin${CN_BIN_INT}s_skip${CN_SKIP_INT}s_rho_a"
-            local CN_NPY="${CN_OUT}/crossnobis_rho_a_k${_RSA_K}_delay${DELAY_INT}s_bin${CN_BIN_INT}s_skip${CN_SKIP_INT}s.npy"
-            local CN_CIFTI="${CN_OUT}/crossnobis_rho_a_k${_RSA_K}_delay${DELAY_INT}s_bin${CN_BIN_INT}s_skip${CN_SKIP_INT}s.dscalar.nii"
-
-            if [ -f "$CN_NPY" ] && [ -f "$CN_CIFTI" ]; then
-                echo "[$(date +%H:%M:%S)] ${SUB}: crossnobis ${MODEL_NAME}/${MOD} already done; skipping" \
-                    | tee -a "$LOG"
-                continue
-            fi
-
-            conda run --no-capture-output -n "$_RSA_CONDA_ENV" python \
-                "${_RSA_SCRIPT_DIR}/crossnobis_searchlight.py" \
-                --preprocessed-dir   "$_RSA_PREPROCESSED_DIR" \
-                --fmri-suffix        "$_RSA_FMRI_SUFFIX" \
-                --timing-csv         "$_RSA_TIMING_CSV" \
-                --embeddings-dir     "$_RSA_EMBEDDINGS_DIR" \
-                --template-cifti     "$_RSA_TEMPLATE_CIFTI" \
-                --left-surface       "$_RSA_LEFT_SURFACE" \
-                --right-surface      "$_RSA_RIGHT_SURFACE" \
-                --workbench          "$_RSA_WORKBENCH" \
-                --output-dir         "$_RSA_OUTPUT_DIR" \
-                --subject            "$SUB" \
-                --model              "$MODEL_NAME" \
-                --modality           "$MOD" \
-                --k                  "$_RSA_K" \
-                --bin-sec            "$_RSA_CROSSNOBIS_BIN_SEC" \
-                --skip-sec           "$_RSA_CROSSNOBIS_SKIP_SEC" \
-                --delay-sec          "$_RSA_DELAY_SEC" \
-                --tr                 "$_RSA_TR" \
-                --geodesic-cache-dir "$_RSA_GEODESIC_CACHE_DIR" \
-                >> "$LOG" 2>&1 || STATUS=$?
-        done
-    done
-
-    if [ $STATUS -eq 0 ]; then
-        echo "[$(date +%H:%M:%S)] ${SUB} crossnobis complete" | tee -a "$LOG"
-    else
-        echo "[$(date +%H:%M:%S)] ${SUB} crossnobis failed (exit $STATUS)" | tee -a "$LOG"
-        return $STATUS
-    fi
-}
-export -f _run_crossnobis_one_subject
 
 # =============================================================================
 # NEIGHBOUR PRE-COMPUTE PIPELINE
@@ -1107,8 +1012,6 @@ run_persubject() {
     export _RSA_N_JOBS="$N_JOBS_PER_SUBJECT"
     export _RSA_N_BLOCKS="$N_BLOCKS"
     export _RSA_GLASSER_METHOD="$GLASSER_METHOD"
-    export _RSA_CROSSNOBIS_BIN_SEC="$CROSSNOBIS_BIN_SEC"
-    export _RSA_CROSSNOBIS_SKIP_SEC="$CROSSNOBIS_SKIP_SEC"
 
     if [ -n "$PARALLEL_BIN" ]; then
         echo "$SUBJECTS" | "$PARALLEL_BIN" --jobs "$BATCH_SIZE" --line-buffer \
@@ -1122,61 +1025,6 @@ run_persubject() {
     fi
 
     log "=== Per-subject RSA complete ==="
-}
-
-# =============================================================================
-# PER-SUBJECT CROSSNOBIS PIPELINE
-# =============================================================================
-# Sweeps all subjects in parallel (disk mode only — requires pre-saved per-subject
-# CIFTIs in PREPROCESSED_INDIV_DIR).  Skip logic is inside the worker.
-# =============================================================================
-run_crossnobis_persubject() {
-    if [ ! -d "$PREPROCESSED_INDIV_DIR" ]; then
-        log "WARNING: PREPROCESSED_INDIV_DIR not found (${PREPROCESSED_INDIV_DIR}) — skipping per-subject crossnobis."
-        return
-    fi
-
-    local SUBJECTS
-    SUBJECTS=$(grep -v '^\s*#' "$SUBJECTS_LIST" \
-               | sed 's/#.*//' \
-               | awk '{print $1}' \
-               | grep -v '^$')
-    local N_TOTAL
-    N_TOTAL=$(echo "$SUBJECTS" | wc -l)
-    log "=== Per-subject crossnobis (${N_TOTAL} subjects, BATCH_SIZE=${BATCH_SIZE}) ==="
-
-    local MODELS_STR
-    MODELS_STR=$(IFS=';'; echo "${MODELS[*]}")
-    export _RSA_SCRIPT_DIR="$SCRIPT_DIR"
-    export _RSA_CONDA_ENV="$CONDA_ENV"
-    export _RSA_PREPROCESSED_DIR="$PREPROCESSED_INDIV_DIR"
-    export _RSA_FMRI_SUFFIX="$FMRI_SUFFIX"
-    export _RSA_OUTPUT_DIR="$OUTPUT_DIR"
-    export _RSA_TIMING_CSV="$TIMING_CSV"
-    export _RSA_EMBEDDINGS_DIR="$EMBEDDINGS_DIR"
-    export _RSA_TEMPLATE_CIFTI="$TEMPLATE_CIFTI"
-    export _RSA_LEFT_SURFACE="$LEFT_SURFACE"
-    export _RSA_RIGHT_SURFACE="$RIGHT_SURFACE"
-    export _RSA_WORKBENCH="$WORKBENCH"
-    export _RSA_MODELS_STR="$MODELS_STR"
-    export _RSA_K="$K"
-    export _RSA_DELAY_SEC="$DELAY_SEC"
-    export _RSA_TR="$TR"
-    export _RSA_GEODESIC_CACHE_DIR="$GEODESIC_CACHE_DIR"
-    export _RSA_CROSSNOBIS_BIN_SEC="$CROSSNOBIS_BIN_SEC"
-    export _RSA_CROSSNOBIS_SKIP_SEC="$CROSSNOBIS_SKIP_SEC"
-
-    if [ -n "$PARALLEL_BIN" ]; then
-        echo "$SUBJECTS" | "$PARALLEL_BIN" --jobs "$BATCH_SIZE" --line-buffer \
-            _run_crossnobis_one_subject {}
-    else
-        log "GNU parallel not found — running sequentially"
-        for SUB in $SUBJECTS; do
-            _run_crossnobis_one_subject "$SUB"
-        done
-    fi
-
-    log "=== Per-subject crossnobis complete ==="
 }
 
 # =============================================================================
@@ -1360,13 +1208,13 @@ case "$MODE" in
                                 run_group_stats
                                 [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
                     groupstats) if [ "${SKIP_CROSSNOBIS:-false}" != "true" ]; then
-                                    run_crossnobis_isub; run_crossnobis_persubject
+                                    run_crossnobis_isub
                                 fi
                                 run_group_stats
                                 [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;
                     all)        run_avg; run_persubject
                                 if [ "${SKIP_CROSSNOBIS:-false}" != "true" ]; then
-                                    run_crossnobis_isub; run_crossnobis_persubject
+                                    run_crossnobis_isub
                                 fi
                                 run_group_stats
                                 [ "${SKIP_NOISE_CEILING:-false}" != "true" ] && run_noise_ceiling ;;

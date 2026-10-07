@@ -220,7 +220,7 @@ python rsa/noise_ceiling.py --raw-dir data/individual-59k --subjects 100610 1023
     --left-surface <L> --right-surface <R> --workbench <wb_command> --template-cifti <template> --output-dir <out>
 ```
 
-Crossnobis loads all subjects into memory (`N x n_windows x 59412` float32), uses z-scored embeddings for the model RDM, and has no `--method` or `--model-norm` flag. Output: `{OUTPUT_DIR}/groupstats/{model}_{modality}/k{K}_delay{D}s_bin{B}s_skip{S}s_rho_a_isub/crossnobis_isub_rho_a_k{K}_delay{D}s_bin{B}s_skip{S}s.{npy,dscalar.nii}` and `..._sigmap.dscalar.nii`. `run_crossnobis.sh` and the per-subject crossnobis step of `analysis.sh` pass per-subject flags (`--subject`, `--preprocessed-dir`, `--fmri-suffix`) that this script does not define; use the command above.
+Crossnobis loads all subjects into memory (`N x n_windows x 108441` float32), uses z-scored embeddings for the model RDM, and has no `--method` or `--model-norm` flag. Output: `{OUTPUT_DIR}/groupstats/{model}_{modality}/k{K}_delay{D}s_bin{B}s_skip{S}s_rho_a_isub/crossnobis_isub_rho_a_k{K}_delay{D}s_bin{B}s_skip{S}s.{npy,dscalar.nii}` and `..._sigmap.dscalar.nii`. `analysis.sh groupstats` runs it.
 
 `noise_ceiling.py` reads preprocessed CIFTIs with `--preprocessed-root` and `--fmri-suffix` instead of `--raw-dir`. Its `--delay-sec` defaults to 0.0, so pass the searchlight delay when the CIFTIs are not already delay-aligned.
 

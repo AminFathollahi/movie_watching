@@ -268,12 +268,12 @@ def subjects(args):
 def pool(values, names):
     """Mean and standard error over subjects of (subjects, maps, grayordinates); with the CKA maps also the fraction of
     subjects with cka_j above cka_a and above cka_v."""
-    mean = {f"mean_{name}": x for name, x in zip(names, values.mean(0))}
+    out = {f"mean_{name}": x for name, x in zip(names, values.mean(0))}
+    out.update({f"sem_{name}": x for name, x in zip(names, values.std(0, ddof=1) / np.sqrt(len(values)))})
     if "cka_j" in names:
         joint = values[:, names.index("cka_j")]
-        mean.update({f"frac_j_gt_{c}": (joint > values[:, names.index(f"cka_{c}")]).mean(0) for c in "av"})
-    sem = {f"sem_{name}": x for name, x in zip(names, values.std(0, ddof=1) / np.sqrt(len(values)))}
-    return {"": mean, "_sem": sem}
+        out.update({f"frac_j_gt_{c}": (joint > values[:, names.index(f"cka_{c}")]).mean(0) for c in "av"})
+    return out
 
 
 POOLED = {"mean": "mean over subjects of the subject maps", "sem": "standard deviation over subjects (n - 1) / sqrt(n_subjects)",
@@ -297,9 +297,9 @@ def aggregate(args):
                 image = nib.load(folder / f"{stem}_{kind}.dscalar.nii")
                 assert list(image.header.get_axis(0).name) == names, f"{folder} holds other maps"
                 values.append(image.get_fdata(dtype=np.float32))
-            for suffix, maps in pool(np.stack(values), names).items():
-                save_cifti_multimap(np.stack(list(maps.values())).astype(np.float32), list(maps), args.template_cifti,
-                                    str(directory / f"{stem}_{kind}{suffix}.dscalar.nii"))
+            maps = pool(np.stack(values), names)
+            save_cifti_multimap(np.stack(list(maps.values())).astype(np.float32), list(maps), args.template_cifti,
+                                str(directory / f"{stem}_{kind}.dscalar.nii"))
         first = json.loads((folders[0] / f"{stem}_provenance.json").read_text())
         first.pop("constant_grayordinates_zeroed", None)
         write_provenance(directory / f"{stem}_provenance.json", {**first, "n_subjects": len(listed), "subjects": listed, **POOLED})

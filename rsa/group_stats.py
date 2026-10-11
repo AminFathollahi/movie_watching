@@ -228,6 +228,20 @@ def _compute_fdr_maps(
     return sigmap_fdr, fdr_mask, int(fdr_mask.sum())
 
 
+def one_sample(stack: np.ndarray, alpha: float) -> tuple[dict, np.ndarray]:
+    """Mean over subjects, one-sample t against 0, sign(mean) x -log10 of the one-tailed (mean > 0) p, uncorrected
+    and BH-FDR corrected, and the FDR mask; with the uncorrected p."""
+    mean = stack.mean(axis=0).astype(np.float32)
+    t, p_two = stats.ttest_1samp(stack.astype(np.float64), popmean=0.0, axis=0)
+    t = t.astype(np.float32)
+    p = np.where(t > 0, p_two / 2.0, 1.0 - p_two / 2.0).astype(np.float32)
+    eps = np.finfo(np.float32).tiny
+    sigmap_fdr, fdr_mask, _ = _compute_fdr_maps(p, mean, alpha)
+    return {"mean": mean, "t": t,
+            "sigmap_uncorr": (np.sign(mean) * (-np.log10(np.maximum(p, eps)))).astype(np.float32),
+            "sigmap_fdr": sigmap_fdr, "fdr_mask": fdr_mask}, p
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -344,28 +358,14 @@ def main():
                 f"Run searchlight.py --n-blocks {args.n_blocks} (or a multiple) first."
             )
 
-    # ── Raw Performance Estimates ─────────────────────────────────────────────
-    X = rho_stack.astype(np.float64)
-    mean_rho = rho_stack.mean(axis=0).astype(np.float32)
-
-    # ── One-sample t-test (H₀: mean ρ = 0) ────────────────────────────────────
+    # ── One-sample t-test (H₀: mean ρ = 0) and BH-FDR ─────────────────────────
     log.warning("Performing one-sample test against chance (H0: rho = 0). "
                 "This evaluates the presence of mutual information for ROI generation, "
                 "but does not adjudicate whether this model is the *best* explanation.")
-    
-    t_vals, p_two = stats.ttest_1samp(X, popmean=0.0, axis=0)
-    t_vals = t_vals.astype(np.float32)
-
-    p_uncorr = np.where(t_vals > 0,
-                        p_two / 2.0,
-                        1.0 - p_two / 2.0).astype(np.float32)
-
-    eps = np.finfo(np.float32).tiny
-    sigmap_uncorr = (np.sign(mean_rho) *
-                     (-np.log10(np.maximum(p_uncorr, eps)))).astype(np.float32)
-
-    # ── FDR Correction ────────────────────────────────────────────────────────
-    sigmap_fdr, fdr_mask, n_sig_fdr = _compute_fdr_maps(p_uncorr, mean_rho, args.alpha)
+    m, p_uncorr = one_sample(rho_stack, args.alpha)
+    mean_rho, t_vals, sigmap_uncorr = m["mean"], m["t"], m["sigmap_uncorr"]
+    sigmap_fdr, fdr_mask = m["sigmap_fdr"], m["fdr_mask"]
+    n_sig_fdr = int(fdr_mask.sum())
 
     log.info(f"mean_rho range: [{mean_rho.min():.4f}, {mean_rho.max():.4f}]")
     log.info(f"Uncorrected p<{args.alpha}: {(p_uncorr < args.alpha).sum():,} / {n_grays:,}")

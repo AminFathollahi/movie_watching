@@ -65,8 +65,7 @@ Under `outputs/cka/raw/`, `{stem}` = `cka_59k_raw_k{k}_delay{D}s_bin{B}s_skip{B}
 | `group_average/{model}/{stem}_{tag}_provenance.json` | sources, settings, definitions, component cosines |
 | `group_average/{model}/diagnostics/` | map of J without the repeated clips (`_norepeats`) |
 | `subjects/{subject}/{model}/` | the same four files for one subject |
-| `subject_mean/{model}/{stem}_{tag}_{kind}.dscalar.nii` | `mean_{map}` over subjects; for `models` also `frac_j_gt_a`, `frac_j_gt_v` |
-| `subject_mean/{model}/{stem}_{tag}_{kind}_sem.dscalar.nii` | `sem_{map}` |
+| `subject_mean/{model}/{stem}_{tag}_{kind}.dscalar.nii` | `mean_{map}` and `sem_{map}` over subjects; for `models` also `frac_j_gt_a`, `frac_j_gt_v` |
 | `subject_mean/{model}/{stem}_{tag}_provenance.json` | subjects, definitions |
 | `noise_ceiling/cka_59k_raw_k{k}_delay{D}s_bin{B}s_skip{B}s_noncv_noise_ceiling.dscalar.nii` | `nc_lower`, `nc_upper` (with a `_provenance.json`) |
 | `intermediate/subject_responses/` | binned, z-scored subject responses (float16) used by `noise-ceiling` |

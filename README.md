@@ -30,7 +30,11 @@ Results so far (group average of 175 subjects, mean held-out R² over the 108,44
 - The variance shared by A and V is no larger for PE-AV's own encoders than for the best separately trained pair (OpenBEATs audio, V-JEPA 2 ViT-L video).
 - CKA and encoding give similar maps of the part shared by A and V (r = 0.62 across cortex). Both resemble an audiovisual conjunction map from an independent localizer experiment: r = 0.39 for the CKA map of J beyond A and V, 0.38 for encoding R²(AV).
 
-Per-pair numbers are in [`encoding/README.md`](encoding/README.md) and [`cka/README.md`](cka/README.md).
+- RSA now uses Euclidean and, separately, noise-normalized Mahalanobis RDMs, with semi-partial (Tong et al. 2022) and partial (Clarke & Tyler 2014) Spearman maps. Correlation distance is no longer used: it removes the response shared by a whole searchlight, and Walther et al. (2016) found cross-validated Mahalanobis distance preferable to it. Beyond PE-AV's own A and V, the joint RDM explains about nothing on average (semi-partial -0.011 Euclidean, 0.003 Mahalanobis), in line with encoding and CKA.
+
+Per-pair numbers are in [`encoding/README.md`](encoding/README.md), [`cka/README.md`](cka/README.md) and [`rsa/README.md`](rsa/README.md).
+
+References: Clarke & Tyler (2014) *J Neurosci* 34:4766; Tong et al. (2022) *J Neurosci* 42(37); Walther et al. (2016) *NeuroImage* 137:188. Method references for each analysis are in the module READMEs.
 
 ## Repository layout
 

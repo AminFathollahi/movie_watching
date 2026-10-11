@@ -1,6 +1,6 @@
 # Encoding: banded-ridge variance partition
 
-Encoding models predict the response of each of the 108,441 cortical grayordinates in the HCP 7T movie-watching data from model embeddings of the same movie window. Three feature spaces are compared: A, the embedding of the window's audio alone; V, of its video alone; and J, the model's joint audiovisual embedding. Seven banded ridge models, one per non-empty subset of {A, V, J}, are fitted and scored on the same rows, and their held-out R² values are partitioned into unique and shared parts (Lescroart et al. 2015; Deniz et al. 2019). `unique_j` is the variance J explains beyond A and V together.
+Encoding models predict the response of each of the 108,441 cortical grayordinates in the HCP 7T movie-watching data from model embeddings of the same movie window. Three feature spaces are compared: A, the embedding of the window's audio alone; V, of its video alone; and J, the model's joint audiovisual embedding. Seven banded ridge models, one per non-empty subset of {A, V, J}, are fitted and scored on the same rows, and their held-out R² values are partitioned into unique and shared parts (Lescroart et al. 2015; de Heer et al. 2017). `unique_j` is the variance J explains beyond A and V together.
 
 ## Method
 

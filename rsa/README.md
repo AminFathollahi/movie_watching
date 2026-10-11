@@ -4,6 +4,26 @@ Compares cortical activity in the HCP 7T movie-watching fMRI data with the repre
 
 Run from the repository root; environment setup is in the [top-level README](../README.md). Shared modules are described in [`shared/`](shared/README.md). Searchlight centered kernel alignment is not RSA and lives in [`cka/`](../cka/README.md).
 
+## Status (October 2026)
+
+Group-average searchlight RSA with Euclidean and Mahalanobis RDMs (`rdm_searchlight.py`, k = 100, 5-s windows, 626 windows), for PE-AV with its own audio (A) and video (V) embeddings and with two separately trained pairs (mae: Dasheng 0.6B and VideoMAE V2 large; text-asr: Whisper large-v3 and PE-Core L14). Values are cortex means over 108,441 grayordinates (maximum in brackets).
+
+| RDM | Pair | rho_A | rho_V | rho_J | sp_J | partial_J |
+|---|---|---|---|---|---|---|
+| Euclidean | own | 0.040 | 0.050 | 0.042 (0.18) | -0.011 (0.09) | -0.009 |
+| Euclidean | mae | 0.041 | 0.042 | 0.042 | 0.033 (0.14) | 0.036 |
+| Euclidean | text-asr | 0.046 | 0.032 | 0.042 | 0.024 (0.14) | 0.027 |
+| Mahalanobis | own | 0.041 | -0.005 | 0.022 (0.15) | 0.003 (0.10) | 0.008 |
+| Mahalanobis | mae | 0.062 | 0.032 | 0.022 | 0.009 (0.14) | 0.015 |
+| Mahalanobis | text-asr | 0.053 | -0.009 | 0.022 | 0.021 (0.15) | 0.021 |
+
+- PE-AV's joint RDM is close to a combination of its own audio and video RDMs (rank correlations J-A 0.56, J-V 0.62, A-V 0.13). Beyond them it explains about nothing on average (sp_J -0.011 Euclidean, 0.003 Mahalanobis), as in encoding and CKA.
+- Against separately trained encoders the joint RDM keeps most of its correlation (sp_J 0.02 to 0.03), because those encoders represent different things (J-A 0.11 to 0.17, J-V 0.06 to 0.36). This compares model families; it is not evidence of integration.
+- Noise normalization changes the maps (Euclidean and Mahalanobis rho_J maps correlate at r = 0.77) and removes most of the video correlation. The noise covariance comes from a single repeated clip (48 degrees of freedom) and includes repetition effects.
+- Crossnobis on the repeated clip (2-s windows, 41 windows x 4 presentations): sp_J 0.109 for PE-AV's own A and V (0.132 mae, 0.052 text-asr). The Euclidean RDM of the same windows averaged over presentations gives 0.098, so the positive value comes from the clip, not from cross-validation.
+- Per subject (175 subjects, Euclidean, minus a baseline with each run's brain windows circularly shifted by half the run): sp_J 0.0051 for own A and V (positive in 63% of subjects; one-sample t = 3.9 on the subjects' cortex means), 0.0167 mae, 0.0093 text-asr. The group-average value for own A and V is -0.011.
+- These are descriptive values without a null distribution; group-average RSA maps are positive almost everywhere, so magnitudes need a baseline (for example the circular-shift null of `perm_searchlight.py`) before they are interpreted.
+
 ## Method
 
 ### Binning and normalization
@@ -19,6 +39,23 @@ The searchlight at vertex `v` uses the `k` geodesically nearest vertices on the 
 `glasser.py` uses all vertices of a parcel instead of a neighborhood (parcels with fewer than 2 vertices are skipped) and also supports `rho_a` (Kendall's tau).
 
 `searchlight.py` additionally writes `sign(rho) * -log10(p)` maps, with one-tailed `p` from `t = rho * sqrt(df) / sqrt(1 - rho^2)`, `df = n - 2`, treating windows as independent, and Benjamini-Hochberg false-discovery-rate (BH-FDR) corrected versions at q = 0.05. These are descriptive; use the tests below for inference.
+
+### Euclidean and Mahalanobis RDMs, semi-partial and partial RSA
+
+`rdm_searchlight.py` computes group-average searchlight RSA with one of two brain RDMs, each run separately:
+
+- `--distance euclidean`: `d(i, j) = ||x_i - x_j||^2`.
+- `--distance mahalanobis`: `d(i, j) = (x_i - x_j)' P (x_i - x_j)`, with `P` the inverse noise covariance of the searchlight (Walther et al. 2016). The noise is estimated from the clip shown at the end of every run (16 windows, 4 presentations): each presentation's window patterns minus their mean over the four presentations, 48 degrees of freedom. The covariance is shrunk towards its diagonal with the optimal weight of Schäfer & Strimmer (2005), as rsatoolbox's `shrinkage_diag` estimator does. Each window is measured once, so the distance is not cross-validated.
+
+Model RDMs are the Euclidean distances between the per-run-centered embedding windows; embeddings have no measurement noise to normalize or cross-validate. Correlation distance (`1 - r`) is not used: it subtracts each window pattern's mean across the searchlight, which removes responses in which the whole neighborhood rises or falls together. Walther et al. (2016) found noise normalization to improve every dissimilarity measure and the cross-validated Mahalanobis distance preferable to the correlation distance.
+
+For each audio (A), video (V) and joint (J) model RDM, the script writes:
+
+- `rho_x`: Spearman correlation of the brain RDM with the x RDM.
+- `sp_x`: Spearman correlation of the brain RDM with the residual of the x RDM after least-squares regression, with intercept, on the other two model RDMs (Tong et al. 2022). Only the model RDM is residualized.
+- `partial_x`: partial Spearman correlation given the other two model RDMs (Clarke & Tyler 2014): all RDMs are ranked, the brain and x ranks are both residualized on the other two, and the residuals are correlated.
+
+`sp_x` and `partial_x` share the same numerator. The partial correlation divides by what the other two leave unexplained in the brain RDM, so it is the larger of the two in magnitude. `--distance crossnobis` restricts the RDM to the windows of the repeated clip and cross-validates the noise-normalized distance across its four presentations, `d(i, j) = mean over m != m' of (x_i^m - x_j^m)' P (x_i^m' - x_j^m')` (Walther et al. 2016); model RDMs are then the Euclidean distances between the clip windows' embeddings averaged over presentations. With `--subjects-list` and `--subject-cache` (binned, per-run z-scored responses of each subject, as cached by `cka/analysis.sh noise-ceiling`), the Euclidean maps are computed per subject on the GPU and written as `{OUTPUT_DIR}/subject_data/{subject}/{model}_euclidean_{pair}_{map}/{config}/..._searchlight.npy`, with `--n-blocks` within-block maps for `group_stats.py` and `--shift` for the half-run circular-shift baseline. `--comparator kendall` with `--distance cosine` gives Kendall tau-b maps of `1 - cosine` RDMs instead, without semi-partial or partial maps.
 
 ### Group statistics
 
@@ -125,6 +162,7 @@ file stem            rsa_59k_{tag}_{searchlight config}
 | `group_average/{model}_{modality}/{searchlight config}/{stem}_searchlight.npy` | `(59412,)` `rho`; beside it `{stem}_fdr_mask.dscalar.nii`, `{stem}_fdr_{lh,rh}.border` (skipped if the mask is empty or covers over 90% of cortex) and `{stem}_perm{N}_p.npy` (`RUN_PERM=true`) |
 | `group_average/{model}_{modality}/{glasser config}/ranked_report.csv` | Columns `parcel, r, p, n_vertices, rank` |
 | `subject_data/{subject}/{model}_{modality}/` | Same layout per subject; block maps (`n_blocks > 1`) are `{stem}_searchlight_nblocks{N}.npy`, shape `(N, 59412)` |
+| `groupstats/{model}/rsa_59k_raw_{config}_euclidean_spearman_center_{pair}[_minus_shifted]_{models,semipartial,partial}.dscalar.nii` | `rdm_groupstats.py`: per map `x`, `x_mean, x_t, x_sigmap_uncorr, x_sigmap_fdr, x_fdr_mask` and, where TFCE was run, `x_tfce, x_sigmap_tfce_fwe, x_tfce_fwe_mask`; beside it `..._summary.json`, `..._{kind}_{fdr,tfce}_{lh,rh}.border` (one border per map) and `..._{kind}_tfce_null.npz` |
 | `groupstats/{model}_{modality}/{searchlight config}/group_stats_{S}subs[_nblocks{N}].dscalar.nii` | Maps `mean_rho, t_stat, sigmap_uncorr, sigmap_fdr` (plus `mean_rho_c2f, t_c2f, sigmap_c2f` with block maps); beside it FDR masks, borders and `summary.json` |
 | `noise_ceiling/noise_ceiling_{N}subs_k{K}_delay{D}s_bin{B}s_skip{S}s_{method}.dscalar.nii` | Maps `nc_lower`, `nc_upper` |
 
@@ -151,6 +189,27 @@ python rsa/searchlight.py \
 Input is either `--preprocessed-dir` with `--fmri-suffix` (disk) or `--raw-dir` with `--sg-filter`, `--psc`, `--gsr`/`--no-gsr` (streaming); the two are mutually exclusive. `--n-blocks` defaults to 4 (1 disables blocks). `glasser.py` takes the same input, timing, delay, binning and `--model-norm` flags plus `--glasser-dlabel`.
 
 Two options give diagnostic variants of the group-average map for comparison with CKA and encoding. Either one (disk mode only) makes the run write a single map, `{OUTPUT_DIR}/group_average/{model}_{modality}/diagnostics/rsa_59k_{tag}_k{K}_delay{D}s_bin{B}s_skip{S}s_{label}_{model_norm}[_norepeats]_maps.dscalar.nii`, and nothing else. `--distance euclidean` replaces the correlation distance by squared Euclidean distance in both RDMs (label `euclid-{method}`; `corr-{method}` by default). `--drop-repeated-clips` drops the windows of `video5`, `video9`, `video14` and `video18` (the clips shown once per run) after per-run normalization and adds `_norepeats` to the name.
+
+### Euclidean and Mahalanobis RSA
+
+```bash
+python rsa/rdm_searchlight.py --distance euclidean \
+    --preprocessed-dir data/preprocessed/average_sub/raw --timing-csv data/movie_timing.csv \
+    --embeddings-dir outputs/model_embeddings --template-cifti <template> \
+    --left-surface <L> --right-surface <R> --workbench <wb_command> \
+    --geodesic-cache-dir outputs/rsa/_geodesic_cache --output-dir outputs/rsa/raw \
+    --models pe-av-small-16-frame --controls own mae text-asr --k 100
+```
+
+`--distance mahalanobis` gives the noise-normalized version. `--controls` takes `own` (the model's own A and V) and the control-pair names of `CONTROL_SETS`, the same pairs as encoding and CKA. Outputs, per model and pair, in `{OUTPUT_DIR}/group_average/{model}/`: `rsa_59k_raw_k{K}_delay{D}s_bin{B}s_skip{S}s_{distance}_spearman_center_{pair}_{models,semipartial,partial}.dscalar.nii` (maps `rho_*`, `sp_*`, `partial_*`) and `..._provenance.json` with the definitions and the rank correlations among the three model RDMs. `own` is written as `unimodal_own`.
+
+```bash
+python rsa/rdm_groupstats.py --output-dir outputs/rsa/raw --subjects-list data/subjects.txt \
+    --template-cifti <template> --left-surface <L> --right-surface <R> --workbench <wb_command>
+python rsa/rdm_groupstats.py <same flags> --tags unimodal_own --baselines aligned --tfce rho_j sp_j --n-permutations 1000
+```
+
+`rdm_groupstats.py` tests the per-subject Euclidean maps of `rdm_searchlight.py --subjects-list` over subjects, for each pair (`--tags`, default `unimodal_own mae text-asr`) and baseline (`aligned`, the subject maps; `minus_shifted`, each subject map minus its `--shift` map). It writes one file per kind, as the group-average maps: the mean over subjects, the one-sample t against 0, `sign(mean) * -log10 p` for the one-tailed p uncorrected and BH-FDR corrected, the FDR mask, and for the maps in `--tfce` the TFCE statistic of the Fisher-z maps with its family-wise sigmap and mask (`tfce_groupstats.tfce_test`). TFCE maps already in a file are kept when not recomputed.
 
 ### Permutation, spin and group tests
 
@@ -294,6 +353,14 @@ Outputs in `--output-dir`: `{seed}_av.csv` and `{seed}_av_rho.npy` per seed (col
 pytest tests/test_rsa.py tests/test_model_norm.py tests/test_sheet_rsa.py tests/test_perm_searchlight.py \
        tests/test_max_uni.py tests/test_av_derived_maps.py tests/test_residualized_maps.py \
        tests/test_av_scramble_permutation_inference.py tests/test_paired_bootstrap_resampling.py \
-       tests/test_channel_class_rsa.py tests/test_channel_subset_searchlight.py
+       tests/test_channel_class_rsa.py tests/test_channel_subset_searchlight.py tests/test_rdm_searchlight.py
 python rsa/shared/residuals.py; python rsa/localizer_naming.py; python rsa/spatial_stats.py; python rsa/full_sheet_rsa.py --demo   # self-checks
 ```
+
+## References
+
+- Clarke, A., & Tyler, L. K. (2014). Object-specific semantic coding in human perirhinal cortex. *Journal of Neuroscience*, 34(14), 4766-4775.
+- Schäfer, J., & Strimmer, K. (2005). A shrinkage approach to large-scale covariance matrix estimation and implications for functional genomics. *Statistical Applications in Genetics and Molecular Biology*, 4(1), 32.
+- Schütt, H. H., Kipnis, A. D., Diedrichsen, J., & Kriegeskorte, N. (2023). Statistical inference on representational geometries. *eLife*, 12, e82566.
+- Tong, J., Binder, J. R., Humphries, C., Mazurchuk, S., Conant, L. L., & Fernandino, L. (2022). A distributed network for multimodal experiential representation of concepts. *Journal of Neuroscience*, 42(37), 7121-7130.
+- Walther, A., Nili, H., Ejaz, N., Alink, A., Kriegeskorte, N., & Diedrichsen, J. (2016). Reliability of dissimilarity measures for multi-voxel pattern analysis. *NeuroImage*, 137, 188-200.

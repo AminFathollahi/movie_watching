@@ -445,6 +445,24 @@ def _patch_fdr_maps(
 # Main
 # =============================================================================
 
+def tfce_test(Z, adj_lh, adj_rh, n_permutations, n_jobs, alpha, min_cluster_size):
+    """TFCE (start 0, step 0.2) of the one-sample t of Z over subjects with sign-flip permutations, one-tailed for
+    mean > 0. Returns the TFCE statistic (float64: float32 rounding can flip vertices at the threshold), the null of the
+    maximum TFCE, the FWE threshold at alpha and the mask of supra-threshold clusters of at least min_cluster_size."""
+    n_left = adj_lh.shape[0]
+    tfce_stat, _, _, h0 = permutation_cluster_1samp_test(
+        Z, threshold=dict(start=0, step=0.2), n_permutations=n_permutations,
+        adjacency=sp_block_diag([adj_lh, adj_rh], format="coo"), tail=1, n_jobs=n_jobs, seed=42,
+        out_type="indices", verbose=False)
+    tfce_stat = np.asarray(tfce_stat, dtype=np.float64)
+    h0 = np.asarray(h0, dtype=np.float64)
+    # h0 is empty when no vertex had t > 0
+    thresh = float(np.percentile(h0, 100.0 * (1.0 - alpha))) if len(h0) else np.inf
+    mask = np.concatenate([_filter_clusters(tfce_stat[:n_left] >= thresh, adj_lh, min_cluster_size),
+                           _filter_clusters(tfce_stat[n_left:] >= thresh, adj_rh, min_cluster_size)])
+    return tfce_stat, h0, thresh, mask
+
+
 def main():
     args = parse_args()
 
@@ -572,61 +590,22 @@ def main():
     adj_rh = _surface_adjacency(faces_rh, right_indices, n_grays - n_left)
     log.info("  Adjacency built.")
 
-    # Block-diagonal adjacency spanning both hemispheres
-    adj_combined = sp_block_diag([adj_lh, adj_rh], format="coo")
-
-    # ── TFCE permutation test ─────────────────────────────────────────────────
-    # Sign-flipping permutations; TFCE via threshold=dict(start,step).
-    # tail=1: one-tailed test for ρ > 0; H0 = max TFCE per permutation.
     log.info(
         f"Running TFCE permutation test: n_permutations={args.n_permutations}, "
         f"n_jobs={args.n_jobs}  (runtime: 1–4 h for 59k verts)"
     )
-    tfce_stat, _, _, h0 = permutation_cluster_1samp_test(
-        Z,
-        threshold=dict(start=0, step=0.2),
-        n_permutations=args.n_permutations,
-        adjacency=adj_combined,
-        tail=1,
-        n_jobs=args.n_jobs,
-        seed=42,
-        out_type="indices",
-        verbose=False,
-    )
-    # Keep float64 for the threshold comparison — float32 quantization can
-    # flip borderline vertices across the threshold (demonstrated: a vertex
-    # 1e-10 above the threshold in float64 rounds below it in float32).
-    tfce_stat_f64 = np.asarray(tfce_stat, dtype=np.float64)
-    h0            = np.asarray(h0,        dtype=np.float64)
+    tfce_stat_f64, h0, tfce_thresh, tfce_fwe_mask = tfce_test(
+        Z, adj_lh, adj_rh, args.n_permutations, args.n_jobs, args.alpha, args.min_cluster_size)
     n_perms_actual = len(h0)
+    cm_lh, cm_rh = tfce_fwe_mask[:n_left], tfce_fwe_mask[n_left:]
 
     # Save null distribution so the patch path can compute sigmap_tfce_fwe later
     h0_path = out_dir / f"group_stats_{n_subs}subs_h0_null.npy"
     np.save(str(h0_path), h0)
     log.info(f"Saved TFCE null distribution: {h0_path.name}")
-
-    # FWE threshold: 95th percentile of the null max-TFCE distribution.
-    # h0 is empty when no vertex had t > 0 (i.e. no positive ρ anywhere).
-    if len(h0) == 0:
-        log.warning("TFCE null distribution is empty — no positive t-values found. "
-                    "Setting threshold to inf; no vertices will be significant.")
-        tfce_thresh = np.inf
-    else:
-        tfce_thresh = float(np.percentile(h0, 100.0 * (1.0 - args.alpha)))
     log.info(f"TFCE FWE threshold (p<{args.alpha}): {tfce_thresh:.4f}")
-
-    # Significance mask computed in float64, then convert stat to float32 for saving
     n_sig_tfce = int((tfce_stat_f64 >= tfce_thresh).sum())
     log.info(f"TFCE-FWE significant vertices: {n_sig_tfce:,} / {n_grays:,}")
-
-    # ── Cluster mask: filter out small clusters ───────────────────────────────
-    sig_lh_tfce = tfce_stat_f64[:n_left] >= tfce_thresh
-    sig_rh_tfce = tfce_stat_f64[n_left:] >= tfce_thresh
-
-    cm_lh = _filter_clusters(sig_lh_tfce, adj_lh, args.min_cluster_size)
-    cm_rh = _filter_clusters(sig_rh_tfce, adj_rh, args.min_cluster_size)
-
-    tfce_fwe_mask = np.concatenate([cm_lh, cm_rh])
 
     # Float32 for storage (CIFTI maps)
     tfce_stat = tfce_stat_f64.astype(np.float32)

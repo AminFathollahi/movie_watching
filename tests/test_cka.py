@@ -122,11 +122,13 @@ def test_pool_gives_mean_standard_error_and_fractions():
 
     values = np.random.default_rng(1).uniform(0, 0.2, (12, 3, 5))
     out = pool(values, ["cka_a", "cka_v", "cka_j"])
-    assert list(out[""]) == ["mean_cka_a", "mean_cka_v", "mean_cka_j", "frac_j_gt_a", "frac_j_gt_v"]
-    np.testing.assert_allclose(out[""]["mean_cka_v"], values[:, 1].mean(0))
-    np.testing.assert_allclose(out["_sem"]["sem_cka_j"], values[:, 2].std(0, ddof=1) / np.sqrt(12))
-    np.testing.assert_allclose(out[""]["frac_j_gt_a"], (values[:, 2] > values[:, 0]).sum(0) / 12)
-    assert list(pool(values, ["sp_a", "sp_v", "sp_j"])[""]) == ["mean_sp_a", "mean_sp_v", "mean_sp_j"]
+    assert list(out) == ["mean_cka_a", "mean_cka_v", "mean_cka_j", "sem_cka_a", "sem_cka_v", "sem_cka_j",
+                         "frac_j_gt_a", "frac_j_gt_v"]
+    np.testing.assert_allclose(out["mean_cka_v"], values[:, 1].mean(0))
+    np.testing.assert_allclose(out["sem_cka_j"], values[:, 2].std(0, ddof=1) / np.sqrt(12))
+    np.testing.assert_allclose(out["frac_j_gt_a"], (values[:, 2] > values[:, 0]).sum(0) / 12)
+    assert list(pool(values, ["sp_a", "sp_v", "sp_j"])) == ["mean_sp_a", "mean_sp_v", "mean_sp_j",
+                                                            "sem_sp_a", "sem_sp_v", "sem_sp_j"]
 
 
 def test_noise_ceiling_matches_brute_force():

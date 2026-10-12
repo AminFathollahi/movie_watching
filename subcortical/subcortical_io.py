@@ -394,6 +394,26 @@ def get_cerebellum_neighbors(hem: str, world_xyz: np.ndarray, voxel_ijk: np.ndar
         return neighbors, "geodesic"
 
 
+def structure_neighbors(structure: str, info: dict, k: int, cache_dir: Path, workbench: str) -> tuple[np.ndarray, str]:
+    """(n_voxels, k) neighbors of one structure, local to it, and the neighbor mode used."""
+    if structure.startswith("CEREBELLUM_"):
+        return get_cerebellum_neighbors(structure.split("_")[1], info["world_xyz"], info["voxel_ijk"], k,
+                                        cache_dir, workbench)
+    mode = STRUCTURE_NEIGHBOR_MODE[structure]
+    cache_path = Path(cache_dir) / f"{structure}_neighbors_k{k}_{mode}.npy"
+    return build_neighbors(info["voxel_ijk"], info["world_xyz"], k, mode, cache_path), mode
+
+
+def neighbor_columns(slices: dict, k: int, cache_dir: Path, workbench: str) -> np.ndarray:
+    """(n_voxels, k) neighbors of every voxel as columns of the full subcortical array; neighborhoods stay within
+    the voxel's structure."""
+    order = sorted(slices, key=lambda s: slices[s]["start"])
+    assert slices[order[0]]["start"] == 0 and all(
+        slices[a]["stop"] == slices[b]["start"] for a, b in zip(order, order[1:])), "structures are not contiguous"
+    return np.concatenate([structure_neighbors(s, slices[s], k, cache_dir, workbench)[0] + slices[s]["start"]
+                           for s in order]).astype(np.int32)
+
+
 # =============================================================================
 # Nucleus coordinate masks
 # =============================================================================

@@ -29,11 +29,8 @@ computed once per vertex, ranked once, then re-indexed for every null.
 Empirical one-tailed p-value (right tail):
     p_perm[v] = (count(null_rho[v,:] >= actual_rho[v]) + 1) / (n_perm + 1)
 
-Outputs saved to the same config directory as searchlight.py:
-  {config}/rsa_59k_{tag}_..._perm{N}_p.npy     — (n_verts,) p-values
-  Combined CIFTI maps (appended to --combined-output):
-    searchlight_{method}_sigmap_perm            — sign × -log10(p_perm)
-    searchlight_{method}_sigmap_perm_fdr        — BH-FDR corrected
+Output: map rho_x_sigmap_perm = sign(rho) × -log10(p_perm) (rho_j for av), added to
+the group-average file of searchlight.py, {model}/{stem}_joint_only_models.dscalar.nii.
 
 Usage
 -----
@@ -68,7 +65,9 @@ from rsa.shared.rsa_utils import (
     align_and_assert_bins,
     get_run_bin_counts,
 )
-from rsa.shared.naming import add_model_norm_arg, searchlight_config, searchlight_stem
+from rsa.shared.naming import (
+    add_model_norm_arg, rsa_method, searchlight_config, searchlight_path, searchlight_stem, single_model,
+)
 from rsa.searchlight import (
     get_neighbors,
     _precompute_model_rdm,
@@ -156,9 +155,6 @@ def parse_args():
     p.add_argument("--tr",             type=float, required=True)
     add_model_norm_arg(p)
     p.add_argument("--geodesic-cache-dir", default=None, dest="geodesic_cache_dir")
-    p.add_argument("--combined-output",    default=None, dest="combined_output",
-                   help="Combined .dscalar.nii to append sigmap_perm maps to "
-                        "(same file used by searchlight.py).")
     p.add_argument("--gpu-batch-size",  type=int, default=256, dest="gpu_batch_size",
                    help="Vertices per GPU batch. Lower than searchlight.py default "
                         "because permutation stores (B, n_pairs) brain norm on GPU.")
@@ -686,25 +682,16 @@ def main():
     bin_sec_int = int(args.bin_sec)
     skip_int    = int(args.skip_sec)
     config      = searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec,
-                                     args.method, args.model_norm)
+                                     rsa_method(args.method), args.model_norm)
     n_perm      = args.n_perm
 
-    out_root = (Path(args.output_dir) / args.subject
-                / f"{args.model}_{args.modality}" / config)
-    out_root.mkdir(parents=True, exist_ok=True)
-
-    stem          = searchlight_stem(args.fmri_suffix, args.k, args.delay_sec, args.bin_sec,
-                                     args.skip_sec, args.method, args.model_norm)
-    perm_p_path   = out_root / f"{stem}_perm{n_perm}_p.npy"
-    combined_path = Path(args.combined_output) if args.combined_output else None
-    map_perm      = f"searchlight_{args.method}_sigmap_perm"
-
-    # Skip if already complete
-    if perm_p_path.exists():
-        if combined_path is None or (combined_path.exists() and
-                                     map_perm in get_combined_map_names(str(combined_path))):
-            log.info("Permutation results already complete — skipping.")
-            return
+    stem     = searchlight_stem(args.fmri_suffix, args.k, args.delay_sec, args.bin_sec,
+                                args.skip_sec, rsa_method(args.method), args.model_norm)
+    out_path = searchlight_path(Path(args.output_dir) / args.subject, args.model, args.modality, stem)
+    map_perm = f"{single_model(args.modality)[1]}_sigmap_perm"
+    if map_perm in get_combined_map_names(out_path):
+        log.info("Permutation results already complete — skipping.")
+        return
 
     # ── Load fMRI and model data ──────────────────────────────────────────────
     cifti_path = (Path(args.preprocessed_dir) /
@@ -793,10 +780,6 @@ def main():
         del neighbors, vertex_to_col, rho_hem, p_hem
         gc.collect()
 
-    # ── Save raw p-values ─────────────────────────────────────────────────────
-    np.save(str(perm_p_path), p_full)
-    log.info(f"Saved p-values: {perm_p_path.name}")
-
     # ── Significance map: sign(rho) * -log10(p) ──────────────────────────────
     eps         = np.finfo(np.float32).tiny
     sigmap_perm = (np.sign(rho_full) *
@@ -805,19 +788,9 @@ def main():
     n_sig = int((p_full < 0.05).sum())
     log.info(f"n_sig p<0.05: {n_sig:,} / {n_total:,}")
 
-    # ── Append sigmap_perm to combined CIFTI ─────────────────────────────────
-    if combined_path is not None:
-        combined_path.parent.mkdir(parents=True, exist_ok=True)
-        existing = get_combined_map_names(str(combined_path))
-        if map_perm not in existing:
-            merge_into_combined(sigmap_perm, map_perm,
-                                str(combined_path), args.template_cifti)
-            log.info(f"Added CIFTI map: {map_perm}")
-    else:
-        from cifti_io import save_cifti_map
-        maps_path = out_root / f"{stem}_perm{n_perm}_sigmap.dscalar.nii"
-        save_cifti_map(sigmap_perm, args.template_cifti, str(maps_path), map_perm)
-        log.info(f"Saved significance map: {maps_path.name}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    merge_into_combined(sigmap_perm, map_perm, str(out_path), args.template_cifti)
+    log.info(f"Added CIFTI map {map_perm} to {out_path.name}")
 
     log.info("Done.")
 

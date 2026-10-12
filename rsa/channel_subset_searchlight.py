@@ -7,8 +7,9 @@ row order matches this embedding file's column order — see
 standalone embedding file, then calls ``searchlight.py`` unchanged as the
 RSA engine. Same fMRI/searchlight configuration as the primary group-average
 AV run in ``rsa/analysis.sh`` (k=100, bin5s/skip5s, delay5s, spearman,
-raw preprocessing), so the output map is directly comparable to
-``rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_maps.dscalar.nii``.
+raw preprocessing), so the output map (rho_j of
+``{output-dir}/group_average/{subset model}/rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_center_joint_only_models.dscalar.nii``)
+is directly comparable to the full embedding's.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from paths import DATA, EXTERNAL, OUTPUTS  # noqa: E402
+from rsa.shared.naming import DEFAULT_MODEL_NORM, rsa_method, searchlight_path, searchlight_stem  # noqa: E402
 
 MODEL = "pe-av-small-16-frame"
 FULL_EMBEDDING = (
@@ -93,10 +95,6 @@ def run(args: argparse.Namespace) -> Path:
     print(f"Channel subset: cluster {CLUSTER_ID} of {REDUCER_TAG}/{CLUSTER_TAG} -> "
           f"{n_channels} channels, embedding saved to {subset_path}")
 
-    combined_output = (
-        Path(args.output_dir)
-        / f"rsa_59k_{REDUCER_TAG}_{CLUSTER_TAG}_cluster{CLUSTER_ID}.dscalar.nii"
-    )
     cmd = [
         sys.executable, str(ROOT / "rsa" / "searchlight.py"),
         "--preprocessed-dir", PREPROCESSED_DIR,
@@ -118,12 +116,12 @@ def run(args: argparse.Namespace) -> Path:
         "--right-surface", RIGHT_SURFACE,
         "--workbench", WORKBENCH,
         "--geodesic-cache-dir", GEODESIC_CACHE_DIR,
-        "--combined-output", str(combined_output),
         "--gpu-batch-size", str(args.gpu_batch_size),
         "--n-blocks", "1",
     ]
     subprocess.run(cmd, check=True)
-    return combined_output
+    return searchlight_path(Path(args.output_dir) / "group_average", SUBSET_MODEL_NAME, "av",
+                            searchlight_stem("raw", K, DELAY_SEC, BIN_SEC, SKIP_SEC, rsa_method(METHOD), DEFAULT_MODEL_NORM))
 
 
 def main(argv=None) -> None:

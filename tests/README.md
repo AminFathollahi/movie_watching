@@ -17,7 +17,7 @@ python -m pytest tests
 | `test_measure_comparison.py` | Homogeneity, ring bins and map paths of the measure comparison |
 | `test_rsa.py` | RDM construction and comparison, response binning |
 | `test_model_norm.py` | Per-run embedding normalization and its naming |
-| `test_searchlight_distance.py` | Searchlight RDM kernels against direct computation |
+| `test_searchlight_distance.py` | Correlation-distance searchlight kernels against direct computation |
 | `test_perm_searchlight.py` | Shared permutation of the paired null |
 | `test_channel_subset_searchlight.py` | Channel-subset column selection |
 | `test_sheet_rsa.py` | Cortical-sheet tower geometry and neighbors |
@@ -27,7 +27,6 @@ python -m pytest tests
 | `test_av_scramble_permutation_inference.py` | Scramble permutation inference: signed maps, FDR, max statistic |
 | `test_paired_bootstrap_resampling.py` | Paired block bootstrap |
 | `test_av_pairing.py` | Crossed-pair interaction contrast and fold-confined pairing |
-| `test_channel_class_rsa.py` | Input validation of `rsa/channel_class_rsa.py` |
 | `test_cf_math.py` | Connective-field ridge utilities |
 | `test_lboe_naming.py` | Eigenfunction-count naming |
 | `test_roi_mean_raw_connectivity.py` | ROI-mean correlation maps |

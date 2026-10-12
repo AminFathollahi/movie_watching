@@ -27,14 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cifti_io import get_bm_axis, get_cortex_vertex_indices, save_cifti_multimap
 from rsa.group_stats import _filter_clusters, _load_surface, _surface_adjacency, one_sample
-from rsa.rdm_searchlight import OWN_TAG, subject_config, subject_map_path
+from rsa.rdm_searchlight import KINDS, OWN_TAG, subject_config, subject_map_path
 from rsa.tfce_groupstats import _compute_tfce_sigmap, tfce_test
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-KINDS = {"models": ["rho_a", "rho_v", "rho_j"], "semipartial": ["sp_a", "sp_v", "sp_j"],
-         "partial": ["partial_a", "partial_v", "partial_j"]}
 BASELINES = {"aligned": "", "minus_shifted": "_minus_shifted"}
 STATS = ["mean", "t", "sigmap_uncorr", "sigmap_fdr", "fdr_mask"]
 TFCE_STATS = ["tfce", "sigmap_tfce_fwe", "tfce_fwe_mask"]
@@ -95,7 +93,6 @@ def main():
     args = parse_args()
     skip_sec = args.skip_sec if args.skip_sec is not None else args.bin_sec
     cfg = subject_config(args.k, args.delay_sec, args.bin_sec, skip_sec, args.model_norm)
-    group_cfg = cfg.replace("_spearman_", "_euclidean_spearman_")
     from preprocess_individual import load_subjects
     subjects = load_subjects(args.subjects_list)
 
@@ -111,13 +108,19 @@ def main():
     directory = Path(args.output_dir) / "groupstats" / args.model
     directory.mkdir(parents=True, exist_ok=True)
 
-    def stack(tag, name, shifted):
-        return np.stack([np.load(subject_map_path(args.output_dir, s, args.model, tag, name, cfg, args.fmri_suffix,
-                                                  shifted)) for s in subjects]).astype(np.float32)
+    def stack(tag, kind, shifted):
+        """(maps of the kind, subjects, grayordinates)."""
+        out = []
+        for s in subjects:
+            image = nib.load(str(subject_map_path(args.output_dir, s, args.model, tag, kind, cfg, args.fmri_suffix,
+                                                  shifted)))
+            assert list(image.header.get_axis(0).name[:3]) == KINDS[kind], (s, kind)
+            out.append(np.asarray(image.dataobj[:3], dtype=np.float32))
+        return np.ascontiguousarray(np.stack(out, axis=1))
 
     for tag in args.tags:
         for baseline in args.baselines:
-            stem = directory / f"rsa_59k_{args.fmri_suffix}_{group_cfg}_{tag}{BASELINES[baseline]}"
+            stem = directory / f"rsa_59k_{args.fmri_suffix}_{cfg}_{tag}{BASELINES[baseline]}"
             summary_path = Path(f"{stem}_summary.json")
             summary = json.loads(summary_path.read_text())["maps"] if summary_path.exists() else {}
             for kind, names in KINDS.items():
@@ -125,12 +128,12 @@ def main():
                 old = {}
                 if path.exists():
                     image = nib.load(str(path))
-                    old = dict(zip(image.header.get_axis(0).name, image.get_fdata(dtype=np.float32)))
+                    old = dict(zip(image.header.get_axis(0).name, np.array(image.get_fdata(dtype=np.float32))))
                 maps, fdr, tfce, nulls = {}, {}, {}, {}
-                for name in names:
-                    x = stack(tag, name, False)
-                    if baseline == "minus_shifted":
-                        x = x - stack(tag, name, True)
+                subject_maps = stack(tag, kind, False)
+                if baseline == "minus_shifted":
+                    subject_maps = subject_maps - stack(tag, kind, True)
+                for name, x in zip(names, subject_maps):
                     stats, _ = one_sample(x, args.alpha)
                     maps.update({f"{name}_{k}": stats[k] for k in STATS})
                     fdr[name] = stats["fdr_mask"]
@@ -164,7 +167,7 @@ def main():
                         write_borders(masks, f"{stem}_{kind}_{test}", hemis, args.min_cluster_size, args.workbench)
                 log.info(f"Saved {path.name}")
             summary_path.write_text(json.dumps({
-                "model": args.model, "tag": tag, "baseline": baseline, "config": group_cfg,
+                "model": args.model, "tag": tag, "baseline": baseline, "config": cfg,
                 "n_subjects": len(subjects), "subjects": subjects, "alpha": args.alpha,
                 "min_cluster_size": args.min_cluster_size, "maps": summary,
                 "t": "one-sample t over subjects against 0 of the subject maps (Spearman correlations, no Fisher z)",

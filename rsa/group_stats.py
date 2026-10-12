@@ -21,7 +21,7 @@ subject t-test (existing, always run):
 
 corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5; added as extra maps):
     Generalizes to new *subjects AND movie segments* simultaneously.
-    Requires --n-blocks > 1 and per-subject block .npy files from
+    Requires --n-blocks > 1 and per-subject block maps from
     searchlight.py --n-blocks. Uses non-overlapping temporal blocks as
     a proxy for condition resampling (adapted for naturalistic paradigms
     where full per-bin RDM resampling is not feasible).
@@ -63,8 +63,8 @@ from cifti_io import (
     save_cifti_map,
     save_cifti_multimap,
 )
-from rsa.shared.naming import add_model_norm_arg, method_label
-from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap
+from rsa.shared.naming import add_model_norm_arg, method_label, single_model
+from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap, load_subject_maps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,9 +87,10 @@ def parse_args():
     p.add_argument("--model",            required=True)
     p.add_argument("--modality",         required=True, choices=["v", "a", "av", "at", "vt", "avt", "t"])
     p.add_argument("--analysis-label",   default=None, dest="analysis_label",
-                   help="Override the per-subject directory/groupstats label. "
-                        "Used for derived analyses such as partial RSA; ordinary "
-                        "RSA defaults to {model}_{modality}.")
+                   help="Groupstats label and per-subject folder of .npy maps in "
+                        "{label}/{config}/ (partial_rsa.py). Without it, the "
+                        "searchlight.py files {model}/{stem}_joint_only_models.dscalar.nii "
+                        "are read and the label is {model}_{modality}.")
     p.add_argument("--k",                type=int, required=True)
     p.add_argument("--bin-sec",          type=float, required=True)
     p.add_argument("--skip-sec",         type=float, default=None, dest="skip_sec",
@@ -102,6 +103,11 @@ def parse_args():
     p.add_argument("--fname-prefix",     default="rsa_59k", dest="fname_prefix",
                    help="Per-subject searchlight filename prefix (default rsa_59k; "
                         "use rsa_subcortical for the subcortical pipeline).")
+    p.add_argument("--config",           default=None,
+                   help="Configuration folder of per-subject .npy maps when it differs from "
+                        "k{K}_delay{D}s_bin{B}s_skip{S}s_{rdm}_{method}_{model_norm} "
+                        "(subcortical_rsa.py: ..._pearson_spearman). Given this or "
+                        "--analysis-label, .npy maps in {label}/{config}/ are read.")
     p.add_argument("--template-cifti",   required=True,
                    help="59k CIFTI whose BrainModelAxis defines grayordinate space.")
     p.add_argument("--left-surface",     required=True,
@@ -115,8 +121,8 @@ def parse_args():
     p.add_argument("--min-cluster-size", type=int, default=10,
                    help="Minimum vertices to form a valid ROI contour in the border file.")
     p.add_argument("--n-blocks",         type=int, default=4, dest="n_blocks",
-                   help="Number of temporal blocks expected in per-subject block .npy files "
-                        "(from searchlight.py --n-blocks). Set to 1 to skip 2-factor bootstrap.")
+                   help="Number of temporal blocks for the corrected 2-factor bootstrap (block maps of "
+                        "searchlight.py --n-blocks N, N a multiple). Set to 1 to skip it.")
     p.add_argument("--n-bootstrap",      type=int, default=2000, dest="n_bootstrap",
                    help="Bootstrap iterations for the corrected 2-factor variance estimate "
                         "(Schütt et al. 2023, Eq. 5).")
@@ -246,6 +252,20 @@ def one_sample(stack: np.ndarray, alpha: float) -> tuple[dict, np.ndarray]:
 # Main
 # =============================================================================
 
+def _load_npy(files, n_blocks):
+    """Per-subject .npy maps of partial_rsa.py and subcortical_rsa.py, with blocks from `_nblocks{N}.npy` beside them
+    (averaged down from a larger multiple of n_blocks when needed)."""
+    rho_stack = np.stack([np.load(str(f)).astype(np.float32) for f in files])
+    if n_blocks <= 1:
+        return rho_stack, None
+    for n_file in sorted({int(m.group(1)) for f in files for g in f.parent.glob("*_nblocks*.npy")
+                          for m in [re.search(r"_nblocks(\d+)\.npy$", g.name)] if m}):
+        blocks = [f.with_name(f.name.replace("_searchlight.npy", f"_searchlight_nblocks{n_file}.npy")) for f in files]
+        if n_file % n_blocks == 0 and all(b.exists() for b in blocks):
+            return rho_stack, aggregate_blocks(np.stack([np.load(str(b)).astype(np.float32) for b in blocks]), n_blocks)
+    return rho_stack, None
+
+
 def main():
     args = parse_args()
 
@@ -255,39 +275,28 @@ def main():
     skip_int     = int(args.skip_sec)
     delay_tag    = f"delay{int(args.delay_sec)}s"
     method       = method_label(args.method, args.model_norm)
-    config       = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{method}"
+    config       = args.config or f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{method}"
 
     analysis_label = args.analysis_label or f"{args.model}_{args.modality}"
     out_dir = Path(args.output_dir) / "groupstats" / analysis_label / config
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    subject_data = Path(args.output_dir) / "subject_data"
+    npy = args.method == "rho_a" or args.analysis_label or args.config
     if args.method == "rho_a":
-        fname_pattern = (f"crossnobis_rho_a_k{args.k}_{delay_tag}"
-                         f"_bin{bin_sec_int}s_skip{skip_int}s.npy")
+        pattern = f"*/{analysis_label}/{config}/crossnobis_rho_a_k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s.npy"
+    elif npy:
+        pattern = f"*/{analysis_label}/{config}/{args.fname_prefix}_{args.fmri_tag}_{config}_searchlight.npy"
     else:
-        fname_pattern = (f"{args.fname_prefix}_{args.fmri_tag}_k{args.k}_{delay_tag}"
-                         f"_bin{bin_sec_int}s_skip{skip_int}s_{method}_searchlight.npy")
-
-    model_mod_dir = analysis_label
-    subject_rho_files = sorted(
-        Path(args.output_dir).glob(
-            f"subject_data/*/{model_mod_dir}/{config}/{fname_pattern}"
-        )
-    )
+        tag, map_name = single_model(args.modality)
+        pattern = f"*/{args.model}/{args.fname_prefix}_{args.fmri_tag}_{config}_{tag}_models.dscalar.nii"
+    subject_rho_files = sorted(subject_data.glob(pattern))
 
     if not subject_rho_files:
-        log.error("No per-subject ρ maps found. Run per-subject RSA first.")
+        log.error(f"No per-subject ρ maps found: {subject_data}/{pattern}")
         sys.exit(1)
-
-    log.info(f"Found {len(subject_rho_files)} per-subject ρ maps")
-
-    rho_maps = []
-    for f in subject_rho_files:
-        data = np.load(str(f)).astype(np.float32)
-        rho_maps.append(data)
-
-    rho_stack = np.stack(rho_maps, axis=0)
-    n_subs, n_grays = rho_stack.shape
+    n_subs = len(subject_rho_files)
+    log.info(f"Found {n_subs} per-subject ρ maps")
 
     # ── Output path (n_blocks suffix separates sweep results) ────────────────
     out_path = (out_dir / f"group_stats_{n_subs}subs_nblocks{args.n_blocks}.dscalar.nii"
@@ -299,64 +308,16 @@ def main():
         log.info(f"FDR significance map already present in {out_path.name} — skipping computation.")
         return
 
-    # ── Try to load per-subject block maps for 2-factor bootstrap ────────────
-    # Exact n_blocks match is tried first; falls back to aggregating from a larger
-    # N that is divisible by args.n_blocks (avoids re-running the searchlight).
-    have_blocks = False
-    block_stack = None
-    if args.n_blocks > 1 and args.method == "rho_a":
-        # fname_pattern for rho_a (crossnobis_rho_a_..._bin{..}s_skip{..}s.npy) contains no
-        # "_searchlight.npy", so the replace() below would be a silent no-op and never match
-        # a file. No crossnobis_rho_a_*_nblocks*.npy files are produced by any script today,
-        # so there is nothing to load -- skip explicitly instead of relying on that broken match.
-        log.info("2-factor bootstrap not supported for method=rho_a; skipping")
+    # The corrected 2-factor bootstrap needs per-subject block maps; crossnobis arrays have none.
+    n_blocks = 1 if args.method == "rho_a" else args.n_blocks
+    rho_stack, block_stack = (_load_npy(subject_rho_files, n_blocks) if npy
+                              else load_subject_maps(subject_rho_files, map_name, n_blocks))
+    n_grays = rho_stack.shape[1]
+    have_blocks = block_stack is not None
+    if have_blocks:
+        log.info(f"Block maps loaded ({args.n_blocks} blocks) — will run corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)")
     elif args.n_blocks > 1:
-        def _collect_blocks(n_b):
-            pat = fname_pattern.replace("_searchlight.npy", f"_searchlight_nblocks{n_b}.npy")
-            return sorted(Path(args.output_dir).glob(
-                f"subject_data/*/{model_mod_dir}/{config}/{pat}"
-            ))
-
-        block_files = _collect_blocks(args.n_blocks)
-        n_file_blocks = args.n_blocks
-
-        if len(block_files) != len(subject_rho_files):
-            available_ns = sorted(set(
-                int(m.group(1))
-                for f in Path(args.output_dir).glob(
-                    f"subject_data/*/{model_mod_dir}/{config}/*_nblocks*.npy"
-                )
-                for m in [re.search(r'_nblocks(\d+)\.npy$', f.name)]
-                if m
-            ))
-            candidates = [n for n in available_ns
-                          if n > args.n_blocks and n % args.n_blocks == 0]
-            if candidates:
-                n_file_blocks = min(candidates)
-                block_files = _collect_blocks(n_file_blocks)
-                if len(block_files) == len(subject_rho_files):
-                    log.info(
-                        f"Exact n_blocks={args.n_blocks} not found; "
-                        f"aggregating {n_file_blocks}→{args.n_blocks} blocks"
-                    )
-
-        if len(block_files) == len(subject_rho_files):
-            raw_stack = np.stack(
-                [np.load(str(f)).astype(np.float32) for f in block_files], axis=0
-            )
-            block_stack = (aggregate_blocks(raw_stack, args.n_blocks)
-                           if n_file_blocks != args.n_blocks else raw_stack)
-            have_blocks = True
-            log.info(
-                f"Block files loaded ({len(block_files)} subjects, {args.n_blocks} blocks) — "
-                f"will run corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)"
-            )
-        else:
-            log.info(
-                f"No usable block files found for n_blocks={args.n_blocks} "
-                f"(tried exact match and aggregation from larger N). "
-                f"Run searchlight.py --n-blocks {args.n_blocks} (or a multiple) first."
-            )
+        log.info(f"No usable block maps for n_blocks={args.n_blocks}; run searchlight.py --n-blocks {args.n_blocks} (or a multiple) first.")
 
     # ── One-sample t-test (H₀: mean ρ = 0) and BH-FDR ─────────────────────────
     log.warning("Performing one-sample test against chance (H0: rho = 0). "
@@ -481,7 +442,7 @@ def main():
         "n_blocks":               args.n_blocks,
         "n_bootstrap":            args.n_bootstrap,
         "n_sig_c2f":              n_sig_c2f,
-        "subjects":               [f.parent.parent.parent.name for f in subject_rho_files],
+        "subjects":               [f.relative_to(subject_data).parts[0] for f in subject_rho_files],
     }
 
     summary_path = out_dir / "summary.json"

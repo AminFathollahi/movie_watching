@@ -55,7 +55,7 @@ For each audio (A), video (V) and joint (J) model RDM, the script writes:
 - `sp_x`: Spearman correlation of the brain RDM with the residual of the x RDM after least-squares regression, with intercept, on the other two model RDMs (Tong et al. 2022). Only the model RDM is residualized.
 - `partial_x`: partial Spearman correlation given the other two model RDMs (Clarke & Tyler 2014): all RDMs are ranked, the brain and x ranks are both residualized on the other two, and the residuals are correlated.
 
-`sp_x` and `partial_x` share the same numerator. The partial correlation divides by what the other two leave unexplained in the brain RDM, so it is the larger of the two in magnitude. `--distance crossnobis` restricts the RDM to the windows of the repeated clip and cross-validates the noise-normalized distance across its four presentations, `d(i, j) = mean over m != m' of (x_i^m - x_j^m)' P (x_i^m' - x_j^m')` (Walther et al. 2016); model RDMs are then the Euclidean distances between the clip windows' embeddings averaged over presentations. With `--subjects-list` and `--subject-cache` (binned, per-run z-scored responses of each subject, as cached by `cka/analysis.sh noise-ceiling`), the Euclidean maps are computed per subject on the GPU and written as `{OUTPUT_DIR}/subject_data/{subject}/{model}_euclidean_{pair}_{map}/{config}/..._searchlight.npy`, with `--n-blocks` within-block maps for `group_stats.py` and `--shift` for the half-run circular-shift baseline. `--comparator kendall` with `--distance cosine` gives Kendall tau-b maps of `1 - cosine` RDMs instead, without semi-partial or partial maps.
+`sp_x` and `partial_x` share the same numerator. The partial correlation divides by what the other two leave unexplained in the brain RDM, so it is the larger of the two in magnitude. `--distance crossnobis` restricts the RDM to the windows of the repeated clip and cross-validates the noise-normalized distance across its four presentations, `d(i, j) = mean over m != m' of (x_i^m - x_j^m)' P (x_i^m' - x_j^m')` (Walther et al. 2016); model RDMs are then the Euclidean distances between the clip windows' embeddings averaged over presentations. With `--subjects-list` and `--subject-cache` (binned, per-run z-scored responses of each subject, as cached by `cka/analysis.sh noise-ceiling`), the Euclidean maps are computed per subject on the GPU and written, one file per kind as for the group average, to `{OUTPUT_DIR}/subject_data/{subject}/{model}/` (outputs table), with the `--n-blocks` within-block maps in the same files and `--shift` for the half-run circular-shift baseline (`_shifted`). `--comparator kendall` with `--distance cosine` gives Kendall tau-b maps of `1 - cosine` RDMs instead, without semi-partial or partial maps.
 
 ### Group statistics
 
@@ -151,22 +151,28 @@ Existing outputs are skipped; delete an output to rerun it. The variables at the
 `OUTPUT_DIR = outputs/rsa/{tag}`. Names are built by `shared/naming.py`:
 
 ```
-searchlight config   k{K}_delay{D}s_bin{B}s_skip{S}s_{method}_{model_norm}     (delay{D}s becomes hrf with --hrf)
-glasser config       delay{D}s_bin{B}s_skip{S}s_{method}_{model_norm}
+searchlight config   k{K}_delay{D}s_bin{B}s_skip{S}s_{rdm}_{method}_{model_norm}     (delay{D}s becomes hrf with --hrf)
+glasser config       delay{D}s_bin{B}s_skip{S}s_{rdm}_{method}_{model_norm}
 file stem            rsa_59k_{tag}_{searchlight config}
 ```
 
+`{rdm}` names the brain RDM: `pearson` for the correlation distance `1 - r` of `searchlight.py`, `glasser.py` and the scripts built on them (so `pearson_spearman_center`), and `euclidean`, `mahalanobis`, `crossnobis` or `cosine` for `rdm_searchlight.py` (`euclidean_spearman_center`, `cosine_kendalltau_center`).
+
 | Path under `{OUTPUT_DIR}` | Content |
 |---|---|
-| `group_average/{model}_{modality}/rsa_59k_{tag}_{config}_maps.dscalar.nii` | Combined maps, accumulated across scripts (below) |
-| `group_average/{model}_{modality}/{searchlight config}/{stem}_searchlight.npy` | `(59412,)` `rho`; beside it `{stem}_fdr_mask.dscalar.nii`, `{stem}_fdr_{lh,rh}.border` (skipped if the mask is empty or covers over 90% of cortex) and `{stem}_perm{N}_p.npy` (`RUN_PERM=true`) |
-| `group_average/{model}_{modality}/{glasser config}/ranked_report.csv` | Columns `parcel, r, p, n_vertices, rank` |
-| `subject_data/{subject}/{model}_{modality}/` | Same layout per subject; block maps (`n_blocks > 1`) are `{stem}_searchlight_nblocks{N}.npy`, shape `(N, 59412)` |
+| `group_average/{model}/{stem}_{joint_only\|x_only}_models.dscalar.nii` | `searchlight.py` with one embedding (`joint_only` for `av`, `a_only`, `v_only`, ... otherwise): `rho_x` (`rho_j` for `av`), `rho_x_sigmap_uncorr`, `rho_x_sigmap_fdr`, `rho_x_fdr_mask`, with `rho_x_sigmap_perm` from `perm_searchlight.py` and `rho_x_sigmap_spin`, `rho_x_sigmap_spin_fdr`, `rho_x_spin_cluster_{mask,borders}_fdr` from `run_spin_permutations.py`; beside it `..._models_fdr_{lh,rh}.border` (skipped if the mask is empty or covers over 90% of cortex) |
+| `subject_data/{subject}/{model}/{stem}_{joint_only\|x_only}_models.dscalar.nii` | Per subject: `rho_x`, then the `--n-blocks` within-block maps `rho_x_block01` ... |
+| `group_average/{model}/{stem}_av_derived.dscalar.nii` | `av_derived_maps.py` (below) |
+| `group_average/{model}_{modality}/{glasser config}/ranked_report.csv`, `parcel_maps.dscalar.nii` | `glasser.py`: columns `parcel, r, p, n_vertices, rank`; the parcel `rho_x` on the grayordinates |
+| `group_average/{model}/rsa_59k_raw_{config}_{rdm}_{comparator}_{model_norm}_{pair}_{models,semipartial,partial}.dscalar.nii` | `rdm_searchlight.py`: maps `rho_a, rho_v, rho_j` (`tau_*` for Kendall), `sp_*`, `partial_*`; beside it `..._provenance.json` |
+| `group_average/{model}/rsa_59k_raw_k20_..._cosine_kendalltau_center_joint_only_models.dscalar.nii` | An earlier joint-embedding-only Kendall run: `tau_j` |
+| `group_average/{model}/diagnostics/{stem}[_norepeats]_maps.dscalar.nii` | Diagnostic joint-embedding map (`rho_j`) of `searchlight.py --drop-repeated-clips` |
+| `subject_data/{subject}/{model}/rsa_59k_raw_{config}_euclidean_spearman_center_{pair}[_shifted]_{models,semipartial,partial}.dscalar.nii` | `rdm_searchlight.py --subjects-list`: maps `rho_*`, `sp_*` or `partial_*`, then, for the aligned maps, the 16 within-block maps of each (`rho_a_block01` ... `rho_j_block16`) |
 | `groupstats/{model}/rsa_59k_raw_{config}_euclidean_spearman_center_{pair}[_minus_shifted]_{models,semipartial,partial}.dscalar.nii` | `rdm_groupstats.py`: per map `x`, `x_mean, x_t, x_sigmap_uncorr, x_sigmap_fdr, x_fdr_mask` and, where TFCE was run, `x_tfce, x_sigmap_tfce_fwe, x_tfce_fwe_mask`; beside it `..._summary.json`, `..._{kind}_{fdr,tfce}_{lh,rh}.border` (one border per map) and `..._{kind}_tfce_null.npz` |
 | `groupstats/{model}_{modality}/{searchlight config}/group_stats_{S}subs[_nblocks{N}].dscalar.nii` | Maps `mean_rho, t_stat, sigmap_uncorr, sigmap_fdr` (plus `mean_rho_c2f, t_c2f, sigmap_c2f` with block maps); beside it FDR masks, borders and `summary.json` |
 | `noise_ceiling/noise_ceiling_{N}subs_k{K}_delay{D}s_bin{B}s_skip{S}s_{method}.dscalar.nii` | Maps `nc_lower`, `nc_upper` |
 
-Scalar maps in `..._maps.dscalar.nii`: `searchlight_{method}_rho` with `..._rho_sigmap_uncorr` and `..._rho_sigmap_fdr` (`searchlight.py`), `glasser_{glasser method}_rho` (`glasser.py`), `searchlight_{method}_sigmap_perm` (`perm_searchlight.py`), and `av_conjunction_{family}`, `av_superadditivity_{family}`, `av_max_uni_{family}` (`av_derived_maps.py`). The reference `family` is `own` (the model's own audio and video maps), `unimodal` (AudioMAE and VideoMAEv2-Large) or `text_aligned` (WavLM-Large and PE-Core ViT-L/14), as defined by `shared/model_registry.py::av_derived_baselines`; scramble, dummy-modality and residual pseudo-models have none.
+`{stem}_av_derived.dscalar.nii` holds `av_conjunction_{family}`, `av_superadditivity_{family}` and `av_max_uni_{family}`, computed from the `rho_j` of the joint model and the `rho_a`, `rho_v` of the reference models. The reference `family` is `own` (the model's own audio and video maps), `unimodal` (AudioMAE and VideoMAEv2-Large) or `text_aligned` (WavLM-Large and PE-Core ViT-L/14), as defined by `shared/model_registry.py::av_derived_baselines`; scramble, dummy-modality and residual pseudo-models have none.
 
 ## Commands by analysis
 
@@ -182,13 +188,12 @@ python rsa/searchlight.py \
     --left-surface <L> --right-surface <R> --workbench <wb_command> --output-dir outputs/rsa/raw \
     --model pe-av-small-16-frame --modality av \
     --k 100 --bin-sec 5.0 --skip-sec 5.0 --delay-sec 5.0 --method spearman --tr 1.0 \
-    --model-norm center --geodesic-cache-dir outputs/rsa/_geodesic_cache \
-    --combined-output <maps.dscalar.nii> --n-blocks 1
+    --model-norm center --geodesic-cache-dir outputs/rsa/_geodesic_cache --n-blocks 1
 ```
 
 Input is either `--preprocessed-dir` with `--fmri-suffix` (disk) or `--raw-dir` with `--sg-filter`, `--psc`, `--gsr`/`--no-gsr` (streaming); the two are mutually exclusive. `--n-blocks` defaults to 4 (1 disables blocks). `glasser.py` takes the same input, timing, delay, binning and `--model-norm` flags plus `--glasser-dlabel`.
 
-Two options give diagnostic variants of the group-average map for comparison with CKA and encoding. Either one (disk mode only) makes the run write a single map, `{OUTPUT_DIR}/group_average/{model}_{modality}/diagnostics/rsa_59k_{tag}_k{K}_delay{D}s_bin{B}s_skip{S}s_{label}_{model_norm}[_norepeats]_maps.dscalar.nii`, and nothing else. `--distance euclidean` replaces the correlation distance by squared Euclidean distance in both RDMs (label `euclid-{method}`; `corr-{method}` by default). `--drop-repeated-clips` drops the windows of `video5`, `video9`, `video14` and `video18` (the clips shown once per run) after per-run normalization and adds `_norepeats` to the name.
+`--drop-repeated-clips` (disk mode only) gives a diagnostic variant of the group-average map for comparison with CKA and encoding: it drops the windows of `video5`, `video9`, `video14` and `video18` (the clips shown once per run) after per-run normalization and writes a single map, `rho_j` for `--modality av`, to `{OUTPUT_DIR}/group_average/{model}/diagnostics/rsa_59k_{tag}_k{K}_delay{D}s_bin{B}s_skip{S}s_pearson_{method}_{model_norm}_norepeats_maps.dscalar.nii`, and nothing else. Euclidean RDMs are computed by `rdm_searchlight.py`.
 
 ### Euclidean and Mahalanobis RSA
 
@@ -216,9 +221,9 @@ python rsa/rdm_groupstats.py <same flags> --tags unimodal_own --baselines aligne
 All commands below take the binning flags of the searchlight command (`--k`, `--bin-sec`, `--skip-sec`, `--delay-sec`, `--method`); `perm_searchlight.py` also takes the same input flags.
 
 ```bash
-python rsa/perm_searchlight.py <searchlight flags> --n-perm 1000 --seed 42 --perm-batch-size 100 --combined-output <maps.dscalar.nii>
+python rsa/perm_searchlight.py <searchlight flags> --n-perm 1000 --seed 42 --perm-batch-size 100
 
-python rsa/run_spin_permutations.py --combined-cifti <maps.dscalar.nii> --map-name searchlight_spearman_rho \
+python rsa/run_spin_permutations.py --combined-cifti <..._joint_only_models.dscalar.nii> --map-name rho_j \
     --left-sphere <L.sphere.59k_fs_LR.surf.gii> --right-sphere <R.sphere.59k_fs_LR.surf.gii> \
     --left-surface <L> --right-surface <R> --template-cifti <template> --n-spin 1000 --output-dir outputs/rsa/spin_tests
 
@@ -230,9 +235,9 @@ python rsa/group_stats.py --output-dir outputs/rsa/raw --model pe-av-small-16-fr
 python rsa/tfce_groupstats.py <same flags except --n-blocks/--n-bootstrap> --n-permutations 5000
 ```
 
-The spin test appends `{map_name}_sigmap_uncorr`, `_sigmap_fdr`, `_cluster_mask_fdr` and `_cluster_borders_fdr` to the combined CIFTI and, with `--output-dir`, writes `{stem}_spin{N}_significance.dscalar.nii` and a summary JSON.
+`perm_searchlight.py` adds `rho_x_sigmap_perm` to the group-average `searchlight.py` file. The spin test adds `{map_name}_sigmap_spin`, `_sigmap_spin_fdr`, `_spin_cluster_mask_fdr` and `_spin_cluster_borders_fdr` to the input CIFTI and, with `--output-dir`, writes `{stem}_spin{N}_significance.dscalar.nii` and a summary JSON.
 
-The group scripts read `{output-dir}/subject_data/*/{model}_{modality}/{config}/{stem}_searchlight.npy` (or `--analysis-label` in place of `{model}_{modality}`); `group_stats.py` also accepts `--method rho_a` for crossnobis arrays and `--fname-prefix`. `tfce_groupstats.py` writes `group_stats_{S}subs.dscalar.nii` with maps `mean_rho, t_stat, sigmap_uncorr, sigmap_fdr, tfce_stat, sigmap_tfce_fwe`, masks, borders, `summary.json` and `group_stats_{S}subs_h0_null.npy` (null maxima, reusable to recompute `sigmap_tfce_fwe`).
+The group scripts (`group_stats.py`, `tfce_groupstats.py`, `max_uni.py`, `scramble_paired_stats.py`) read `rho_x` and its block maps from `{output-dir}/subject_data/*/{model}/{stem}_{joint_only|x_only}_models.dscalar.nii`. With `--analysis-label` (partial RSA) `group_stats.py` and `tfce_groupstats.py` instead read `.npy` maps `{output-dir}/subject_data/*/{label}/{config}/{stem}_searchlight.npy` with blocks in `..._searchlight_nblocks{N}.npy`; `group_stats.py --config` does the same for a configuration folder named otherwise (`subcortical_rsa.py`, with `--fname-prefix rsa_subcortical`), and `--method rho_a` reads crossnobis arrays. `tfce_groupstats.py` writes `group_stats_{S}subs_tfce.dscalar.nii` (separate from `group_stats.py`'s file) with maps `mean_rho, t_stat, sigmap_uncorr, sigmap_fdr, tfce_stat, sigmap_tfce_fwe`, masks, borders, `group_stats_{S}subs_tfce_summary.json` and `group_stats_{S}subs_tfce_h0_null.npy` (null maxima, reusable to recompute `sigmap_tfce_fwe`).
 
 ### Partial and residual-embedding RSA
 
@@ -252,7 +257,7 @@ bash rsa/run_extended_analyses.sh [embed|rsa|partial|consolidate|all]     # MODE
 
 `run_peav_partial_analysis.sh` uses run key `partial_corr_pe-av-small-16-frame`, `N_BLOCKS=16`, `BLOCKS_SWEEP=(4 8 16)` and 5000 permutations. `run_partial_corr_variants.sh` runs `partial_corr_variants.py --variant {from_unimodals,text_aligned_models,own_unimodal}`; each gives a five-map CIFTI of partial correlations `corr(brain, target | nuisance)`: the joint model given each unimodal reference alone and both together, and each unimodal reference given the other.
 
-`run_extended_analyses.sh` runs the residual-embedding suite. `embed` writes linear- and projection-residual embeddings (`notebooks/feature_extraction/compute_{linear,projection}_residual_embeddings.py`) as ordinary embedding files `{model}_av_linear_resid_unimodal` and `{model}_av_projection_resid_own`; `rsa` runs the searchlight on them; `partial` runs `partial_corr_{model}` (given AudioMAE and VideoMAEv2-Large); `consolidate` runs `residualized_maps.py` per model in `RESIDUALIZED_AV_MODELS` and writes `rsa_59k_{tag}_{config}_residualized_maps.dscalar.nii` with scalars `partial_correlation`, `linear_resid_unimodal`, `projection_resid_own` and, for PE-AV only, `linear_resid_own`.
+`run_extended_analyses.sh` runs the residual-embedding suite. `embed` writes linear- and projection-residual embeddings (`notebooks/feature_extraction/compute_{linear,projection}_residual_embeddings.py`) as ordinary embedding files `{model}_av_linear_resid_unimodal` and `{model}_av_projection_resid_own`; `rsa` runs the searchlight on them; `partial` runs `partial_corr_{model}` (given AudioMAE and VideoMAEv2-Large); `consolidate` runs `residualized_maps.py` per model in `RESIDUALIZED_AV_MODELS` and writes `group_average/{model}/rsa_59k_{tag}_{config}_residualized_maps.dscalar.nii` (from the `rho_j` of the residual-embedding runs) with scalars `partial_correlation`, `linear_resid_unimodal`, `projection_resid_own` and, for PE-AV only, `linear_resid_own`.
 
 ### Maximum-unimodal contrast
 
@@ -342,10 +347,10 @@ Outputs in `--output-dir`: `{seed}_av.csv` and `{seed}_av_rho.npy` per seed (col
 
 ### Other scripts
 
-- `draw_rsa_borders.py --rsa-npy <searchlight.npy> --threshold-mode percentile --top-pct 5 --min-verts 10` keeps the top `--top-pct` percent of cortex jointly over both hemispheres (`--threshold-mode sd`, the default, keeps `mean + --n-sd * SD`, `--n-sd` default 2), removes connected islands smaller than `--min-verts`, and writes `{stem}_{top5pct|2sd}_{lh,rh}.border`.
+- `draw_rsa_borders.py --rsa-cifti <..._joint_only_models.dscalar.nii> --map-name rho_j --threshold-mode percentile --top-pct 5 --min-verts 10` keeps the top `--top-pct` percent of cortex jointly over both hemispheres (`--threshold-mode sd`, the default, keeps `mean + --n-sd * SD`, `--n-sd` default 2), removes connected islands smaller than `--min-verts`, and writes `{stem}_{top5pct|2sd}_{lh,rh}.border`.
 - `kreilability.py --subjects-list ... --timing-csv ... --embeddings-dir ... --template-cifti <template> --model M --modality av --k 100 150 200 --n-splits 50` splits the subjects at random into halves and, for each split and `k`, reports the Pearson correlation of the two half-average searchlight maps and the Dice overlap of their top-10% masks (`{--outdir}/split_half_reliability_results.json`, resumable; `--bin-sec` defaults to 2.0).
 - `rdm_diagonal.py --embeddings-dir ... --timing-csv ... --output-dir ... --model M --modality av` writes within-clip (block-diagonal) and across-clip (off-diagonal) masks of the model RDM; with the fMRI arguments it also writes `{stem}_rsa_diagonal_maps.dscalar.nii` with `glasser_{method}_rho_{offdiag,blockdiag}` and `searchlight_{method}_rho_{offdiag,blockdiag}`.
-- `channel_subset_searchlight.py` writes the PE-AV `av` embedding columns of one channel cluster as a standalone embedding and runs `searchlight.py` on it; cluster and paths are constants at the top of the file. `channel_class_rsa.py` and `run_channel_class_rsa.sh` depend on a channel labelling that no longer exists, and the shell script exits with an error.
+- `channel_subset_searchlight.py` writes the PE-AV `av` embedding columns of one channel cluster as a standalone embedding and runs `searchlight.py` on it; cluster and paths are constants at the top of the file.
 
 ## Tests
 
@@ -353,7 +358,7 @@ Outputs in `--output-dir`: `{seed}_av.csv` and `{seed}_av_rho.npy` per seed (col
 pytest tests/test_rsa.py tests/test_model_norm.py tests/test_sheet_rsa.py tests/test_perm_searchlight.py \
        tests/test_max_uni.py tests/test_av_derived_maps.py tests/test_residualized_maps.py \
        tests/test_av_scramble_permutation_inference.py tests/test_paired_bootstrap_resampling.py \
-       tests/test_channel_class_rsa.py tests/test_channel_subset_searchlight.py tests/test_rdm_searchlight.py
+       tests/test_channel_subset_searchlight.py tests/test_rdm_searchlight.py
 python rsa/shared/residuals.py; python rsa/localizer_naming.py; python rsa/spatial_stats.py; python rsa/full_sheet_rsa.py --demo   # self-checks
 ```
 

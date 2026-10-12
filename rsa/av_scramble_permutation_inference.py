@@ -11,8 +11,8 @@ from scipy import stats
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cifti_io import save_cifti_map, save_cifti_multimap  # noqa: E402
-from rsa.shared.naming import add_model_norm_arg, method_label  # noqa: E402
+from cifti_io import load_named_map, save_cifti_map, save_cifti_multimap  # noqa: E402
+from rsa.shared.naming import add_model_norm_arg, method_label, searchlight_path, single_model  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -46,13 +46,6 @@ def parse_args():
     p.add_argument("--alpha", type=float, default=0.01,
                    help="Threshold for uncorrected p and BH-FDR q maps.")
     return p.parse_args()
-
-
-def _rho_path(output_dir: Path, model: str, modality: str, config: str, fmri_tag: str,
-              k: int, delay_sec: float, bin_sec_int: int, skip_int: int, method: str) -> Path:
-    return (output_dir / "group_average" / f"{model}_{modality}" / config /
-            f"rsa_59k_{fmri_tag}_k{k}_delay{int(delay_sec)}s_bin{bin_sec_int}s_"
-            f"skip{skip_int}s_{method}_searchlight.npy")
 
 
 def _signed_sigmap(p_values: np.ndarray, effect: np.ndarray) -> np.ndarray:
@@ -138,9 +131,8 @@ def main():
     output_dir = Path(args.output_dir)
 
     def load(model):
-        path = _rho_path(output_dir, model, args.modality, config, args.fmri_tag,
-                          args.k, args.delay_sec, bin_sec_int, skip_int, method)
-        return np.load(str(path)).astype(np.float32) if path.exists() else None
+        path = searchlight_path(output_dir / "group_average", model, args.modality, f"rsa_59k_{args.fmri_tag}_{config}")
+        return load_named_map(path, single_model(args.modality)[1]) if path.exists() else None
 
     intact_rho = load(args.intact_model)
     if intact_rho is None:

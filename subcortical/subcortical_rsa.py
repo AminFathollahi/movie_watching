@@ -47,8 +47,7 @@ from rsa.shared.rsa_utils import (  # noqa: E402
 from cifti_io import get_bm_axis, save_cifti_map, save_cifti_multimap  # noqa: E402
 from searchlight import run_searchlight, _rho_sigmap, _fdr_sigmap  # noqa: E402
 from subcortical_io import (  # noqa: E402
-    SUBCORTICAL_STRUCTURES, STRUCTURE_NEIGHBOR_MODE, NUCLEI_SEEDS,
-    struct_slices, build_neighbors, get_cerebellum_neighbors,
+    SUBCORTICAL_STRUCTURES, NUCLEI_SEEDS, struct_slices, structure_neighbors,
     build_nucleus_masks, preprocess_subject_subcortical,
     compute_group_average_subcortical,
 )
@@ -151,7 +150,7 @@ def main():
     fmri_tag = _fmri_tag(args)
 
     bin_int, skip_int, delay_int = int(args.bin_sec), int(args.skip_sec), int(args.delay_sec)
-    config = f"k{args.k}_delay{delay_int}s_bin{bin_int}s_skip{skip_int}s_{args.method}"
+    config = f"k{args.k}_delay{delay_int}s_bin{bin_int}s_skip{skip_int}s_pearson_{args.method}_zscore"
     sub_dir = (Path(args.output_dir) / "group_average" if args.subject == "group_average"
                else Path(args.output_dir) / "subject_data" / args.subject)
     out_root = sub_dir / f"{args.model}_{args.modality}" / config
@@ -182,7 +181,7 @@ def main():
                 f"bin{bin_int}s_skip{skip_int}s" / f"{args.model}_{args.modality}.npy")
     emb = process_model_embeddings(str(emb_file), timing_df, bin_sec=args.bin_sec, tr=args.tr,
                                     run_trs=run_trs, delay_sec=args.delay_sec, hrf=args.hrf,
-                                    skip_sec=args.skip_sec, normalize=True)
+                                    skip_sec=args.skip_sec, model_norm="zscore")
     log.info(f"Model binned: {emb.shape}")
 
     fmri_binned, emb = align_and_assert_bins(fmri_binned, emb)
@@ -198,16 +197,7 @@ def main():
         n_struct = stop - start
         fmri_struct = fmri_binned[:, start:stop]
 
-        if s.startswith("CEREBELLUM_"):
-            hem = "LEFT" if s.endswith("LEFT") else "RIGHT"
-            neighbors, mode_used = get_cerebellum_neighbors(
-                hem, info["world_xyz"], info["voxel_ijk"], args.k,
-                neighbor_cache_dir, args.workbench)
-        else:
-            mode = STRUCTURE_NEIGHBOR_MODE[s]
-            cache_path = neighbor_cache_dir / f"{s}_neighbors_k{args.k}_{mode}.npy"
-            neighbors = build_neighbors(info["voxel_ijk"], info["world_xyz"], args.k, mode, cache_path)
-            mode_used = mode
+        neighbors, mode_used = structure_neighbors(s, info, args.k, neighbor_cache_dir, args.workbench)
         neighbor_modes[s] = mode_used
 
         idx = np.arange(n_struct, dtype=np.int32)

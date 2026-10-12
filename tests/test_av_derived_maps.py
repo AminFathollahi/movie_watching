@@ -18,6 +18,7 @@ from rsa.av_derived_maps import (
     expected_map_names,
 )
 from rsa.shared.model_registry import av_derived_baselines
+from rsa.shared.naming import searchlight_path, single_model
 
 
 def _template(path: Path, n_vertices: int = 4) -> None:
@@ -80,11 +81,10 @@ def test_compute_derived_maps_has_expected_comparisons():
 
 def test_append_derived_maps_resumes_per_map_without_replacing_existing(tmp_path):
     target = "pe-av-small-16-frame"
-    config = "k100_delay5s_bin5s_skip5s_spearman"
-    rho_filename = "rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_searchlight.npy"
+    stem = "rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_center"
     rsa_root = tmp_path / "group_average"
     template = tmp_path / "template.dtseries.nii"
-    combined = rsa_root / f"{target}_av" / "rsa_59k_raw_maps.dscalar.nii"
+    combined = rsa_root / target / f"{stem}_av_derived.dscalar.nii"
     _template(template)
 
     values = {
@@ -93,9 +93,9 @@ def test_append_derived_maps_resumes_per_map_without_replacing_existing(tmp_path
     for index, pair in enumerate(dependency_pairs(target), start=1):
         values[pair] = np.full(4, 0.05 * index, dtype=np.float32)
     for (model, modality), data in values.items():
-        path = rsa_root / f"{model}_{modality}" / config / rho_filename
+        path = searchlight_path(rsa_root, model, modality, stem)
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.save(path, data)
+        save_cifti_multimap(data[None], [single_model(modality)[1]], str(template), str(path))
 
     combined.parent.mkdir(parents=True, exist_ok=True)
     preserved_conjunction = np.full(4, 7, dtype=np.float32)
@@ -109,8 +109,7 @@ def test_append_derived_maps_resumes_per_map_without_replacing_existing(tmp_path
     added = append_derived_maps(
         target_model=target,
         rsa_root=rsa_root,
-        config=config,
-        rho_filename=rho_filename,
+        stem=stem,
         combined_output=combined,
         template_cifti=template,
     )
@@ -125,8 +124,7 @@ def test_append_derived_maps_resumes_per_map_without_replacing_existing(tmp_path
     assert append_derived_maps(
         target_model=target,
         rsa_root=rsa_root,
-        config=config,
-        rho_filename=rho_filename,
+        stem=stem,
         combined_output=combined,
         template_cifti=template,
     ) == []

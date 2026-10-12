@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--preprocessed-dir", required=True)
     parser.add_argument("--fmri-suffix", default="raw")
+    parser.add_argument("--fmri-space", default="cortex_59k",
+                        help="Responses are read from {subject}_{suffix}_{space}.dtseries.nii (subcortical for subcortical/).")
     parser.add_argument("--subject", default="group_average")
     parser.add_argument(
         "--split", choices=("fixed", "loro", "loco"), default="loro",
@@ -163,7 +165,7 @@ def load_inputs(args) -> dict:
     if args.split == "fixed" and not excluded:
         raise ValueError("--split fixed needs the repeated clips in --exclude-video-ids")
     keep = ~metadata["video_id"].isin(excluded).to_numpy()
-    fmri_path = Path(args.preprocessed_dir) / f"{args.subject}_{args.fmri_suffix}_cortex_59k.dtseries.nii"
+    fmri_path = Path(args.preprocessed_dir) / f"{args.subject}_{args.fmri_suffix}_{getattr(args, 'fmri_space', 'cortex_59k')}.dtseries.nii"
     run_trs_path = Path(args.preprocessed_dir) / f"{args.subject}_{args.fmri_suffix}_run_trs.npy"
     y_train, y_test, run_onsets = build_fmri_arrays(
         str(fmri_path), str(run_trs_path), timing, sorted(excluded), args.bin_sec, args.tr,

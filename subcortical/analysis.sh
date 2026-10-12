@@ -28,8 +28,14 @@
 #                         subcortex has no PREPROCESSED_INDIV_DIR cache).
 #                         Sequential (single GPU); resumable via subcortical_rsa.py's
 #                         existing skip-if-outputs-exist check.
+#          avj           Euclidean-Spearman RSA, non-cross-validated CKA and the
+#                         encoding variance partition (loro, demean) of the
+#                         group average with each AVJ_MODELS entry's own audio,
+#                         video and joint embeddings (subcortical_avj.py and
+#                         encoding/variance_partition.py --fmri-space subcortical).
 #          groupstats    Across-subject t-test (rsa/group_stats.py, unmodified
-#                         inference code, --fname-prefix rsa_subcortical) over
+#                         inference code, --fname-prefix rsa_subcortical and
+#                         --config of the per-subject folders) over
 #                         every per-subject map produced by `persubject`.
 #
 
@@ -129,6 +135,8 @@ if [ "${SKIP_SCRAMBLE_DUMMY_SWEEP:-false}" != "true" ]; then
     done
 fi
 
+AVJ_MODELS=(pe-av-small-16-frame nemotron_layer18_mp)
+
 K=100
 BIN_SEC=5.0
 SKIP_SEC=5.0
@@ -201,6 +209,38 @@ run_groupavg() {
     refresh_visualization_if_enabled
 }
 
+run_avj() {
+    ensure_template
+    local CMD MODEL_NAME
+    for CMD in rsa cka; do
+        log "Group-average subcortical ${CMD}: ${AVJ_MODELS[*]}"
+        run_python "${SCRIPT_DIR}/subcortical_avj.py" "$CMD" \
+            --models "${AVJ_MODELS[@]}" \
+            --group-average-dir "$GROUP_AVERAGE_DIR" \
+            --timing-csv "$TIMING_CSV" \
+            --embeddings-dir "$EMBEDDINGS_DIR" \
+            --template-cifti "$TEMPLATE_CIFTI" \
+            --output-dir "$OUTPUT_DIR" \
+            --neighbor-cache-dir "$NEIGHBOR_CACHE_DIR" \
+            --workbench "$WORKBENCH" \
+            --k "$K" --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" --tr "$TR"
+    done
+    for MODEL_NAME in "${AVJ_MODELS[@]}"; do
+        log "Group-average subcortical variance partition: ${MODEL_NAME}"
+        run_python "${SCRIPT_DIR}/../encoding/variance_partition.py" \
+            --split loro --feature-scaling demean --response-scaling run \
+            --preprocessed-dir "$GROUP_AVERAGE_DIR" --fmri-suffix raw --fmri-space subcortical \
+            --subject group_average \
+            --timing-csv "$TIMING_CSV" \
+            --embeddings-dir "$EMBEDDINGS_DIR" \
+            --output-dir "$OUTPUT_DIR" \
+            --template-cifti "$TEMPLATE_CIFTI" \
+            --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" --delay-sec "$DELAY_SEC" --tr "$TR" \
+            --n-iter 20 --model-random-state 0 --backend torch_cuda \
+            --model "$MODEL_NAME" --tag unimodal_own
+    done
+}
+
 run_noiseceiling() {
     ensure_template
     log "Subcortical noise ceiling (streaming, N=$(echo $NC_SUBJECTS | wc -w) subjects) ..."
@@ -265,6 +305,7 @@ run_groupstats() {
                 --method "$METHOD" \
                 --fmri-tag "raw" \
                 --fname-prefix "rsa_subcortical" \
+                --config "k${K}_delay${DELAY_SEC%.*}s_bin${BIN_SEC%.*}s_skip${SKIP_SEC%.*}s_pearson_${METHOD}_zscore" \
                 --template-cifti "$TEMPLATE_CIFTI" \
                 --left-surface "unused" --right-surface "unused" \
                 --n-blocks "$N_BLOCKS" \
@@ -288,9 +329,10 @@ run_visualize() {
 case "$MODE" in
     neighbors)    run_neighbors ;;
     groupavg)     run_groupavg ;;
+    avj)          run_avj ;;
     noiseceiling) run_noiseceiling ;;
     persubject)   run_persubject ;;
     groupstats)   run_groupstats ;;
     visualize)    run_visualize ;;
-    *) echo "Unknown MODE: $MODE (use: neighbors | groupavg | noiseceiling | persubject | groupstats | visualize)"; exit 1 ;;
+    *) echo "Unknown MODE: $MODE (use: neighbors | groupavg | avj | noiseceiling | persubject | groupstats | visualize)"; exit 1 ;;
 esac

@@ -27,7 +27,7 @@ Usage
 python rsa/integration_convergence.py \\
     --models pe-av-small-16-frame cav-mae-sync omni3b_layer18_mp topoomni_layer18_mp \\
     --rsa-root $ROOT/outputs/rsa/raw/group_average \\
-    --config k100_delay5s_bin5s_skip5s_spearman \\
+    --config k100_delay5s_bin5s_skip5s_pearson_spearman \\
     --template-cifti $ROOT/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \\
     --glasser-dlabel $ROOT/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii \\
     --out-dir $ROOT/outputs/rsa/raw/group_average/_integration_convergence
@@ -59,7 +59,7 @@ def parse_args():
     p.add_argument("--rsa-root", required=True, dest="rsa_root",
                    help="outputs/rsa/raw/group_average")
     p.add_argument("--config", required=True,
-                   help="e.g. k100_delay5s_bin5s_skip5s_spearman")
+                   help="e.g. k100_delay5s_bin5s_skip5s_pearson_spearman")
     p.add_argument("--template-cifti", required=True, dest="template_cifti")
     p.add_argument("--glasser-dlabel", required=True, dest="glasser_dlabel")
     p.add_argument("--out-dir", required=True, dest="out_dir")

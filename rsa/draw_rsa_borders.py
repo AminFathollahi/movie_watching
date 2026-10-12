@@ -16,7 +16,8 @@ modes.  Borders are written per hemisphere using wb_command
 Usage
 -----
 python rsa/draw_rsa_borders.py \
-    --rsa-npy  <path>/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_searchlight.npy \
+    --rsa-cifti <path>/rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_center_joint_only_models.dscalar.nii \
+    --map-name rho_j \
     --out-dir  <same dir or other> \
     --threshold-mode percentile --top-pct 5 \
     --min-verts 10
@@ -40,16 +41,15 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cifti_io import get_bm_axis, get_cortex_vertex_indices
+from cifti_io import get_bm_axis, get_cortex_vertex_indices, load_named_map
 from paths import ROOT as _BASE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 # ── defaults ─────────────────────────────────────────────────────────────────
-_RSA_NPY = (_BASE / "outputs/rsa/raw/group_average/pe-av-small-16-frame_av"
-             "/k100_delay5s_bin5s_skip5s_spearman_center"
-             "/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_searchlight.npy")
+_RSA_CIFTI = (_BASE / "outputs/rsa/raw/group_average/pe-av-small-16-frame"
+              "/rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_center_joint_only_models.dscalar.nii")
 _TEMPLATE = (_BASE / "data/preprocessed/average_sub/raw"
              "/group_average_raw_cortex_59k.dtseries.nii")
 _L_SURF = (_BASE / "data/HCP_S1200_GroupAvg_v1/GroupAverage_59k"
@@ -135,7 +135,8 @@ def _write_border(full_mask: np.ndarray, surface_path: str,
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--rsa-npy",    default=str(_RSA_NPY))
+    p.add_argument("--rsa-cifti",  default=str(_RSA_CIFTI))
+    p.add_argument("--map-name",   default="rho_j")
     p.add_argument("--out-dir",    default=None)
     p.add_argument("--template-cifti", default=str(_TEMPLATE))
     p.add_argument("--left-surface",   default=str(_L_SURF))
@@ -157,13 +158,13 @@ def parse_args():
 def main():
     args = parse_args()
 
-    rsa_npy = Path(args.rsa_npy)
-    out_dir = Path(args.out_dir) if args.out_dir else rsa_npy.parent
+    rsa_cifti = Path(args.rsa_cifti)
+    out_dir = Path(args.out_dir) if args.out_dir else rsa_cifti.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load RSA map ──────────────────────────────────────────────────────────
-    rsa = np.load(str(rsa_npy)).astype(np.float32)
-    log.info(f"RSA map: {rsa_npy.name}  shape={rsa.shape}  "
+    rsa = load_named_map(rsa_cifti, args.map_name)
+    log.info(f"RSA map: {rsa_cifti.name} {args.map_name}  shape={rsa.shape}  "
              f"mean={rsa.mean():.4f}  SD={rsa.std():.4f}")
 
     if args.threshold_mode == "percentile":
@@ -211,7 +212,7 @@ def main():
             continue
 
         # Build output stem from input filename
-        stem = rsa_npy.stem.replace("_searchlight", "")
+        stem = rsa_cifti.name.removesuffix(".dscalar.nii")
         border_path = out_dir / f"{stem}_{tag_thresh}_{tag}.border"
         _write_border(full_mask, surf_path, str(border_path), args.workbench,
                       class_name=tag_thresh)

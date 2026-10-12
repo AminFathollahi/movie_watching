@@ -35,8 +35,7 @@ from rsa.shared.rsa_utils import preprocess_fmri  # noqa: E402
 from cifti_io import save_cifti_multimap  # noqa: E402
 from noise_ceiling import _compute_nc_gpu, _compute_nc_cpu  # noqa: E402
 from subcortical_io import (  # noqa: E402
-    SUBCORTICAL_STRUCTURES, STRUCTURE_NEIGHBOR_MODE,
-    struct_slices, build_neighbors, get_cerebellum_neighbors,
+    SUBCORTICAL_STRUCTURES, struct_slices, structure_neighbors,
     preprocess_subject_subcortical,
 )
 
@@ -69,7 +68,7 @@ def main():
     if args.skip_sec is None:
         args.skip_sec = args.bin_sec
     N = len(args.subjects)
-    config = f"k{args.k}_delay{int(args.delay_sec)}s_bin{int(args.bin_sec)}s_skip{int(args.skip_sec)}s_{args.method}"
+    config = f"k{args.k}_delay{int(args.delay_sec)}s_bin{int(args.bin_sec)}s_skip{int(args.skip_sec)}s_pearson_{args.method}"
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -109,16 +108,7 @@ def main():
         n_struct = stop - start
         fmri_struct = [f[:, start:stop] for f in fmri_all]
 
-        if s.startswith("CEREBELLUM_"):
-            hem = "LEFT" if s.endswith("LEFT") else "RIGHT"
-            neighbors, mode_used = get_cerebellum_neighbors(
-                hem, info["world_xyz"], info["voxel_ijk"], args.k,
-                neighbor_cache_dir, args.workbench)
-        else:
-            mode = STRUCTURE_NEIGHBOR_MODE[s]
-            cache_path = neighbor_cache_dir / f"{s}_neighbors_k{args.k}_{mode}.npy"
-            neighbors = build_neighbors(info["voxel_ijk"], info["world_xyz"], args.k, mode, cache_path)
-            mode_used = mode
+        neighbors, mode_used = structure_neighbors(s, info, args.k, neighbor_cache_dir, args.workbench)
 
         idx = np.arange(n_struct, dtype=np.int32)
         try:

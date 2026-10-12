@@ -12,15 +12,15 @@ question at the level of a functionally-defined cluster of units instead of
 the whole embedding.
 
 Inputs (all pre-computed):
-  - plain RSA, dummy:   {GROUP_DIR}/{model}_clsav_from_{a,v}_av/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii
-        map 'searchlight_spearman_rho'
-  - plain RSA, intact:  {GROUP_DIR}/{model}_av/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii
-        map 'searchlight_spearman_rho'
+  - plain RSA, dummy:   {GROUP_DIR}/{model}_clsav_from_{a,v}/rsa_59k_raw_{CONFIG}_joint_only_models.dscalar.nii
+        map 'rho_j'
+  - plain RSA, intact:  {GROUP_DIR}/{model}/rsa_59k_raw_{CONFIG}_joint_only_models.dscalar.nii
+        map 'rho_j'
   - partial RSA, dummy (integration contrast rerun on dummy-modality
     embeddings) -- OPTIONAL, included only if already computed:
-        {GROUP_DIR}/{model}_clsav_from_{a,v}_av_INTEGRATION/k100_delay5s_bin5s_skip5s_spearman/integration_partial_r_searchlight.dscalar.nii
+        {GROUP_DIR}/{model}_clsav_from_{a,v}_av_INTEGRATION/k100_delay5s_bin5s_skip5s_pearson_spearman/integration_partial_r_searchlight.dscalar.nii
   - partial RSA, intact (the same integration contrast on the intact model):
-        {GROUP_DIR}/{model}_av_INTEGRATION/k100_delay5s_bin5s_skip5s_spearman/integration_partial_r_searchlight.dscalar.nii
+        {GROUP_DIR}/{model}_av_INTEGRATION/k100_delay5s_bin5s_skip5s_pearson_spearman/integration_partial_r_searchlight.dscalar.nii
 
 Per-condition output: {GROUP_DIR}/{model}_clsav_from_{a,v}_av/dummy_consolidated_maps.dscalar.nii
   maps: plain_rsa_dummy, diff_intact_minus_dummy_plain_rsa
@@ -60,14 +60,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cifti_io import load_named_map, load_single_map, merge_into_combined  # noqa: E402
-from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
+from rsa.shared.naming import DEFAULT_MODEL_NORM, searchlight_path  # noqa: E402
 from paths import OUTPUTS  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
 log = logging.getLogger(__name__)
 
 GROUP_DIR = OUTPUTS / "rsa/raw/group_average"
-CONFIG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
+CONFIG = f"k100_delay5s_bin5s_skip5s_pearson_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 
 # Same model families and layers as rsa/scramble_diff_maps.py's MODELS list.
 MODELS = [
@@ -88,23 +88,23 @@ DUMMY_CONDITIONS = ["clsav_from_a", "clsav_from_v"]
 def main():
     done, partial_model_done, skipped = [], [], []
     for model in MODELS:
-        intact_path = GROUP_DIR / f"{model}_av" / f"rsa_59k_raw_{CONFIG}_maps.dscalar.nii"
+        intact_path = searchlight_path(GROUP_DIR, model, "av", f"rsa_59k_raw_{CONFIG}")
         if not intact_path.exists():
             log.info(f"[{model}] SKIP — missing intact RSA: {intact_path}")
             skipped.append(model)
             continue
-        plain_intact = load_named_map(intact_path, "searchlight_spearman_rho")
+        plain_intact = load_named_map(intact_path, "rho_j")
 
         partial_dummy_by_cond = {}
         for cond in DUMMY_CONDITIONS:
             dummy_dir = f"{model}_{cond}_av"
-            dummy_path = GROUP_DIR / dummy_dir / f"rsa_59k_raw_{CONFIG}_maps.dscalar.nii"
+            dummy_path = searchlight_path(GROUP_DIR, f"{model}_{cond}", "av", f"rsa_59k_raw_{CONFIG}")
             if not dummy_path.exists():
                 log.info(f"[{model}/{cond}] SKIP — missing dummy RSA: {dummy_path}")
                 skipped.append(f"{model}/{cond}")
                 continue
 
-            plain_dummy = load_named_map(dummy_path, "searchlight_spearman_rho")
+            plain_dummy = load_named_map(dummy_path, "rho_j")
             diff = plain_intact - plain_dummy
 
             out_path = GROUP_DIR / dummy_dir / "dummy_consolidated_maps.dscalar.nii"

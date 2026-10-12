@@ -4,14 +4,14 @@ intact-minus-scrambled diffs (plain and partial) into one CIFTI per
 avscramble model config.
 
 Inputs (all pre-computed):
-  - plain RSA, scrambled:  {GROUP_DIR}/{model}_avscramble_av/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii
-        map 'searchlight_spearman_rho'
-  - plain RSA, intact:     {GROUP_DIR}/{model}_av/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii
-        map 'searchlight_spearman_rho'
+  - plain RSA, scrambled:  {GROUP_DIR}/{model}_avscramble/rsa_59k_raw_{CONFIG}_joint_only_models.dscalar.nii
+        map 'rho_j'
+  - plain RSA, intact:     {GROUP_DIR}/{model}/rsa_59k_raw_{CONFIG}_joint_only_models.dscalar.nii
+        map 'rho_j'
   - partial RSA, scrambled (best-additive integration contrast, re-run on scrambled embeddings):
-        {GROUP_DIR}/{model}_avscramble_av_INTEGRATION/k100_delay5s_bin5s_skip5s_spearman/integration_partial_r_searchlight.dscalar.nii
+        {GROUP_DIR}/{model}_avscramble_av_INTEGRATION/k100_delay5s_bin5s_skip5s_pearson_spearman/integration_partial_r_searchlight.dscalar.nii
   - partial RSA, intact (the same integration contrast on the intact model):
-        {GROUP_DIR}/{model}_av_INTEGRATION/k100_delay5s_bin5s_skip5s_spearman/integration_partial_r_searchlight.dscalar.nii
+        {GROUP_DIR}/{model}_av_INTEGRATION/k100_delay5s_bin5s_skip5s_pearson_spearman/integration_partial_r_searchlight.dscalar.nii
 
 Output: {GROUP_DIR}/{model}_avscramble_av/scramble_consolidated_maps.dscalar.nii
   maps: plain_rsa_scrambled, partial_rsa_scrambled,
@@ -36,14 +36,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cifti_io import load_named_map, load_single_map, merge_into_combined  # noqa: E402
-from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
+from rsa.shared.naming import DEFAULT_MODEL_NORM, searchlight_path  # noqa: E402
 from paths import OUTPUTS  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
 log = logging.getLogger(__name__)
 
 GROUP_DIR = OUTPUTS / "rsa/raw/group_average"
-CONFIG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
+CONFIG = f"k100_delay5s_bin5s_skip5s_pearson_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 
 MODELS = [
     "pe-av-small-16-frame",
@@ -61,8 +61,8 @@ MODELS = [
 def main():
     done, partial_done, skipped = [], [], []
     for model in MODELS:
-        scrambled_plain_path = GROUP_DIR / f"{model}_avscramble_av" / f"rsa_59k_raw_{CONFIG}_maps.dscalar.nii"
-        intact_plain_path = GROUP_DIR / f"{model}_av" / f"rsa_59k_raw_{CONFIG}_maps.dscalar.nii"
+        scrambled_plain_path = searchlight_path(GROUP_DIR, f"{model}_avscramble", "av", f"rsa_59k_raw_{CONFIG}")
+        intact_plain_path = searchlight_path(GROUP_DIR, model, "av", f"rsa_59k_raw_{CONFIG}")
         partial_scrambled_path = GROUP_DIR / f"{model}_avscramble_av_INTEGRATION" / CONFIG / "integration_partial_r_searchlight.dscalar.nii"
         partial_intact_path = GROUP_DIR / f"{model}_av_INTEGRATION" / CONFIG / "integration_partial_r_searchlight.dscalar.nii"
 
@@ -72,8 +72,8 @@ def main():
             skipped.append(model)
             continue
 
-        plain_scrambled = load_named_map(scrambled_plain_path, "searchlight_spearman_rho")
-        plain_intact = load_named_map(intact_plain_path, "searchlight_spearman_rho")
+        plain_scrambled = load_named_map(scrambled_plain_path, "rho_j")
+        plain_intact = load_named_map(intact_plain_path, "rho_j")
         partial_scrambled = load_single_map(partial_scrambled_path)
 
         diff_plain = plain_intact - plain_scrambled

@@ -19,8 +19,8 @@ Benjamini-Hochberg FDR is then applied across all grayordinate vertices.
 
 Algorithm
 ---------
-1.  Load the group-average combined CIFTI dscalar (output of run_analysis.sh)
-    and extract the specified RSA map (default: searchlight_spearman_rho).
+1.  Load the group-average searchlight.py file ({stem}_joint_only_models.dscalar.nii)
+    and extract the specified RSA map (default: rho_j).
 2.  Load the sphere registration surfaces (*.sphere.59k_fs_LR.surf.gii) and
     extract vertex coordinates.  Coordinates are mapped to the unit sphere.
 3.  Generate n_spin random SO(3) rotation matrices (QR decomposition of a
@@ -32,18 +32,18 @@ Algorithm
       null[s, v] = empirical[spin_indices[s, v]]
 6.  Compute one-tailed p_uncorr[v] = (count(null[:, v] >= empirical[v]) + 1) / (n_spin + 1)
 7.  Apply BH-FDR (Benjamini-Hochberg) across all vertices.
-8.  Produce output maps:
-      sigmap_uncorr      : sign(rho) × −log10(p_uncorr)
-      sigmap_fdr         : sign(rho) × −log10(p_fdr)
-      cluster_mask_fdr   : significant FDR vertices in clusters ≥ min_cluster_size
-      cluster_borders_fdr: borders around those clusters
-9.  Append four maps to the existing combined CIFTI via merge_into_combined().
+8.  Produce output maps (prefixed with the map name, e.g. rho_j_sigmap_spin):
+      sigmap_spin             : sign(rho) × −log10(p_uncorr)
+      sigmap_spin_fdr         : sign(rho) × −log10(p_fdr)
+      spin_cluster_mask_fdr   : significant FDR vertices in clusters ≥ min_cluster_size
+      spin_cluster_borders_fdr: borders around those clusters
+9.  Add the four maps to the input CIFTI via merge_into_combined().
 
 Usage
 -----
 python rsa/run_spin_permutations.py \
-    --combined-cifti $ROOT/outputs/rsa/raw/group_average/pe-av-small-16-frame/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_center_maps.dscalar.nii \
-    --map-name searchlight_spearman_rho \
+    --combined-cifti $ROOT/outputs/rsa/raw/group_average/pe-av-small-16-frame/rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_center_joint_only_models.dscalar.nii \
+    --map-name rho_j \
     --left-sphere $ROOT/data/HCP_S1200_GroupAvg_v1/L.sphere.59k_fs_LR.surf.gii \
     --right-sphere $ROOT/data/HCP_S1200_GroupAvg_v1/R.sphere.59k_fs_LR.surf.gii \
     --left-surface $ROOT/data/HCP_S1200_GroupAvg_v1/GroupAverage_59k/CohortAvg.L.midthickness_MSMAll.59k_fs_LR.surf.gii \
@@ -99,10 +99,10 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--combined-cifti",  required=True, dest="combined_cifti",
-                   help="Path to combined *_maps.dscalar.nii to update.")
-    p.add_argument("--map-name",        default="searchlight_spearman_rho",
+                   help="dscalar holding the map to test; the spin maps are added to it.")
+    p.add_argument("--map-name",        default="rho_j",
                    dest="map_name",
-                   help="Scalar map name within the combined CIFTI to test.")
+                   help="Scalar map name within that CIFTI to test.")
     p.add_argument("--left-sphere",     required=True, dest="left_sphere",
                    help="Left hemisphere sphere registration .surf.gii "
                         "(*.sphere.59k_fs_LR.surf.gii).")
@@ -448,10 +448,10 @@ def main():
 
     # ── Build output maps ─────────────────────────────────────────────────────
     new_maps = {
-        f"{args.map_name}_sigmap_uncorr":      sigmap_uncorr,
-        f"{args.map_name}_sigmap_fdr":         sigmap_fdr,
-        f"{args.map_name}_cluster_mask_fdr":   cluster_mask_fdr,
-        f"{args.map_name}_cluster_borders_fdr": cluster_borders_fdr,
+        f"{args.map_name}_sigmap_spin":              sigmap_uncorr,
+        f"{args.map_name}_sigmap_spin_fdr":          sigmap_fdr,
+        f"{args.map_name}_spin_cluster_mask_fdr":    cluster_mask_fdr,
+        f"{args.map_name}_spin_cluster_borders_fdr": cluster_borders_fdr,
     }
 
     # ── Append to combined CIFTI ─────────────────────────────────────────────
@@ -465,7 +465,7 @@ def main():
         out_dir = Path(args.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        stem     = Path(args.combined_cifti).stem.replace("_maps", "")
+        stem     = Path(args.combined_cifti).name.removesuffix(".dscalar.nii")
         out_path = out_dir / f"{stem}_spin{args.n_spin}_significance.dscalar.nii"
         data_2d  = np.stack(list(new_maps.values()), axis=0)
         save_cifti_multimap(

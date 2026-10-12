@@ -13,14 +13,14 @@ the two per-subject rho maps, since same-subject/same-vertex pairing cancels
 subject-level baseline differences.
 
 PREREQUISITE: per-subject scrambled RSA must exist under
-{output-dir}/subject_data/{sub}/{scrambled-model}_{modality}/..., i.e.
+{output-dir}/subject_data/{sub}/{scrambled-model}/..., i.e.
 rsa/searchlight.py run per-subject with the scrambled embedding, the same way
 the existing per-subject intact runs were produced. (Historically this had
 not been run; it has since been run per-subject for
 pe-av-small-16-frame_avscramble/av.)
 
 FDR convention and the optional corrected 2-factor bootstrap (Schutt et al.
-2023 Eq. 5, requires --n-blocks block-level .npy files for BOTH intact and
+2023 Eq. 5, requires --n-blocks block maps in the subject files of BOTH intact and
 scrambled) exactly mirror rsa/group_stats.py, just computed on the per-subject
 DIFF stack instead of the raw rho stack.
 
@@ -63,7 +63,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cifti_io import save_cifti_map, save_cifti_multimap  # noqa: E402
 from rsa.shared.naming import add_model_norm_arg, method_label  # noqa: E402
-from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap  # noqa: E402
+from rsa.max_uni import load_rho_stack  # noqa: E402
+from rsa.shared.rsa_utils import corrected_2factor_bootstrap  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -82,7 +83,7 @@ def parse_args():
     p.add_argument("--bin-sec", type=float, required=True)
     p.add_argument("--skip-sec", type=float, default=None, dest="skip_sec")
     p.add_argument("--delay-sec", type=float, default=5.0)
-    p.add_argument("--method", required=True, choices=["spearman", "pearson", "rho_a"])
+    p.add_argument("--method", required=True, choices=["spearman", "pearson"])
     add_model_norm_arg(p)
     p.add_argument("--fmri-tag", required=True)
     p.add_argument("--template-cifti", required=True)
@@ -143,26 +144,6 @@ def _sign_flip_perm_test(diff_stack: np.ndarray, mean_diff: np.ndarray,
     return p_perm.astype(np.float32), sigmap_perm, sigmap_perm_fdr, fdr_perm_mask, n_sig_perm_fdr
 
 
-def _load_subject_stack(output_dir: Path, model: str, modality: str, config: str,
-                         fname_pattern: str) -> tuple[np.ndarray, list[Path]]:
-    model_mod_dir = f"{model}_{modality}"
-    files = sorted(output_dir.glob(f"subject_data/*/{model_mod_dir}/{config}/{fname_pattern}"))
-    if not files:
-        return None, files
-    stack = np.stack([np.load(str(f)).astype(np.float32) for f in files], axis=0)
-    return stack, files
-
-
-def _load_block_stack(output_dir: Path, model: str, modality: str, config: str,
-                       fname_pattern: str, n_blocks: int) -> np.ndarray | None:
-    model_mod_dir = f"{model}_{modality}"
-    pat = fname_pattern.replace("_searchlight.npy", f"_searchlight_nblocks{n_blocks}.npy")
-    files = sorted(output_dir.glob(f"subject_data/*/{model_mod_dir}/{config}/{pat}"))
-    if not files:
-        return None
-    return np.stack([np.load(str(f)).astype(np.float32) for f in files], axis=0)
-
-
 def main():
     args = parse_args()
     if args.skip_sec is None:
@@ -173,27 +154,16 @@ def main():
     config = f"k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s_{method}"
 
     output_dir = Path(args.output_dir)
-    if args.method == "rho_a":
-        fname_pattern = f"crossnobis_rho_a_k{args.k}_{delay_tag}_bin{bin_sec_int}s_skip{skip_int}s.npy"
-    else:
-        fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
-                          f"_bin{bin_sec_int}s_skip{skip_int}s_{method}_searchlight.npy")
-
-    intact_stack, intact_files = _load_subject_stack(
-        output_dir, args.intact_model, args.modality, config, fname_pattern)
-    scrambled_stack, scrambled_files = _load_subject_stack(
-        output_dir, args.scrambled_model, args.modality, config, fname_pattern)
-
-    if intact_stack is None or scrambled_stack is None:
-        log.error(
-            f"Missing per-subject maps: intact={len(intact_files)} found, "
-            f"scrambled={len(scrambled_files)} found. Run rsa/searchlight.py per-subject "
-            f"with --model {args.scrambled_model} first (see module docstring)."
-        )
+    stem = f"rsa_59k_{args.fmri_tag}_{config}"
+    try:
+        intact_stack, intact_block, intact_subs = load_rho_stack(
+            output_dir, args.intact_model, args.modality, stem, args.n_blocks)
+        scrambled_stack, scrambled_block, scrambled_subs = load_rho_stack(
+            output_dir, args.scrambled_model, args.modality, stem, args.n_blocks)
+    except FileNotFoundError as e:
+        log.error(f"{e}\nRun rsa/searchlight.py per subject for both models first (see module docstring).")
         sys.exit(1)
 
-    intact_subs = [f.parent.parent.parent.name for f in intact_files]
-    scrambled_subs = [f.parent.parent.parent.name for f in scrambled_files]
     if intact_subs != scrambled_subs:
         common = sorted(set(intact_subs) & set(scrambled_subs))
         log.warning(f"Subject sets differ (intact={len(intact_subs)}, scrambled={len(scrambled_subs)}); "
@@ -202,6 +172,8 @@ def main():
         scrambled_idx = [scrambled_subs.index(s) for s in common]
         intact_stack = intact_stack[intact_idx]
         scrambled_stack = scrambled_stack[scrambled_idx]
+        if intact_block is not None and scrambled_block is not None:
+            intact_block, scrambled_block = intact_block[intact_idx], scrambled_block[scrambled_idx]
         subs = common
     else:
         subs = intact_subs
@@ -228,21 +200,7 @@ def main():
     have_blocks = False
     n_sig_c2f = 0
     fdr_c2f_mask = None
-    if args.method == "rho_a":
-        # fname_pattern for rho_a (crossnobis_rho_a_..._bin{..}s_skip{..}s.npy) contains no
-        # "_searchlight.npy", so _load_block_stack's replace() would be a silent no-op and
-        # never match a file. No crossnobis_rho_a_*_nblocks*.npy files are produced by any
-        # script today, so there is nothing to load -- skip explicitly instead of relying
-        # on that broken match.
-        log.info("2-factor bootstrap not supported for method=rho_a; skipping")
-        intact_block = scrambled_block = None
-    else:
-        intact_block = _load_block_stack(output_dir, args.intact_model, args.modality, config,
-                                          fname_pattern, args.n_blocks)
-        scrambled_block = _load_block_stack(output_dir, args.scrambled_model, args.modality, config,
-                                             fname_pattern, args.n_blocks)
-    if intact_block is not None and scrambled_block is not None \
-            and intact_block.shape[0] == n_subs and scrambled_block.shape[0] == n_subs:
+    if intact_block is not None and scrambled_block is not None:
         # Difference BEFORE bootstrapping, deliberately: intact/scrambled share the
         # same subject's same-block brain data (only the model-side AV pairing
         # differs), so subject- and block-level noise must cancel in the diff.

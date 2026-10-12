@@ -63,7 +63,7 @@ Under `outputs/cka/raw/`, `{stem}` = `cka_59k_raw_k{k}_delay{D}s_bin{B}s_skip{B}
 | `group_average/{model}/{stem}_{tag}_semipartial.dscalar.nii` | `sp_a`, `sp_v`, `sp_j` |
 | `group_average/{model}/{stem}_{tag}_commonality.dscalar.nii` | `r2_a` … `r2_avj`, the seven regions, `shared_av` |
 | `group_average/{model}/{stem}_{tag}_provenance.json` | sources, settings, definitions, component cosines |
-| `group_average/{model}/diagnostics/` | map of J without the repeated clips (`_norepeats`) |
+| `group_average/{model}/diagnostics/` | map `cka_j` of J without the repeated clips (`_norepeats`) |
 | `subjects/{subject}/{model}/` | the same four files for one subject |
 | `subject_mean/{model}/{stem}_{tag}_{kind}.dscalar.nii` | `mean_{map}` and `sem_{map}` over subjects; for `models` also `frac_j_gt_a`, `frac_j_gt_v` |
 | `subject_mean/{model}/{stem}_{tag}_provenance.json` | subjects, definitions |

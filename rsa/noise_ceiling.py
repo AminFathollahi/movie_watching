@@ -70,6 +70,7 @@ sys.path.insert(0, str(ROOT))
 
 from cifti_io import get_bm_axis, get_cortex_vertex_indices, save_cifti_multimap
 from rsa.shared.rsa_utils import load_fmri_cifti, preprocess_fmri
+from rsa.shared.naming import rsa_method
 
 sys.path.insert(0, str(Path(__file__).parent))
 from searchlight import get_neighbors  # noqa: E402
@@ -467,7 +468,7 @@ def main():
     bin_int  = int(args.bin_sec)
     skip_int = int(args.skip_sec)
     config   = (f"k{args.k}_delay{int(args.delay_sec)}s"
-                f"_bin{bin_int}s_skip{skip_int}s_{args.method}")
+                f"_bin{bin_int}s_skip{skip_int}s_{rsa_method(args.method)}")
 
     log.info("=" * 70)
     log.info(f"Noise ceiling  N={N} subjects  {config}")

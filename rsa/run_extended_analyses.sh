@@ -44,9 +44,8 @@ MODEL_NORM="${MODEL_NORM:-center}"
 TR=1.0
 GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-512}"
 
-CONFIG="k100_delay5s_bin5s_skip5s_spearman_${MODEL_NORM}"
-NORMAL_MAPS_FILENAME="rsa_59k_raw_${CONFIG}_maps.dscalar.nii"
-RESIDUALIZED_MAPS_FILENAME="rsa_59k_raw_${CONFIG}_residualized_maps.dscalar.nii"
+CONFIG="k100_delay5s_bin5s_skip5s_pearson_spearman_${MODEL_NORM}"
+STEM="rsa_59k_raw_${CONFIG}"
 
 run_python() { conda run --no-capture-output -n "$CONDA_ENV" python "$@"; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }
@@ -83,14 +82,15 @@ run_rsa() {
 from pathlib import Path
 import nibabel as nib
 from rsa.shared.model_registry import RESIDUALIZED_AV_MODELS
+from rsa.residualized_maps import output_path
+from rsa.shared.naming import searchlight_path
 
 embeddings = Path('$EMBEDDINGS_DIR')
 group_root = Path('$GROUP_ROOT')
-normal_filename = '$NORMAL_MAPS_FILENAME'
-residualized_filename = '$RESIDUALIZED_MAPS_FILENAME'
+stem = '$STEM'
 missing = []
 for model in RESIDUALIZED_AV_MODELS:
-    consolidated = group_root / f'{model}_av' / residualized_filename
+    consolidated = output_path(group_root, model, stem)
     consolidated_names = []
     if consolidated.is_file():
         try:
@@ -105,14 +105,14 @@ for model in RESIDUALIZED_AV_MODELS:
         embedding = embeddings / residual_model / 'bin5s_skip5s' / f'{residual_model}_av.npy'
         if not embedding.is_file():
             continue
-        output = group_root / f'{residual_model}_av' / normal_filename
+        output = searchlight_path(group_root, residual_model, 'av', stem)
         names = []
         if output.is_file():
             try:
                 names = list(nib.load(output).header.get_axis(0).name)
             except Exception:
                 pass
-        if 'searchlight_spearman_rho' not in names:
+        if 'rho_j' not in names:
             missing.append(f'{residual_model}:av')
 print(';'.join(missing))
 ")
@@ -132,12 +132,12 @@ run_partial() {
 from pathlib import Path
 import nibabel as nib
 from rsa.shared.model_registry import RESIDUALIZED_AV_MODELS
+from rsa.residualized_maps import output_path
 
 group_root = Path('$GROUP_ROOT')
 config = '$CONFIG'
-residualized_filename = '$RESIDUALIZED_MAPS_FILENAME'
 for model in RESIDUALIZED_AV_MODELS:
-    consolidated = group_root / f'{model}_av' / residualized_filename
+    consolidated = output_path(group_root, model, '$STEM')
     names = []
     if consolidated.is_file():
         try:
@@ -186,7 +186,7 @@ run_consolidate() {
             --model "$model" \
             --rsa-root "$GROUP_ROOT" \
             --config "$CONFIG" \
-            --normal-maps-filename "$NORMAL_MAPS_FILENAME" \
+            --stem "$STEM" \
             --template-cifti "$TEMPLATE_CIFTI" \
             || failed=1
     done

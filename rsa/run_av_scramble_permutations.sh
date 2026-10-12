@@ -103,7 +103,8 @@ model_for_seed() {
 rho_path_for_seed() {
     local model
     model="$(model_for_seed "$1")"
-    echo "${OUTPUT_DIR}/group_average/${model}_${MODALITY}/k${K}_delay5s_bin5s_skip5s_${METHOD}_${MODEL_NORM}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay5s_bin5s_skip5s_${METHOD}_${MODEL_NORM}_searchlight.npy"
+    local tag="${MODALITY}_only"; [ "$MODALITY" = "av" ] && tag="joint_only"
+    echo "${OUTPUT_DIR}/group_average/${model}/rsa_59k_${FMRI_SUFFIX}_k${K}_delay5s_bin5s_skip5s_pearson_${METHOD}_${MODEL_NORM}_${tag}_models.dscalar.nii"
 }
 
 if [ -n "$BATCH_SIZE" ]; then

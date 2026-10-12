@@ -48,11 +48,8 @@ from rsa.shared.rsa_utils import (
     process_model_embeddings, compute_rdm, correlate_rdms,
     align_and_assert_bins, assert_segment_timing,
 )
-from rsa.shared.naming import add_model_norm_arg
-from cifti_io import (
-    get_bm_axis,
-    get_combined_map_names, merge_into_combined,
-)
+from rsa.shared.naming import add_model_norm_arg, rsa_method, single_model
+from cifti_io import get_bm_axis, save_cifti_map
 
 logging.basicConfig(
     level=logging.INFO,
@@ -113,9 +110,6 @@ def parse_args():
                         "(Schütt et al. 2023 §3.5 recommended comparator).")
     p.add_argument("--tr", type=float, required=True,
                    help="TR in seconds.")
-    p.add_argument("--combined-output", default=None, dest="combined_output",
-                   help="Path to a combined .dscalar.nii shared with searchlight.py. "
-                        "This script adds/replaces the 'glasser_{method}_rho' map.")
 
     # Streaming preprocessing flags
     prep = p.add_argument_group("streaming preprocessing (ignored in disk mode)")
@@ -217,7 +211,7 @@ def _config_label(args) -> str:
     parts = [
         "hrf" if args.hrf else f"delay{args.delay_sec:.0f}s",
         f"bin{args.bin_sec:.0f}s_skip{args.skip_sec:.0f}s",
-        args.method,
+        rsa_method(args.method),
         args.model_norm,
     ]
     return "_".join(parts)
@@ -242,14 +236,11 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     bin_sec_int   = int(args.bin_sec)
     delay_tag     = f"delay{int(args.delay_sec)}s"
     report_out    = out_root / "ranked_report.csv"
-    map_name      = f"glasser_{args.method}_rho"
-    combined_path = Path(args.combined_output) if args.combined_output else None
+    maps_out      = out_root / "parcel_maps.dscalar.nii"
 
-    # ── Skip / fast-merge logic ───────────────────────────────────────────────
-    if report_out.exists():
-        if combined_path is None or map_name in get_combined_map_names(combined_path):
-            log.info(f"Outputs already exist — skipping: {out_root}")
-            return
+    if report_out.exists() and maps_out.exists():
+        log.info(f"Outputs already exist — skipping: {out_root}")
+        return
 
     assert_segment_timing(timing_df, args.bin_sec, args.tr,
                           args.delay_sec, args.skip_sec, run_trs)
@@ -302,10 +293,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray, fmri_b
     log.info(f"  Ranked report: {report_out}")
     log.info(f"  Top-5 parcels:\n{report.head(5).to_string(index=False)}")
 
-    # ── Merge into combined output ────────────────────────────────────────────
-    if combined_path is not None:
-        combined_path.parent.mkdir(parents=True, exist_ok=True)
-        merge_into_combined(corr_map, map_name, combined_path, args.template_cifti)
+    save_cifti_map(corr_map, args.template_cifti, str(maps_out), single_model(args.modality)[1])
 
 
 # =============================================================================

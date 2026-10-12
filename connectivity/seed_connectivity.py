@@ -46,8 +46,8 @@ stim            : the filtered "meaningful AV content" clip windows only
 Usage
 -----
 python connectivity/seed_connectivity.py \\
-    --border-lh outputs/rsa/raw/group_average/pe-av-small-16-frame_av/k100_delay5s_bin5s_skip5s_spearman/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_top5pct_lh.border \\
-    --border-rh outputs/rsa/raw/group_average/pe-av-small-16-frame_av/k100_delay5s_bin5s_skip5s_spearman/rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_top5pct_rh.border \\
+    --border-lh outputs/rsa/raw/group_average/pe-av-small-16-frame_av/k100_delay5s_bin5s_skip5s_pearson_spearman/rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_top5pct_lh.border \\
+    --border-rh outputs/rsa/raw/group_average/pe-av-small-16-frame_av/k100_delay5s_bin5s_skip5s_pearson_spearman/rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_top5pct_rh.border \\
     --mode group_average \\
     --roi-name pe-av-small-16-frame_av_top5pct \\
     --out-dir outputs/connectivity/pe-av-small-16-frame_av_top5pct/group_average

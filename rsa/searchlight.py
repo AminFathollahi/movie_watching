@@ -5,8 +5,9 @@ Vertex-wise searchlight RSA on HCP 7T movie-watching fMRI data.
 
 For each vertex, a geodesic neighbourhood of k nearest vertices is assembled.
 The fMRI RDM within that neighbourhood is correlated (Spearman or Pearson)
-with the model RDM. The resulting correlation map is saved as a multi-map
-CIFTI dscalar.
+with the model RDM. Output: {output}/group_average/{model}/{stem}_joint_only_models.dscalar.nii
+({x}_only for a modality other than av) with rho_j and its sigmaps and FDR mask; per subject,
+{output}/subject_data/{subject}/{model}/ with rho_j and the block maps rho_j_block01 ...
 
 Input modes
 -----------
@@ -71,11 +72,11 @@ from rsa.shared.rsa_utils import (
     process_model_embeddings, align_and_assert_bins,
     assert_segment_timing,
 )
-from rsa.shared.naming import add_model_norm_arg, searchlight_config, searchlight_stem
+from rsa.shared.naming import (
+    add_model_norm_arg, rsa_method, searchlight_config, searchlight_path, searchlight_stem, single_model,
+)
 from cifti_io import (
-    get_bm_axis, get_cortex_vertex_indices,
-    get_combined_map_names, merge_into_combined,
-    save_cifti_map,
+    get_bm_axis, get_cortex_vertex_indices, get_combined_map_names, save_cifti_map, save_cifti_multimap,
 )
 
 logging.basicConfig(
@@ -84,7 +85,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-DISTANCE_LABELS = {"correlation": "corr", "euclidean": "euclid"}
 REPEATED_CLIPS = ("video5", "video9", "video14", "video18")
 
 # n_jobs for joblib parallelism inside each subject's searchlight.
@@ -209,22 +209,14 @@ def parse_args():
                         "for 60k vertices × ~1M pairs each. Use spearman for the searchlight; "
                         "rho_a is used at the parcel level (glasser.py) where it is feasible "
                         "and the noise-ceiling advantage matters most.")
-    p.add_argument("--distance", choices=list(DISTANCE_LABELS), default="correlation",
-                   help="Dissimilarity of window pairs, in the brain and the model RDM. "
-                        "euclidean = squared Euclidean distance. A non-default value or "
-                        "--drop-repeated-clips writes only a diagnostic map (see README).")
     p.add_argument("--drop-repeated-clips", action="store_true", dest="drop_repeated_clips",
                    help="Drop the windows of the repeated clips after per-run normalization "
                         "(diagnostic map; group-average disk mode only).")
     p.add_argument("--n-blocks", type=int, default=4, dest="n_blocks",
                    help="Number of non-overlapping temporal blocks for the condition bootstrap "
-                        "(Schütt et al. 2023, Eq. 5). Each block gets its own RSA map, saved as "
-                        "_nblocks{N}.npy alongside the full-series map. Set to 1 to disable.")
+                        "(Schütt et al. 2023, Eq. 5). Each block gets its own RSA map "
+                        "(rho_x_block01 ...) in the output file. Set to 1 to disable.")
     p.add_argument("--tr", type=float, required=True)
-    p.add_argument("--combined-output", default=None, dest="combined_output",
-                   help="Path to a combined .dscalar.nii that accumulates maps from "
-                        "both searchlight and Glasser runs. This script adds/replaces "
-                        "the 'searchlight_{method}_rho' map.")
     p.add_argument("--geodesic-cache-dir", default=None, dest="geodesic_cache_dir",
                    help="Shared directory for geodesic k-NN .npy caches (preprocessing-"
                         "agnostic). Defaults to {output_dir}/_geodesic_cache if not set. "
@@ -413,8 +405,7 @@ def get_neighbors(surface_path: str, workbench: str, subject: str,
 # =============================================================================
 
 def _precompute_model_rdm(emb: np.ndarray, n_bins: int,
-                           tril_idx: tuple, method: str,
-                           distance: str = "correlation") -> tuple:
+                           tril_idx: tuple, method: str) -> tuple:
     """Precompute model RDM condensed flat form + normalised ranks (once per hemisphere).
 
     Returns
@@ -426,19 +417,13 @@ def _precompute_model_rdm(emb: np.ndarray, n_bins: int,
     # Constant features become NaN during per-run z-scoring. Treat them as
     # zero-valued dimensions so a degenerate model RDM yields zero correlation.
     emb64 = np.nan_to_num(emb.astype(np.float64), copy=False)
-    if distance == "euclidean":
-        ec = emb64 - emb64.mean(axis=0, keepdims=True)
-        gram = ec @ ec.T
-        dg = np.diag(gram)
-        model_flat = (dg[:, None] + dg[None, :] - 2 * gram)[tril_idx].astype(np.float32)
-    else:
-        mu = emb64.mean(axis=1, keepdims=True)
-        ec = emb64 - mu
-        norms = np.sqrt((ec ** 2).sum(axis=1, keepdims=True))
-        norms[norms < 1e-10] = 1.0
-        en = ec / norms
-        sim = en @ en.T                                     # (n_bins, n_bins)
-        model_flat = (1.0 - sim)[tril_idx].astype(np.float32)
+    mu = emb64.mean(axis=1, keepdims=True)
+    ec = emb64 - mu
+    norms = np.sqrt((ec ** 2).sum(axis=1, keepdims=True))
+    norms[norms < 1e-10] = 1.0
+    en = ec / norms
+    sim = en @ en.T                                     # (n_bins, n_bins)
+    model_flat = (1.0 - sim)[tril_idx].astype(np.float32)
 
     if method == "spearman":
         ranks = rankdata(model_flat).astype(np.float32)
@@ -459,8 +444,7 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
                                neighbors: np.ndarray,
                                vertex_to_col: np.ndarray,
                                tril_idx: tuple,
-                               method: str,
-                               distance: str = "correlation") -> float:
+                               method: str) -> float:
     """Optimised per-vertex RSA: float32 matmul RDM + Spearman via argsort.
 
     Replaces squareform(pdist) + spearmanr with:
@@ -486,19 +470,13 @@ def _searchlight_vertex_fast(surf_v: int, fmri: np.ndarray,
 
     hood = fmri[:, neighbor_cols]   # float32, matching GPU path
 
-    if distance == "euclidean":
-        hk = hood - hood.mean(axis=0, keepdims=True)
-        gram = hk @ hk.T
-        dg = np.diag(gram)
-        fmri_flat = (dg[:, None] + dg[None, :] - 2 * gram)[tril_idx]
-    else:
-        # Row-normalise to get unit correlation vectors (fast RDM via matmul)
-        mu = hood.mean(axis=1, keepdims=True)
-        hc = hood - mu
-        norms = np.sqrt((hc ** 2).sum(axis=1, keepdims=True))
-        norms[norms < 1e-10] = 1.0
-        hn = hc / norms
-        fmri_flat = (1.0 - hn @ hn.T)[tril_idx]   # float32 condensed RDM
+    # Row-normalise to get unit correlation vectors (fast RDM via matmul)
+    mu = hood.mean(axis=1, keepdims=True)
+    hc = hood - mu
+    norms = np.sqrt((hc ** 2).sum(axis=1, keepdims=True))
+    norms[norms < 1e-10] = 1.0
+    hn = hc / norms
+    fmri_flat = (1.0 - hn @ hn.T)[tril_idx]   # float32 condensed RDM
 
     if method == "spearman":
         # Rank-order the fMRI distances; Pearson on ranks = Spearman
@@ -521,8 +499,7 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                     vertex_to_col: np.ndarray,
                     method: str = "spearman",
                     n_jobs: int = -1,
-                    batch_size: int = 512,
-                    distance: str = "correlation") -> np.ndarray:
+                    batch_size: int = 512) -> np.ndarray:
     """Searchlight RSA across all grayordinate vertices.
 
     GPU is attempted unconditionally when CUDA is available; CUDA OOM triggers
@@ -542,7 +519,7 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
     n_verts = fmri.shape[1]
     n_bins = fmri.shape[0]
     tril_idx = np.tril_indices(n_bins, k=-1)
-    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method, distance)
+    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
     if not np.any(model_norm):
         log.info("  Model RDM has no variance; returning a zero RSA map")
         return np.zeros(n_verts, dtype=np.float32)
@@ -564,7 +541,6 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
                 return run_searchlight_gpu(
                     fmri, model_emb, neighbors, surface_indices,
                     vertex_to_col, method, batch_size=batch_size, device="cuda",
-                    distance=distance,
                 )
             except _oom_types as e:
                 log.warning(f"  GPU OOM ({type(e).__name__}) — falling back to CPU searchlight")
@@ -590,7 +566,7 @@ def run_searchlight(fmri: np.ndarray, model_emb: np.ndarray,
         Parallel(n_jobs=n_jobs, prefer="threads")(
             delayed(_searchlight_vertex_fast)(
                 int(surface_indices[v]), fmri, model_norm,
-                neighbors, vertex_to_col, tril_idx, method, distance
+                neighbors, vertex_to_col, tril_idx, method
             )
             for v in range(n_verts)
         ),
@@ -608,7 +584,6 @@ def run_searchlight_gpu(
     method: str = "spearman",
     batch_size: int = 512,
     device: str = "cuda",
-    distance: str = "correlation",
 ) -> np.ndarray:
     """GPU-batched searchlight RSA.
 
@@ -641,7 +616,7 @@ def run_searchlight_gpu(
     n_pairs  = len(tril_idx[0])
 
     log.info(f"  [GPU] Precomputing model RDM ({method}) ...")
-    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method, distance)
+    _, model_norm = _precompute_model_rdm(model_emb, n_bins, tril_idx, method)
     model_norm_t  = torch.from_numpy(model_norm).to(device)            # (n_pairs,)
     # fmri on GPU, transposed for fast column gather: (n_hem_verts, n_bins)
     fmri_t = torch.from_numpy(fmri.T.astype(np.float32)).to(device)   # (n_hem_verts, n_bins)
@@ -681,18 +656,12 @@ def run_searchlight_gpu(
         hood = fmri_t[batch_nc_t]                                       # (B, k, n_bins)
         hood = hood.permute(0, 2, 1).float()                            # (B, n_bins, k)
 
-        if distance == "euclidean":
-            hk   = hood - hood.mean(dim=1, keepdim=True)
-            gram = torch.bmm(hk, hk.permute(0, 2, 1))
-            dg   = gram.diagonal(dim1=1, dim2=2)
-            rdm_full = dg[:, :, None] + dg[:, None, :] - 2 * gram
-        else:
-            # Row-normalise each (n_bins, k) slice for cosine-based RDM
-            mu    = hood.mean(dim=2, keepdim=True)
-            hc    = hood - mu
-            norms = torch.linalg.norm(hc, dim=2, keepdim=True).clamp(min=1e-10)
-            hn    = hc / norms                                          # (B, n_bins, k)
-            rdm_full = 1.0 - torch.bmm(hn, hn.permute(0, 2, 1))        # (B, n_bins, n_bins)
+        # Row-normalise each (n_bins, k) slice for cosine-based RDM
+        mu    = hood.mean(dim=2, keepdim=True)
+        hc    = hood - mu
+        norms = torch.linalg.norm(hc, dim=2, keepdim=True).clamp(min=1e-10)
+        hn    = hc / norms                                          # (B, n_bins, k)
+        rdm_full = 1.0 - torch.bmm(hn, hn.permute(0, 2, 1))        # (B, n_bins, n_bins)
         fmri_flat = rdm_full[:, tril_row, tril_col]                    # (B, n_pairs)
 
         if method == "spearman":
@@ -717,7 +686,7 @@ def run_searchlight_gpu(
         for v in partial_k_verts:
             sv = int(surf_verts_for_v[v])
             corr_map[v] = _searchlight_vertex_fast(
-                sv, fmri_cpu, model_norm, neighbors, vertex_to_col, tril_idx, method, distance
+                sv, fmri_cpu, model_norm, neighbors, vertex_to_col, tril_idx, method
             )
 
     return corr_map
@@ -738,12 +707,12 @@ def _run_trs_path(args) -> str:
 
 def _config_label(args) -> str:
     return searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec,
-                              args.method, args.model_norm, hrf=args.hrf)
+                              rsa_method(args.method), args.model_norm, hrf=args.hrf)
 
 
 def _file_stem(args, fmri_tag: str) -> str:
     return searchlight_stem(fmri_tag, args.k, args.delay_sec, args.bin_sec, args.skip_sec,
-                            args.method, args.model_norm)
+                            rsa_method(args.method), args.model_norm)
 
 
 def _streaming_fmri_tag(args) -> str:
@@ -758,116 +727,55 @@ def _streaming_fmri_tag(args) -> str:
 # Core analysis
 # =============================================================================
 
-def _save_significance_maps(corr_full, n_bins, combined_path, map_name, out_root, fmri_tag, args):
-    """Compute and save vertex-wise p-values + FDR maps for a group-average rho map."""
+def _output(args, fmri_tag: str):
+    """Output file of the run, its map name (rho_j for av) and the maps a finished run has written."""
+    stem = _file_stem(args, fmri_tag)
+    root = Path(args.output_dir) / ("group_average" if args.subject == "group_average"
+                                    else Path("subject_data") / args.subject)
+    path = searchlight_path(root, args.model, args.modality, stem)
+    name = single_model(args.modality)[1]
+    if args.drop_repeated_clips:
+        norepeats = "_norepeats" if args.drop_repeated_clips else ""
+        return path.parent / "diagnostics" / f"{stem}{norepeats}_maps.dscalar.nii", name, {name}
+    needed = {name}
+    if args.subject == "group_average":
+        needed.add(f"{name}_fdr_mask")
+    if args.n_blocks > 1:
+        needed.add(f"{name}_block{args.n_blocks:02d}")
+    return path, name, needed
+
+
+def _significance_maps(corr_full, n_bins, name, out_path, args) -> dict:
+    """Uncorrected and BH-FDR sigmaps and the FDR mask of a group-average rho map, with FDR borders beside out_path."""
     p_uncorr, sigmap_uncorr = _rho_sigmap(corr_full, n_bins)
     sigmap_fdr, fdr_mask, n_sig_fdr = _fdr_sigmap(p_uncorr, corr_full)
     log.info(f"  n_bins={n_bins}  FDR significant (p<0.05): {n_sig_fdr:,} / {corr_full.shape[0]:,}")
 
-    if combined_path is not None:
-        uncorr_name = f"{map_name}_sigmap_uncorr"
-        fdr_name    = f"{map_name}_sigmap_fdr"
-        merge_into_combined(sigmap_uncorr, uncorr_name, combined_path, args.template_cifti)
-        merge_into_combined(sigmap_fdr, fdr_name, combined_path, args.template_cifti)
-
-    mask_stem   = _file_stem(args, fmri_tag)
-    fdr_mask_path = out_root / f"{mask_stem}_fdr_mask.dscalar.nii"
-    out_root.mkdir(parents=True, exist_ok=True)
-    save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
-    log.info(f"  Saved FDR mask: {fdr_mask_path.name}")
-
-    workbench   = getattr(args, "workbench", None)
-    left_surf   = getattr(args, "left_surface", None)
-    right_surf  = getattr(args, "right_surface", None)
-    sentinel    = out_root / f"{mask_stem}_fdr_no_borders"
-    border_lh_p = out_root / f"{mask_stem}_fdr_lh.border"
-    border_rh_p = out_root / f"{mask_stem}_fdr_rh.border"
-    if workbench and left_surf and right_surf:
-        if border_lh_p.exists() and border_rh_p.exists():
-            pass  # already created
-        elif sentinel.exists():
-            pass  # intentionally skipped previously
-        else:
-            n_grays      = corr_full.shape[0]
-            coverage_fdr = fdr_mask.sum() / n_grays if n_grays > 0 else 0.0
-            if fdr_mask.sum() == 0:
-                log.info("  No FDR-significant vertices; skipping border files.")
-                sentinel.touch()
-            elif coverage_fdr > 0.90:
-                log.warning(f"  FDR mask covers {coverage_fdr*100:.1f}% of cortex — skipping border files.")
-                sentinel.touch()
-            else:
-                bm  = get_bm_axis(args.template_cifti)
-                lh_idx, rh_idx = get_cortex_vertex_indices(bm)
-                n_left     = len(lh_idx)
-                n_verts_lh = nib.load(left_surf).darrays[0].data.shape[0]
-                n_verts_rh = nib.load(right_surf).darrays[0].data.shape[0]
-                _write_border_file(fdr_mask[:n_left], lh_idx, n_verts_lh,
-                                   left_surf, str(border_lh_p), workbench)
-                _write_border_file(fdr_mask[n_left:], rh_idx, n_verts_rh,
-                                   right_surf, str(border_rh_p), workbench)
-                log.info(f"  FDR borders: {border_lh_p.name}  {border_rh_p.name}")
+    coverage_fdr = fdr_mask.mean()
+    if fdr_mask.sum() == 0:
+        log.info("  No FDR-significant vertices; skipping border files.")
+    elif coverage_fdr > 0.90:
+        log.warning(f"  FDR mask covers {coverage_fdr*100:.1f}% of cortex — skipping border files.")
+    else:
+        border = str(out_path).removesuffix(".dscalar.nii") + "_fdr_{}.border"
+        lh_idx, rh_idx = get_cortex_vertex_indices(get_bm_axis(args.template_cifti))
+        n_left = len(lh_idx)
+        for hem, surf, mask, idx in (("lh", args.left_surface, fdr_mask[:n_left], lh_idx),
+                                     ("rh", args.right_surface, fdr_mask[n_left:], rh_idx)):
+            _write_border_file(mask, idx, nib.load(surf).darrays[0].data.shape[0], surf, border.format(hem), args.workbench)
+        log.info(f"  FDR borders: {Path(border.format('{lh,rh}')).name}")
+    return {f"{name}_sigmap_uncorr": sigmap_uncorr, f"{name}_sigmap_fdr": sigmap_fdr, f"{name}_fdr_mask": fdr_mask}
 
 
 def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
-                  timing_df: pd.DataFrame, config: str, out_root: Path, fmri_tag: str):
+                  timing_df: pd.DataFrame, config: str, fmri_tag: str):
 
     bin_sec_int   = int(args.bin_sec)
     skip_int      = int(args.skip_sec)
-    diagnostic    = args.distance != "correlation" or args.drop_repeated_clips
-    if diagnostic:
-        label = f"{DISTANCE_LABELS[args.distance]}-{args.method}"
-        diag_stem = searchlight_stem(fmri_tag, args.k, args.delay_sec, args.bin_sec, args.skip_sec,
-                                     label, args.model_norm) + ("_norepeats" if args.drop_repeated_clips else "")
-        diag_path = out_root.parent / "diagnostics" / f"{diag_stem}_maps.dscalar.nii"
-        if diag_path.exists():
-            log.info(f"Output already exists — skipping: {diag_path.name}")
-            return
-    stem          = _file_stem(args, fmri_tag)
-    maps_out      = out_root / f"{stem}_searchlight.npy"
-    map_name      = f"searchlight_{args.method}_rho"
-    combined_path = Path(args.combined_output) if args.combined_output else None
-
-    # ── Skip / fast-merge logic ───────────────────────────────────────────────
-    fdr_mask_path_check = out_root / f"{stem}_fdr_mask.dscalar.nii"
-    border_lh_check     = out_root / f"{stem}_fdr_lh.border"
-    border_rh_check     = out_root / f"{stem}_fdr_rh.border"
-    sentinel_check      = out_root / f"{stem}_fdr_no_borders"
-
-    wb = getattr(args, "workbench", None)
-    ls = getattr(args, "left_surface", None)
-    rs = getattr(args, "right_surface", None)
-    borders_done = (
-        not (wb and ls and rs) or               # wb not configured — borders N/A
-        (border_lh_check.exists() and border_rh_check.exists()) or  # borders saved
-        sentinel_check.exists()                  # intentionally skipped (empty/full mask)
-    )
-
-    sigmap_fdr_name = f"{map_name}_sigmap_fdr"
-    all_done = (
-        maps_out.exists() and
-        fdr_mask_path_check.exists() and
-        borders_done and
-        (combined_path is None or sigmap_fdr_name in get_combined_map_names(combined_path))
-    )
-    if all_done:
-        log.info(f"Output already exists and significance maps up to date — skipping.")
-        return
-
-    if maps_out.exists():
-        # .npy exists; compute significance maps without rerunning the searchlight
-        log.info(f"  .npy exists; computing/merging significance maps ...")
-        corr_full = np.load(str(maps_out)).astype(np.float32)
-        if combined_path is not None:
-            combined_path.parent.mkdir(parents=True, exist_ok=True)
-            if map_name not in get_combined_map_names(combined_path):
-                merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
-        # Compute n_bins from embeddings (needed for df in p-value formula)
-        emb_file = (Path(args.embeddings_dir) / args.model /
-                    f"bin{bin_sec_int}s_skip{skip_int}s" / f"{args.model}_{args.modality}.npy")
-        n_bins = np.load(str(emb_file), mmap_mode="r").shape[0]
-        _save_significance_maps(
-            corr_full, n_bins, combined_path, map_name, out_root, fmri_tag, args)
+    diagnostic    = args.drop_repeated_clips
+    out_path, name, needed = _output(args, fmri_tag)
+    if needed <= set(get_combined_map_names(out_path)):
+        log.info(f"Output already exists — skipping: {out_path.name}")
         return
 
     assert_segment_timing(timing_df, args.bin_sec, args.tr,
@@ -938,7 +846,7 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
             surface_indices=surf_indices,
             vertex_to_col=vertex_to_col,
             method=args.method, n_jobs=N_JOBS,
-            batch_size=args.gpu_batch_size, distance=args.distance,
+            batch_size=args.gpu_batch_size,
         )
 
         n_hem = corr_hem.shape[0]
@@ -948,110 +856,97 @@ def _run_analysis(args, fmri_continuous: np.ndarray, run_trs: np.ndarray,
         del neighbors, vertex_to_col, corr_hem
         gc.collect()
 
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     if diagnostic:
-        diag_path.parent.mkdir(parents=True, exist_ok=True)
-        save_cifti_map(corr_full, args.template_cifti, str(diag_path), label)
-        log.info(f"  Saved: {diag_path.name}  mean_r={corr_full.mean():.4f}  max_r={corr_full.max():.4f}")
+        save_cifti_map(corr_full, args.template_cifti, str(out_path), name)
+        log.info(f"  Saved: {out_path.name}  mean_r={corr_full.mean():.4f}  max_r={corr_full.max():.4f}")
         return
+    maps = {name: corr_full}
+    if args.subject == "group_average":
+        maps.update(_significance_maps(corr_full, n_bins, name, out_path, args))
 
     # ── Block RSA pass (Schütt et al. 2023, Eq. 5 condition bootstrap) ──────
     # Split the time series into n_blocks non-overlapping segments and compute
     # a separate RSA correlation per block per vertex.  group_stats.py uses
     # these to run the corrected 2-factor bootstrap (subjects × time segments)
     # which generalizes to both new subjects AND new movie content.
-    n_blocks = getattr(args, "n_blocks", 1)
+    n_blocks = args.n_blocks
     if n_blocks > 1:
-        blocks_out = maps_out.with_name(maps_out.stem.replace("_searchlight", f"_searchlight_nblocks{n_blocks}") + ".npy")
-        if blocks_out.exists():
-            log.info(f"  Block maps already exist — skipping block pass: {blocks_out.name}")
+        n_bins_total = fmri_binned.shape[0]
+        if n_bins_total < n_blocks * 6:
+            log.warning(
+                f"  Too few bins ({n_bins_total}) for {n_blocks} blocks "
+                f"(need ≥{n_blocks * 6}); skipping block pass."
+            )
         else:
-            n_bins_total = fmri_binned.shape[0]
-            if n_bins_total < n_blocks * 6:
-                log.warning(
-                    f"  Too few bins ({n_bins_total}) for {n_blocks} blocks "
-                    f"(need ≥{n_blocks * 6}); skipping block pass."
+            n_runs = len(run_trs)
+            if n_blocks == n_runs:
+                # Align blocks to actual fMRI run boundaries (best practice per
+                # Schütt et al. 2023: blocks should correspond to independent
+                # data acquisition segments, not arbitrary equal-length splits).
+                per_run_counts = get_run_bin_counts(
+                    timing_df, run_trs, args.bin_sec, args.tr,
+                    args.delay_sec, args.skip_sec,
+                )
+                block_edges = np.concatenate([[0], np.cumsum(per_run_counts)]).astype(int)
+                log.info(
+                    f"  Block RSA: {n_blocks} blocks aligned to run boundaries "
+                    f"(bins per run: {per_run_counts.tolist()})"
                 )
             else:
-                n_runs = len(run_trs)
-                if n_blocks == n_runs:
-                    # Align blocks to actual fMRI run boundaries (best practice per
-                    # Schütt et al. 2023: blocks should correspond to independent
-                    # data acquisition segments, not arbitrary equal-length splits).
-                    per_run_counts = get_run_bin_counts(
-                        timing_df, run_trs, args.bin_sec, args.tr,
-                        args.delay_sec, args.skip_sec,
-                    )
-                    block_edges = np.concatenate([[0], np.cumsum(per_run_counts)]).astype(int)
-                    log.info(
-                        f"  Block RSA: {n_blocks} blocks aligned to run boundaries "
-                        f"(bins per run: {per_run_counts.tolist()})"
-                    )
-                else:
-                    block_edges = np.round(
-                        np.linspace(0, n_bins_total, n_blocks + 1)
-                    ).astype(int)
-                    log.info(
-                        f"  Block RSA: {n_blocks} blocks of ~{n_bins_total // n_blocks} bins each"
-                    )
-                block_maps = np.zeros((n_blocks, n_total), dtype=np.float32)
-                for b, (b_start, b_end) in enumerate(
-                    zip(block_edges[:-1], block_edges[1:])
-                ):
-                    if b_end - b_start < 6:
-                        log.warning(
-                            f"  Block {b}: only {b_end - b_start} bins — skipping."
-                        )
-                        continue
-                    fmri_block = fmri_binned[b_start:b_end]
-                    emb_block  = emb[b_start:b_end]
-                    blk_offset = 0
-                    for hem, (surf_path, _, surf_indices) in surfaces.items():
-                        neighbors_blk = get_neighbors(
-                            surf_path, args.workbench, args.subject,
-                            hem, args.k, cache_dir,
-                        )
-                        surf_indices_blk = surf_indices.astype(np.int32)
-                        n_surf_verts_blk = neighbors_blk.shape[0]
-                        vtc_blk = np.full(n_surf_verts_blk, -1, dtype=np.int32)
-                        vtc_blk[surf_indices_blk] = np.arange(
-                            len(surf_indices_blk), dtype=np.int32
-                        )
-                        n_hem_blk = len(surf_indices_blk)
-                        fmri_hem_blk = fmri_block[:, blk_offset:blk_offset + n_hem_blk]
-                        corr_hem_blk = run_searchlight(
-                            fmri_hem_blk, emb_block, neighbors_blk,
-                            surface_indices=surf_indices_blk,
-                            vertex_to_col=vtc_blk,
-                            method=args.method, n_jobs=N_JOBS,
-                            batch_size=args.gpu_batch_size,
-                        )
-                        block_maps[b, blk_offset:blk_offset + n_hem_blk] = corr_hem_blk
-                        blk_offset += n_hem_blk
-                        del neighbors_blk, vtc_blk, corr_hem_blk
-                        gc.collect()
-                    log.info(
-                        f"  Block {b}: bins [{b_start},{b_end})  "
-                        f"mean_r={block_maps[b].mean():.4f}"
-                    )
-                out_root.mkdir(parents=True, exist_ok=True)
-                np.save(str(blocks_out), block_maps)
+                block_edges = np.round(
+                    np.linspace(0, n_bins_total, n_blocks + 1)
+                ).astype(int)
                 log.info(
-                    f"  Block maps saved: {blocks_out.name}  shape={block_maps.shape}"
+                    f"  Block RSA: {n_blocks} blocks of ~{n_bins_total // n_blocks} bins each"
                 )
+            block_maps = np.zeros((n_blocks, n_total), dtype=np.float32)
+            for b, (b_start, b_end) in enumerate(
+                zip(block_edges[:-1], block_edges[1:])
+            ):
+                if b_end - b_start < 6:
+                    log.warning(
+                        f"  Block {b}: only {b_end - b_start} bins — skipping."
+                    )
+                    continue
+                fmri_block = fmri_binned[b_start:b_end]
+                emb_block  = emb[b_start:b_end]
+                blk_offset = 0
+                for hem, (surf_path, _, surf_indices) in surfaces.items():
+                    neighbors_blk = get_neighbors(
+                        surf_path, args.workbench, args.subject,
+                        hem, args.k, cache_dir,
+                    )
+                    surf_indices_blk = surf_indices.astype(np.int32)
+                    n_surf_verts_blk = neighbors_blk.shape[0]
+                    vtc_blk = np.full(n_surf_verts_blk, -1, dtype=np.int32)
+                    vtc_blk[surf_indices_blk] = np.arange(
+                        len(surf_indices_blk), dtype=np.int32
+                    )
+                    n_hem_blk = len(surf_indices_blk)
+                    fmri_hem_blk = fmri_block[:, blk_offset:blk_offset + n_hem_blk]
+                    corr_hem_blk = run_searchlight(
+                        fmri_hem_blk, emb_block, neighbors_blk,
+                        surface_indices=surf_indices_blk,
+                        vertex_to_col=vtc_blk,
+                        method=args.method, n_jobs=N_JOBS,
+                        batch_size=args.gpu_batch_size,
+                    )
+                    block_maps[b, blk_offset:blk_offset + n_hem_blk] = corr_hem_blk
+                    blk_offset += n_hem_blk
+                    del neighbors_blk, vtc_blk, corr_hem_blk
+                    gc.collect()
+                log.info(
+                    f"  Block {b}: bins [{b_start},{b_end})  "
+                    f"mean_r={block_maps[b].mean():.4f}"
+                )
+            maps.update({f"{name}_block{b + 1:02d}": block_maps[b] for b in range(n_blocks)})
 
     del fmri_binned, emb
     gc.collect()
 
-    out_root.mkdir(parents=True, exist_ok=True)
-    np.save(str(maps_out), corr_full)
-    log.info(f"  Saved: {maps_out.name}  mean_r={corr_full.mean():.4f}  max_r={corr_full.max():.4f}")
-
-    # ── Merge rho into combined output ────────────────────────────────────────
-    if combined_path is not None:
-        combined_path.parent.mkdir(parents=True, exist_ok=True)
-        merge_into_combined(corr_full, map_name, combined_path, args.template_cifti)
-
-    _save_significance_maps(corr_full, n_bins, combined_path, map_name, out_root, fmri_tag, args)
+    save_cifti_multimap(np.stack(list(maps.values())), list(maps), args.template_cifti, str(out_path))
+    log.info(f"  Saved: {out_path.name}  mean_r={corr_full.mean():.4f}  max_r={corr_full.max():.4f}")
 
     # ── Per-subject JSON report (flat directory, keyed by subject ID) ─────────
     reports_dir = Path(args.output_dir) / "subject_data" / "subject_reports"
@@ -1092,8 +987,6 @@ def _run_disk(args):
     timing_df = pd.read_csv(args.timing_csv)
     config    = _config_label(args)
     fmri_tag  = args.fmri_suffix
-    sub_dir   = Path(args.output_dir) / args.subject if args.subject == "group_average" else Path(args.output_dir) / "subject_data" / args.subject
-    out_root  = sub_dir / f"{args.model}_{args.modality}" / config
 
     cifti = _cifti_path(args)
     trs_path = _run_trs_path(args)
@@ -1106,7 +999,7 @@ def _run_disk(args):
     
     log.info(f"  fMRI loaded: {fmri_data.shape}  run_trs: {run_trs.tolist()}")
 
-    _run_analysis(args, fmri_data, run_trs, timing_df, config, out_root, fmri_tag)
+    _run_analysis(args, fmri_data, run_trs, timing_df, config, fmri_tag)
     log.info("Done.")
 
 
@@ -1122,10 +1015,8 @@ def _run_streaming(args):
     fmri_tag    = _streaming_fmri_tag(args)
     sub         = args.subject
 
-    out_root    = Path(args.output_dir) / "subject_data" / sub / f"{args.model}_{args.modality}" / config
-    maps_out    = out_root / f"{_file_stem(args, fmri_tag)}_searchlight.npy"
-
-    if maps_out.exists():
+    out_path, _, needed = _output(args, fmri_tag)
+    if needed <= set(get_combined_map_names(out_path)):
         log.info(f"[{sub}] Output already exists — skipping")
         return
 
@@ -1139,7 +1030,7 @@ def _run_streaming(args):
     )
     log.info(f"[{sub}] Preprocessed continuous: {data.shape}  run_trs: {run_trs.tolist()}")
 
-    _run_analysis(args, data, run_trs, timing_df, config, out_root, fmri_tag)
+    _run_analysis(args, data, run_trs, timing_df, config, fmri_tag)
     del data
     gc.collect()
     log.info(f"[{sub}] Done.")
@@ -1162,8 +1053,8 @@ def main():
         log.error("Either --preprocessed-dir or --raw-dir is required.")
         sys.exit(1)
 
-    if args.raw_dir and (args.distance != "correlation" or args.drop_repeated_clips):
-        log.error("--distance and --drop-repeated-clips need --preprocessed-dir.")
+    if args.raw_dir and args.drop_repeated_clips:
+        log.error("--drop-repeated-clips needs --preprocessed-dir.")
         sys.exit(1)
 
     if args.raw_dir:

@@ -26,7 +26,7 @@ Output: multi-map CIFTI dscalar with 7 continuous maps:
   | sigmap_fdr | tfce_stat | sigmap_tfce_fwe
 
 Binary masks are saved as separate standalone dscalar files only:
-  group_stats_{n}subs_fdr_mask.dscalar.nii
+  group_stats_{n}subs_tfce_fdr_mask.dscalar.nii
   group_stats_{n}subs_tfce_fwe_mask.dscalar.nii
 
 Note on sigmap_fdr vs sigmap_uncorr: when signal is dense (>99% of vertices
@@ -37,25 +37,20 @@ mean_rho, or tfce_stat (the continuous TFCE statistic varies even
 when the FWE threshold is exceeded everywhere).
 
 And saves the TFCE null distribution for later patching:
-  group_stats_{n}subs_h0_null.npy
+  group_stats_{n}subs_tfce_h0_null.npy
 
 Skip logic
 ----------
-If the output CIFTI already exists:
-  - All 3 significance maps present (sigmap_fdr, fdr_mask, sigmap_tfce_fwe)
-    → skip entirely (nothing to do).
-  - CIFTI present but sigmap_tfce_fwe missing and h0_null.npy present
-    → patch sigmap_tfce_fwe from the saved null without rerunning TFCE.
-  - CIFTI present but sigmap_fdr / fdr_mask missing → patch FDR from stored
-    t_stat without rerunning the expensive TFCE permutation test.
-  - sigmap_tfce_fwe missing and no h0_null.npy → delete the combined CIFTI
-    and rerun to regenerate it.
-If the output CIFTI does not exist → full computation.
+The output is group_stats_{n}subs_tfce.dscalar.nii, separate from group_stats.py's
+group_stats_{n}subs.dscalar.nii (which tests raw rho, not Fisher z).
+  - sigmap_fdr and sigmap_tfce_fwe present → skip.
+  - tfce_stat present → patch sigmap_fdr, and sigmap_tfce_fwe from the saved null.
+  - otherwise → full computation.
 
 Border contours of the FWE-significant clusters are written as separate
 Workbench .border files (one per hemisphere) alongside the dscalar.
 
-Also writes summary.json to the same directory.
+Also writes group_stats_{n}subs_tfce_summary.json to the same directory.
 
 Runtime note: TFCE on ~59k vertices with 5000 permutations typically takes
 1–4 hours. Use --n-jobs -1 to parallelise across all available CPU cores.
@@ -81,7 +76,8 @@ from scipy.sparse.csgraph import connected_components
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from rsa.shared.naming import add_model_norm_arg, method_label
+from rsa.shared.naming import add_model_norm_arg, method_label, single_model
+from rsa.shared.rsa_utils import load_subject_maps
 from cifti_io import (
     get_bm_axis,
     get_combined_map_names,
@@ -112,9 +108,10 @@ def parse_args():
     p.add_argument("--model",            required=True)
     p.add_argument("--modality",         required=True, choices=["v", "a", "av", "at", "vt", "avt", "t"])
     p.add_argument("--analysis-label",   default=None, dest="analysis_label",
-                   help="Override the per-subject directory/groupstats label. "
-                        "Used for derived analyses such as partial RSA; ordinary "
-                        "RSA defaults to {model}_{modality}.")
+                   help="Groupstats label and per-subject folder of .npy maps in "
+                        "{label}/{config}/ (partial_rsa.py). Without it, the "
+                        "searchlight.py files {model}/{stem}_joint_only_models.dscalar.nii "
+                        "are read and the label is {model}_{modality}.")
     p.add_argument("--k",                type=int, required=True)
     p.add_argument("--bin-sec",          type=float, required=True)
     p.add_argument("--skip-sec",         type=float, default=None, dest="skip_sec",
@@ -406,7 +403,7 @@ def _patch_fdr_maps(
 
     if "tfce_fwe_mask" in existing:
         tfce_fwe_mask = data[existing.index("tfce_fwe_mask")]
-        tfce_mask_path = out_path.parent / f"{stem}_tfce_fwe_mask.dscalar.nii"
+        tfce_mask_path = out_path.parent / f"{stem}_fwe_mask.dscalar.nii"
         save_cifti_map(tfce_fwe_mask, template_cifti, str(tfce_mask_path), "tfce_fwe_mask")
         log.info(f"Saved TFCE FWE mask: {tfce_mask_path.name}")
 
@@ -478,56 +475,36 @@ def main():
     out_dir = Path(args.output_dir) / "groupstats" / analysis_label / config
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Collect per-subject ρ maps ────────────────────────────────────────────
-    fname_pattern = (f"rsa_59k_{args.fmri_tag}_k{args.k}_{delay_tag}"
-                     f"_bin{bin_sec_int}s_skip{skip_int}s_{method}_searchlight.npy")
-
-    model_mod_dir = analysis_label
-    subject_rho_files = sorted(
-        Path(args.output_dir).glob(
-            f"subject_data/*/{model_mod_dir}/{config}/{fname_pattern}"
-        )
-    )
+    # ── Collect per-subject ρ maps (partial_rsa.py .npy with --analysis-label, else searchlight.py) ──
+    subject_data = Path(args.output_dir) / "subject_data"
+    stem = f"rsa_59k_{args.fmri_tag}_{config}"
+    tag, map_name = single_model(args.modality)
+    pattern = (f"*/{analysis_label}/{config}/{stem}_searchlight.npy" if args.analysis_label
+               else f"*/{args.model}/{stem}_{tag}_models.dscalar.nii")
+    subject_rho_files = sorted(subject_data.glob(pattern))
 
     if not subject_rho_files:
-        log.error(
-            f"No per-subject ρ maps found matching:\n"
-            f"  {Path(args.output_dir)}/subject_data/*/{model_mod_dir}/{config}/{fname_pattern}\n"
-            f"Run per-subject RSA first (analysis.sh persubject)."
-        )
+        log.error(f"No per-subject ρ maps found: {subject_data}/{pattern}")
         sys.exit(1)
 
     log.info(f"Found {len(subject_rho_files)} per-subject ρ maps")
-
-    rho_maps = []
-    for f in subject_rho_files:
-        data = np.load(str(f)).astype(np.float32)
-        rho_maps.append(data)
-        log.info(f"  Loaded: {f.parent.parent.parent.name}  "
-                 f"shape={data.shape}  max={data.max():.4f}")
-
+    rho_maps = ([np.load(str(f)).astype(np.float32) for f in subject_rho_files] if args.analysis_label
+                else load_subject_maps(subject_rho_files, map_name)[0])
     rho_stack = np.stack(rho_maps, axis=0)   # (n_subjects, n_grayords)
     n_subs, n_grays = rho_stack.shape
     log.info(f"Stacked: {rho_stack.shape}")
 
     # ── Output path (needed for skip logic) ──────────────────────────────────
-    out_path = out_dir / f"group_stats_{n_subs}subs.dscalar.nii"
+    out_path = out_dir / f"group_stats_{n_subs}subs_tfce.dscalar.nii"
 
     # ── Skip / patch logic ────────────────────────────────────────────────────
     existing_map_names = get_combined_map_names(str(out_path))
-    all_maps_present = (
-        "sigmap_fdr"      in existing_map_names and
-        "sigmap_tfce_fwe" in existing_map_names
-    )
-    if all_maps_present:
+    if {"sigmap_fdr", "sigmap_tfce_fwe"} <= set(existing_map_names):
         log.info(f"All significance maps present in {out_path.name} — nothing to do.")
         return
 
-    if out_path.exists() and existing_map_names:
-        log.info(
-            f"Existing CIFTI lacks FDR maps ({existing_map_names}) — "
-            f"patching FDR without rerunning TFCE ..."
-        )
+    if "tfce_stat" in existing_map_names:
+        log.info(f"{out_path.name} has tfce_stat; patching FDR and sigmap_tfce_fwe from the saved null ...")
         patch = _patch_fdr_maps(
             out_path, n_subs, args.alpha, args.template_cifti,
             min_cluster_size=args.min_cluster_size,
@@ -535,7 +512,7 @@ def main():
             left_surface=args.left_surface,
             right_surface=args.right_surface,
         )
-        summary_path = out_dir / "summary.json"
+        summary_path = out_dir / f"group_stats_{n_subs}subs_tfce_summary.json"
         if summary_path.exists():
             summary = json.loads(summary_path.read_text())
             summary["n_sig_fdr"]      = patch["n_sig_fdr"]
@@ -600,7 +577,7 @@ def main():
     cm_lh, cm_rh = tfce_fwe_mask[:n_left], tfce_fwe_mask[n_left:]
 
     # Save null distribution so the patch path can compute sigmap_tfce_fwe later
-    h0_path = out_dir / f"group_stats_{n_subs}subs_h0_null.npy"
+    h0_path = out_dir / f"group_stats_{n_subs}subs_tfce_h0_null.npy"
     np.save(str(h0_path), h0)
     log.info(f"Saved TFCE null distribution: {h0_path.name}")
     log.info(f"TFCE FWE threshold (p<{args.alpha}): {tfce_thresh:.4f}")
@@ -645,8 +622,8 @@ def main():
         )
     else:
         log.info("Creating Workbench border files ...")
-        border_lh_path = str(out_dir / f"group_stats_{n_subs}subs_lh.border")
-        border_rh_path = str(out_dir / f"group_stats_{n_subs}subs_rh.border")
+        border_lh_path = str(out_dir / f"group_stats_{n_subs}subs_tfce_lh.border")
+        border_rh_path = str(out_dir / f"group_stats_{n_subs}subs_tfce_rh.border")
         _write_border_file(cm_lh, left_indices,  n_verts_lh,
                            args.left_surface,  border_lh_path, args.workbench)
         _write_border_file(cm_rh, right_indices, n_verts_rh,
@@ -671,8 +648,8 @@ def main():
         )
     else:
         log.info("Creating FDR border files ...")
-        fdr_border_lh = str(out_dir / f"group_stats_{n_subs}subs_fdr_lh.border")
-        fdr_border_rh = str(out_dir / f"group_stats_{n_subs}subs_fdr_rh.border")
+        fdr_border_lh = str(out_dir / f"group_stats_{n_subs}subs_tfce_fdr_lh.border")
+        fdr_border_rh = str(out_dir / f"group_stats_{n_subs}subs_tfce_fdr_rh.border")
         _write_border_file(fdr_cm_lh, left_indices, n_verts_lh,
                            args.left_surface, fdr_border_lh, args.workbench)
         _write_border_file(fdr_cm_rh, right_indices, n_verts_rh,
@@ -707,7 +684,7 @@ def main():
     save_cifti_map(tfce_fwe_mask, args.template_cifti, str(tfce_mask_path), "tfce_fwe_mask")
     log.info(f"Saved TFCE FWE mask: {tfce_mask_path.name}")
 
-    fdr_mask_path = out_dir / f"group_stats_{n_subs}subs_fdr_mask.dscalar.nii"
+    fdr_mask_path = out_dir / f"group_stats_{n_subs}subs_tfce_fdr_mask.dscalar.nii"
     save_cifti_map(fdr_mask, args.template_cifti, str(fdr_mask_path), "fdr_mask")
     log.info(f"Saved FDR mask: {fdr_mask_path.name}")
 
@@ -739,10 +716,10 @@ def main():
         "border_tfce_rh":         border_rh_path,
         "border_fdr_lh":          fdr_border_lh,
         "border_fdr_rh":          fdr_border_rh,
-        "subjects":               [f.parent.parent.parent.name for f in subject_rho_files],
+        "subjects":               [f.relative_to(subject_data).parts[0] for f in subject_rho_files],
     }
 
-    summary_path = out_dir / "summary.json"
+    summary_path = out_dir / f"group_stats_{n_subs}subs_tfce_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
     log.info(f"Summary: {summary_path}")
     log.info(

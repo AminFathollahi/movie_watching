@@ -9,7 +9,9 @@ minus the scramble path; find_chunk_pairs is skip-aware, matching the
 `{stem}_chunks_{dur}s_skip{skip}s` naming produced by segment_bin5s_skip1s.py.
 
 --unimodal own    A = audio_embeds, V = video_embeds, J = audio_video_embeds (one forward
-                  pass per window); writes {model}_{a,v,av}.npy.
+                  pass per window); writes {model}_{a,v,av}.npy. A and V come from the audio and
+                  video towers before fusion, so they see one modality only: running the towers on
+                  audio alone and video alone gives bit-identical arrays (all 626 5-s windows checked).
 --unimodal dummy  A = audio_video_embeds of (real audio, blank video), V = audio_video_embeds
                   of (silent audio, real video); writes {model}_dummy_av_{a,v}.npy.
 

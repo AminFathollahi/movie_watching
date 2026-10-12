@@ -7,14 +7,10 @@
 # then merges every result's rho/fdr maps into ONE combined dscalar.nii with
 # descriptive per-cluster map names (rsa/label_av_separability_maps.py).
 #
-# Every raw per-cluster/all-clusters searchlight output AND the final merged
-# CIFTI for one (kind, design, driver, sheet, suffix) analysis live together
-# under ONE folder: group_average/<analysis>/raw/<model>_av/... for the raw
-# searchlight runs, group_average/<analysis>/<analysis>_all_clusters_maps.dscalar.nii
-# for the merged deliverable, group_average/<analysis>/summary.json for the
-# cluster-count/significance context -- so nothing is scattered loose at
-# group_average/'s top level and "how many clusters were there in total" is
-# always answered by the summary.json sitting right next to the maps.
+# The per-cluster searchlight outputs are group_average/<model>/..._joint_only_models.dscalar.nii;
+# group_average/<analysis>/ holds the merged deliverable
+# <analysis>_all_clusters_maps.dscalar.nii and summary.json with the
+# cluster-count/significance context.
 #
 # Usage:
 #   bash rsa/run_av_separability_brain_maps.sh <driver> <sheet>
@@ -95,7 +91,6 @@ echo "Models to run (drv=$DRIVER, sheet=$SHEET, design=$DESIGN): $MODELS"
 
 for MODEL_NAME in $MODELS; do
     echo "=== searchlight: ${MODEL_NAME} / av ==="
-    COMBINED_OUT="${ANALYSIS_DIR}/raw/${MODEL_NAME}_av/rsa_59k_${FMRI_SUFFIX}_k${K}_delay${DELAY_SEC%.*}s_bin${BIN_SEC%.*}s_skip${SKIP_SEC%.*}s_${METHOD}_${MODEL_NORM}_maps.dscalar.nii"
     conda run --no-capture-output -n movie python "${SCRIPT_DIR}/searchlight.py" \
         --preprocessed-dir   "$PREPROCESSED_DIR" \
         --fmri-suffix        "$FMRI_SUFFIX" \
@@ -116,7 +111,6 @@ for MODEL_NAME in $MODELS; do
         --right-surface      "$RIGHT_SURFACE" \
         --workbench          "$WORKBENCH" \
         --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
-        --combined-output    "$COMBINED_OUT" \
         --gpu-batch-size     "$GPU_BATCH_SIZE" \
         --n-blocks           1 \
         --model-norm         "$MODEL_NORM"

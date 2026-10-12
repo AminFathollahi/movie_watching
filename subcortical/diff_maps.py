@@ -57,7 +57,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(me
 log = logging.getLogger(__name__)
 
 GROUP_DIR = OUTPUTS / "subcortical/group_average"
-CONFIG = "k100_delay5s_bin5s_skip5s_spearman"
+CONFIG = "k100_delay5s_bin5s_skip5s_pearson_spearman_zscore"
 
 # Same native-AV roster as rsa/run_diff_study.sh's BASE_MODELS.
 BASE_MODELS = [

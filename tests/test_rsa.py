@@ -234,3 +234,22 @@ def test_preprocess_fmri_delay():
     assert out_with_delay.shape == (10, n_verts)
     # The two outputs must use different fMRI columns (delay shifts window)
     assert not np.allclose(out_no_delay, out_with_delay)
+
+
+def test_load_subject_maps_averages_blocks(tmp_path):
+    import nibabel as nib
+    from rsa_utils import load_subject_maps
+
+    bm = nib.cifti2.BrainModelAxis.from_mask(np.ones(3, dtype=bool), name="CortexLeft")
+    names = ["rho_j"] + [f"rho_j_block{b:02d}" for b in range(1, 5)]
+    files = []
+    for s in range(2):
+        data = np.arange(15, dtype=np.float32).reshape(5, 3) + s
+        header = nib.cifti2.Cifti2Header.from_axes((nib.cifti2.ScalarAxis(names), bm))
+        files.append(tmp_path / f"s{s}.dscalar.nii")
+        nib.save(nib.Cifti2Image(data, header), files[-1])
+
+    rho, blocks = load_subject_maps(files, "rho_j", n_blocks=2)
+    np.testing.assert_array_equal(rho, [[0, 1, 2], [1, 2, 3]])
+    np.testing.assert_array_equal(blocks[0], [[4.5, 5.5, 6.5], [10.5, 11.5, 12.5]])
+    assert load_subject_maps(files, "rho_j", n_blocks=3)[1] is None

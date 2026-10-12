@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from cifti_io import get_bm_axis, load_cifti_data
 from cka.shared.kernels import neighbour_columns, window_index
-from rsa.shared.naming import searchlight_config, searchlight_stem
+from rsa.shared.naming import rsa_method, searchlight_config, searchlight_path, searchlight_stem
 from rsa.shared.rsa_utils import preprocess_fmri
 
 PROJECT = ROOT.parent
@@ -74,16 +74,17 @@ def load_maps(path, axis):
 
 def map_paths(args, model):
     config = lambda method: searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec, method, args.scaling)
-    rsa = lambda method, suffix="": f"{searchlight_stem(args.fmri_suffix, args.k, args.delay_sec, args.bin_sec, args.skip_sec, method, args.scaling)}{suffix}_maps.dscalar.nii"
+    rsa = lambda distance: searchlight_stem(args.fmri_suffix, args.k, args.delay_sec, args.bin_sec, args.skip_sec,
+                                            rsa_method("spearman", distance), args.scaling)
     cka = lambda method, suffix="": f"cka_59k_{args.fmri_suffix}_{config(method)}{suffix}_maps.dscalar.nii"
     group = lambda base: Path(base) / args.fmri_suffix / args.subject
-    rsa_dir, cka_dir = group(args.rsa_dir) / f"{model}_av", group(args.cka_dir) / model
+    rsa_dir, cka_dir = group(args.rsa_dir) / model, group(args.cka_dir) / model
     models = lambda method: f"cka_59k_{args.fmri_suffix}_{config(method)}_{args.cka_tag}_models.dscalar.nii"
     return {
-        "corr-spearman": rsa_dir / rsa("spearman"),
-        "euclid-spearman": rsa_dir / "diagnostics" / rsa("euclid-spearman"),
+        "pearson_spearman": searchlight_path(group(args.rsa_dir), model, "av", rsa("correlation")),
+        "euclidean_spearman": rsa_dir / f"{rsa('euclidean')}_unimodal_own_models.dscalar.nii",
         "cka": cka_dir / models("noncv"),
-        "corr-spearman_nr": rsa_dir / "diagnostics" / rsa("corr-spearman", "_norepeats"),
+        "pearson_spearman_nr": rsa_dir / "diagnostics" / f"{rsa('correlation')}_norepeats_maps.dscalar.nii",
         "cka_nr": cka_dir / "diagnostics" / cka("noncv", "_norepeats"),
     }
 
@@ -93,7 +94,7 @@ def load_model_maps(args, model, axis):
     maps = {}
     for name, path in paths.items():
         found = load_maps(path, axis)
-        maps[name] = found.get("cka_j", next(iter(found.values())))
+        maps[name] = found["cka_j"] if "cka_j" in found else found["rho_j"]
     folder = Path(args.encoding_dir) / args.subject / model / f"delay{args.delay_sec:.0f}s_bin{args.bin_sec:.0f}s_skip{args.skip_sec:.0f}s"
     encoding = {}
     for split in SPLITS:
@@ -171,7 +172,7 @@ def model_tables(model, maps, encoding, labels, names, ncols, h, n_windows, args
     out.append(md_table("Table 6b. Mean of each map per decile of h (decile 1 = lowest h).", ["h decile", "mean h", "n"] + list(rsa),
                         [[d + 1, f"{h[decile == d].mean():.4f}", int((decile == d).sum())] + [f"{v[decile == d].mean():.4f}" for v in rsa.values()] for d in range(10)]))
     rows = []
-    for full, dropped in (("corr-spearman", "corr-spearman_nr"), ("cka", "cka_nr")):
+    for full, dropped in (("pearson_spearman", "pearson_spearman_nr"), ("cka", "cka_nr")):
         x, y = rsa[full], rsa[dropped]
         change = lambda f: f"{f(x):.4f} -> {f(y):.4f} ({f(y) - f(x):+.4f})"
         rows.append([full, f"{np.corrcoef(x, y)[0, 1]:.4f}", change(np.mean), change(lambda v: np.percentile(v, 95)), change(np.max)])

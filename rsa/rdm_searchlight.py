@@ -15,8 +15,9 @@ the brain RDM with the residual of the x RDM after least-squares regression (wit
 ranks; Clarke & Tyler 2014). Kendall: tau-b maps only.
 
 With --subjects-list, the Euclidean Spearman maps are computed on the GPU from each subject's own binned responses
-(z-scored per run), with within-block maps for the two-factor bootstrap of rsa/group_stats.py; rsa/rdm_groupstats.py tests them over subjects. --shift circularly shifts each run's brain windows by half the run as
-a misaligned baseline.
+(z-scored per run), one file per kind as for the group average, with the within-block maps x_block01.. (--n-blocks) for
+a two-factor bootstrap; rsa/rdm_groupstats.py tests them over subjects. --shift circularly shifts each run's brain
+windows by half the run as a misaligned baseline.
 """
 
 from __future__ import annotations
@@ -57,7 +58,8 @@ CONTROL_SETS = [
 ]
 DISTANCES = {"cosine": 0, "euclidean": 1, "mahalanobis": 2, "crossnobis": 3}
 COMPARATORS = {"spearman": "spearman", "kendall": "kendalltau"}
-SUBJECT_MAPS = ["rho_a", "rho_v", "rho_j", "sp_a", "sp_v", "sp_j", "partial_a", "partial_v", "partial_j"]
+KINDS = {"models": ["rho_a", "rho_v", "rho_j"], "semipartial": ["sp_a", "sp_v", "sp_j"],
+         "partial": ["partial_a", "partial_v", "partial_j"]}
 
 
 def parse_args():
@@ -90,7 +92,6 @@ def parse_args():
                    help="Binned subject responses, {subject}_{suffix}_delay{D}s_bin{B}s_skip{S}s.npy, (V, K) z-scored.")
     p.add_argument("--n-blocks", type=int, default=16, help="Temporal blocks for the two-factor bootstrap.")
     p.add_argument("--shift", action="store_true", help="Circularly shift each run's brain windows by half the run.")
-    p.add_argument("--maps", nargs="+", default=SUBJECT_MAPS, help="Per-subject maps to write for each pair.")
     return p.parse_args()
 
 
@@ -425,14 +426,17 @@ def subject_spearman_gpu(data, cols, ncols, model_ranks, batch=96):
 
 
 def subject_config(k, delay_sec, bin_sec, skip_sec, model_norm):
-    return f"k{k}_delay{int(delay_sec)}s_bin{int(bin_sec)}s_skip{int(skip_sec)}s_spearman_{model_norm}"
+    return f"k{k}_delay{int(delay_sec)}s_bin{int(bin_sec)}s_skip{int(skip_sec)}s_euclidean_spearman_{model_norm}"
 
 
-def subject_map_path(output_dir, subject, model, tag, name, cfg, fmri_suffix, shifted=False, n_blocks=0):
-    """Per-subject Euclidean Spearman map (.npy; with n_blocks, the within-block maps)."""
-    stem = f"rsa_59k_{fmri_suffix}_{cfg}_searchlight" + (f"_nblocks{n_blocks}" if n_blocks else "")
-    folder = f"{model}_euclidean_{tag}_{name}{'_shifted' if shifted else ''}"
-    return Path(output_dir) / "subject_data" / subject / folder / cfg / f"{stem}.npy"
+def subject_map_path(output_dir, subject, model, tag, kind, cfg, fmri_suffix, shifted=False):
+    """Per-subject Euclidean Spearman maps of one kind (KINDS), followed by their within-block maps."""
+    return (Path(output_dir) / "subject_data" / subject / model
+            / f"rsa_59k_{fmri_suffix}_{cfg}_{tag}{'_shifted' if shifted else ''}_{kind}.dscalar.nii")
+
+
+def block_names(names, n_blocks):
+    return [f"{x}_block{b + 1:02d}" for x in names for b in range(n_blocks)]
 
 
 def pair_targets(keys, rdm_of):
@@ -473,13 +477,11 @@ def run_subjects(args, runs, embs, timing, run_trs, skip_sec):
     from preprocess_individual import load_subjects
     subjects = load_subjects(args.subjects_list)
 
-    def path(subject, model, tag, name, blocks):
-        return subject_map_path(args.output_dir, subject, model, tag, name, cfg, args.fmri_suffix, args.shift,
-                                args.n_blocks if blocks else 0)
+    def path(subject, model, tag, kind):
+        return subject_map_path(args.output_dir, subject, model, tag, kind, cfg, args.fmri_suffix, args.shift)
 
     for i, subject in enumerate(subjects):
-        if all(path(subject, model, tag, name, blocks).exists() for model, tag, _ in runs for name in args.maps
-               for blocks in {False, args.n_blocks > 1}):
+        if all(path(subject, model, tag, kind).exists() for model, tag, _ in runs for kind in KINDS):
             continue
         data = np.load(Path(args.subject_cache) / f"{subject}_{args.fmri_suffix}_delay{int(args.delay_sec)}s_"
                        f"bin{int(args.bin_sec)}s_skip{int(skip_sec)}s.npy").T.astype(np.float32)[order]
@@ -493,14 +495,16 @@ def run_subjects(args, runs, embs, timing, run_trs, skip_sec):
                 per_pair.append(np.concatenate([block, partial_correlations(block[:3], rc[p])]))
             values.append(per_pair)
         for p, (model, tag, _) in enumerate(runs):
-            for name in args.maps:
-                m = SUBJECT_MAPS.index(name)
-                out = path(subject, model, tag, name, False)
-                out.parent.mkdir(parents=True, exist_ok=True)
-                np.save(out, values[0][p][m].astype(np.float32))
+            for k, (kind, names) in enumerate(KINDS.items()):
+                rows = slice(3 * k, 3 * k + 3)
+                maps = [values[0][p][rows]]
                 if args.n_blocks > 1:
-                    np.save(path(subject, model, tag, name, True),
-                            np.stack([values[b][p][m] for b in range(1, len(segments))]).astype(np.float16))
+                    maps.append(np.stack([values[b][p][rows] for b in range(1, len(segments))], axis=1)
+                                .reshape(-1, maps[0].shape[1]))
+                    names = names + block_names(names, args.n_blocks)
+                out = path(subject, model, tag, kind)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                save_cifti_multimap(np.concatenate(maps), names, args.template_cifti, str(out))
         log.info(f"[{i + 1}/{len(subjects)}] {subject}")
 
 

@@ -31,7 +31,7 @@ python rsa/temporal_scramble_binding.py \\
              topoomni_layer9_mp topoomni_layer18_mp topoomni_layer27_mp \\
              topoomni_layer9_lt topoomni_layer18_lt topoomni_layer27_lt \\
     --rsa-root $ROOT/outputs/rsa/raw/group_average \\
-    --config k100_delay5s_bin5s_skip5s_spearman \\
+    --config k100_delay5s_bin5s_skip5s_pearson_spearman \\
     --template-cifti $ROOT/data/preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii \\
     --glasser-dlabel $ROOT/data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii \\
     --out-dir $ROOT/outputs/rsa/raw/group_average/_temporal_scramble_binding

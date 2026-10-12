@@ -108,6 +108,8 @@ All locations are relative to the directory that contains the repository (`MOVIE
 
 `{flag}` names the preprocessing steps applied, joined by underscores: `sg`, `psc`, `gsr`, or `raw` when none. The `rsa/`, `encoding/`, `cluster/` and `connectivity/` runners default to `raw`; `cf_modeling/` defaults to `sg_psc`. `average_sub/raw/group_average_raw_cortex_59k.dtseries.nii` is also the grayordinate template for the other runners.
 
+RSA, CKA and encoding write, per configuration and for the group average as for each subject, one multi-map CIFTI per kind of map: `models`, `semipartial` and `partial` for RSA, `models`, `semipartial` and `commonality` for CKA, `models` and `partition` for encoding. Significance maps and masks go into the file of the map they test. RSA names carry the brain RDM and the comparator: `pearson_spearman` for the correlation distance `1 - r`, `euclidean_spearman`, `mahalanobis_spearman`, `crossnobis_spearman`, `cosine_kendalltau`.
+
 Embedding rows are ordered by clip (1 to 18), then by window start time. Window width `B` and stride `S` appear in the directory name as `bin{B}s_skip{S}s`; the pipeline default is `S = B` (non-overlapping).
 
 ## Pipeline order

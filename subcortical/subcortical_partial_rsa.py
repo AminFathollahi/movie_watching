@@ -68,8 +68,7 @@ from rsa.partial_rsa import (  # noqa: E402
 )
 from cifti_io import save_cifti_multimap  # noqa: E402
 from subcortical_io import (  # noqa: E402
-    SUBCORTICAL_STRUCTURES, STRUCTURE_NEIGHBOR_MODE,
-    struct_slices, build_neighbors, get_cerebellum_neighbors,
+    SUBCORTICAL_STRUCTURES, struct_slices, structure_neighbors,
     preprocess_subject_subcortical, compute_group_average_subcortical,
 )
 from preprocess_individual import load_subjects  # noqa: E402
@@ -167,7 +166,7 @@ def main():
     target_model, target_mod = cfg.target
     out_dir = (Path(args.output_dir) / args.subject /
                f"{target_model}_{target_mod}_INTEGRATION" /
-               f"k{args.k}_delay{delay_int}s_bin{bin_int}s_skip{skip_int}s_{args.method}")
+               f"k{args.k}_delay{delay_int}s_bin{bin_int}s_skip{skip_int}s_pearson_{args.method}_zscore")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "integration_partial_r_searchlight.dscalar.nii"
     if out_path.exists():
@@ -222,16 +221,7 @@ def main():
         n_struct = stop - start
         fmri_struct = fmri_binned[:, start:stop]
 
-        if s.startswith("CEREBELLUM_"):
-            hem = "LEFT" if s.endswith("LEFT") else "RIGHT"
-            neighbors, mode_used = get_cerebellum_neighbors(
-                hem, info["world_xyz"], info["voxel_ijk"], args.k,
-                neighbor_cache_dir, args.workbench)
-        else:
-            mode = STRUCTURE_NEIGHBOR_MODE[s]
-            cache_path = neighbor_cache_dir / f"{s}_neighbors_k{args.k}_{mode}.npy"
-            neighbors = build_neighbors(info["voxel_ijk"], info["world_xyz"], args.k, mode, cache_path)
-            mode_used = mode
+        neighbors, mode_used = structure_neighbors(s, info, args.k, neighbor_cache_dir, args.workbench)
 
         idx = np.arange(n_struct, dtype=np.int32)
         corr_struct = run_partial_searchlight(

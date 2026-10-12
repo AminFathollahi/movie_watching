@@ -420,7 +420,7 @@ _run_avg_one_model() {
     IFS=',' read -ra MODS <<< "$MODALITIES_STR"
 
     local DELAY_INT="${DELAY_SEC%.*}"
-    local SL_CONFIG="k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${METHOD}_${MODEL_NORM}"
+    local SL_CONFIG="k${K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_pearson_${METHOD}_${MODEL_NORM}"
 
     for MOD in "${MODS[@]}"; do
         if ! _emb_exists "$MODEL_NAME" "$MOD"; then
@@ -429,8 +429,8 @@ _run_avg_one_model() {
         fi
         log "  ${MODEL_NAME} / ${MOD}"
 
-        local COMBINED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_SUFFIX}_${SL_CONFIG}_maps.dscalar.nii"
-        local RHO_FILENAME="rsa_59k_${FMRI_SUFFIX}_${SL_CONFIG}_searchlight.npy"
+        local SL_STEM="rsa_59k_${FMRI_SUFFIX}_${SL_CONFIG}"
+        local AV_DERIVED_OUT="${OUTPUT_DIR}/group_average/${MODEL_NAME}/${SL_STEM}_av_derived.dscalar.nii"
 
         # Natural joint-AV maps use three matched A/V reference pairs. Compute
         # missing group-average dependency maps before the target AV map.
@@ -438,12 +438,12 @@ _run_avg_one_model() {
         local AV_DERIVED_MISSING=false
         if [ "$MOD" = "av" ] && { [ "$METHOD_ARG" = "all" ] || [ "$METHOD_ARG" = "searchlight" ]; }; then
             AV_DERIVED_DEPENDENCIES=$(run_python "${SCRIPT_DIR}/av_derived_maps.py" \
-                --target-model "$MODEL_NAME" --combined-output "$COMBINED_OUT" \
+                --target-model "$MODEL_NAME" --combined-output "$AV_DERIVED_OUT" \
                 --list-dependencies)
             if [ -n "$AV_DERIVED_DEPENDENCIES" ]; then
                 while read -r DEP_MODEL DEP_MOD; do
                     [ -z "$DEP_MODEL" ] && continue
-                    local DEP_RHO="${OUTPUT_DIR}/group_average/${DEP_MODEL}_${DEP_MOD}/${SL_CONFIG}/${RHO_FILENAME}"
+                    local DEP_RHO="${OUTPUT_DIR}/group_average/${DEP_MODEL}/${SL_STEM}_${DEP_MOD}_only_models.dscalar.nii"
                     if ! _emb_exists "$DEP_MODEL" "$DEP_MOD"; then
                         log "  cannot build AV derived maps for ${MODEL_NAME}: missing embedding ${DEP_MODEL}/${DEP_MOD}"
                         AV_DERIVED_MISSING=true
@@ -476,7 +476,6 @@ _run_avg_one_model() {
                 --right-surface      "$RIGHT_SURFACE" \
                 --workbench          "$WORKBENCH" \
                 --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
-                --combined-output    "$COMBINED_OUT" \
                 --gpu-batch-size "$GPU_BATCH_SIZE" \
                 --n-blocks           1 \
                 --model-norm         "$MODEL_NORM" \
@@ -504,7 +503,6 @@ _run_avg_one_model() {
                     --right-surface      "$RIGHT_SURFACE" \
                     --workbench          "$WORKBENCH" \
                     --geodesic-cache-dir "$GEODESIC_CACHE_DIR" \
-                    --combined-output    "$COMBINED_OUT" \
                     --gpu-batch-size     "$GPU_BATCH_SIZE" \
                     --model-norm         "$MODEL_NORM" \
                     $(_hrf_flag)
@@ -528,19 +526,17 @@ _run_avg_one_model() {
                 --method           "$GLASSER_METHOD" \
                 --tr               "$TR" \
                 --glasser-dlabel   "$GLASSER_DLABEL" \
-                --combined-output  "$COMBINED_OUT" \
                 --model-norm       "$MODEL_NORM" \
                 $(_hrf_flag)
         fi
 
-        # Append absent derived maps to the normal AV combined CIFTI.
+        # Write absent derived maps to the target model's av_derived file.
         if [ -n "$AV_DERIVED_DEPENDENCIES" ] && [ "$AV_DERIVED_MISSING" = "false" ]; then
             run_python "${SCRIPT_DIR}/av_derived_maps.py" \
                 --target-model    "$MODEL_NAME" \
                 --rsa-root        "${OUTPUT_DIR}/group_average" \
-                --config          "$SL_CONFIG" \
-                --rho-filename    "$RHO_FILENAME" \
-                --combined-output "$COMBINED_OUT" \
+                --stem            "$SL_STEM" \
+                --combined-output "$AV_DERIVED_OUT" \
                 --template-cifti  "$TEMPLATE_CIFTI"
         elif [ -n "$AV_DERIVED_DEPENDENCIES" ]; then
             log "  skipped AV derived maps for ${MODEL_NAME}: one or more baseline embeddings are unavailable"
@@ -590,8 +586,8 @@ _run_one_subject() {
     [ "$_RSA_STREAM" = "false" ] && FMRI_TAG_LOCAL="$_RSA_FMRI_SUFFIX"
 
     local DELAY_INT="${_RSA_DELAY_SEC%.*}"
-    local SL_CONFIG="k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_METHOD}_${_RSA_MODEL_NORM}"
-    local GL_CONFIG="delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_${_RSA_GLASSER_METHOD}_${_RSA_MODEL_NORM}"
+    local SL_CONFIG="k${_RSA_K}_delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_pearson_${_RSA_METHOD}_${_RSA_MODEL_NORM}"
+    local GL_CONFIG="delay${DELAY_INT}s_bin${BIN_SEC_INT}s_skip${SKIP_INT}s_pearson_${_RSA_GLASSER_METHOD}_${_RSA_MODEL_NORM}"
 
     # Per-subject midthickness (fall back to group-average if unavailable).
     local LEFT_SURF="$_RSA_LEFT_SURFACE"
@@ -643,11 +639,11 @@ _run_one_subject() {
                 continue
             fi
 
-            local COMBINED_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/rsa_59k_${FMRI_TAG_LOCAL}_${SL_CONFIG}_maps.dscalar.nii"
+            local TAG="${MOD}_only"; [ "$MOD" = "av" ] && TAG="joint_only"
 
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "searchlight" ]; then
-                local SL_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/${SL_CONFIG}/rsa_59k_${FMRI_TAG_LOCAL}_${SL_CONFIG}_searchlight.npy"
-                if [ -f "$SL_OUT" ] && [ -f "$COMBINED_OUT" ]; then
+                local SL_OUT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}/rsa_59k_${FMRI_TAG_LOCAL}_${SL_CONFIG}_${TAG}_models.dscalar.nii"
+                if [ -f "$SL_OUT" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: searchlight ${MODEL_NAME}/${MOD} already complete; skipping" \
                         | tee -a "$LOG"
                 else
@@ -672,7 +668,6 @@ _run_one_subject() {
                         --right-surface      "$RIGHT_SURF" \
                         --workbench          "$_RSA_WORKBENCH" \
                         --geodesic-cache-dir "$_RSA_GEODESIC_CACHE_DIR" \
-                        --combined-output    "$COMBINED_OUT" \
                         --gpu-batch-size 512 \
                         --n-blocks           "$_RSA_N_BLOCKS" \
                         --model-norm         "$_RSA_MODEL_NORM" \
@@ -683,7 +678,7 @@ _run_one_subject() {
 
             if [ "$_RSA_METHOD_ARG" = "all" ] || [ "$_RSA_METHOD_ARG" = "glasser" ]; then
                 local GL_REPORT="${_RSA_OUTPUT_DIR}/subject_data/${SUB}/${MODEL_NAME}_${MOD}/${GL_CONFIG}/ranked_report.csv"
-                if [ -f "$GL_REPORT" ] && [ -f "$COMBINED_OUT" ]; then
+                if [ -f "$GL_REPORT" ] && [ -f "${GL_REPORT%/*}/parcel_maps.dscalar.nii" ]; then
                     echo "[$(date +%H:%M:%S)] ${SUB}: Glasser ${MODEL_NAME}/${MOD} already complete; skipping" \
                         | tee -a "$LOG"
                 else
@@ -704,7 +699,6 @@ _run_one_subject() {
                         --method           "$_RSA_GLASSER_METHOD" \
                         --tr               "$_RSA_TR" \
                         --glasser-dlabel   "$_RSA_GLASSER_DLABEL" \
-                        --combined-output  "$COMBINED_OUT" \
                         --model-norm       "$_RSA_MODEL_NORM" \
                         $HRF_FLAG \
                         >> "$LOG" 2>&1 || STATUS=$?

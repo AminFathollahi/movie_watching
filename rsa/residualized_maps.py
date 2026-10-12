@@ -38,27 +38,19 @@ from cifti_io import (  # noqa: E402
     load_single_map,
     merge_into_combined,
 )
+from rsa.shared.naming import searchlight_path  # noqa: E402
 
 
 log = logging.getLogger(__name__)
 
 MAP_ORDER = ("partial_correlation", "linear_resid_unimodal", "projection_resid_own", "linear_resid_own")
-SEARCHLIGHT_MAP_NAME = "searchlight_spearman_rho"
-
-
-def residualized_filename(normal_maps_filename: str) -> str:
-    """Return the residual-suite filename corresponding to a normal RSA CIFTI."""
-    suffix = "_maps.dscalar.nii"
-    if not normal_maps_filename.endswith(suffix):
-        raise ValueError(f"Normal maps filename must end with {suffix!r}")
-    return normal_maps_filename.removesuffix(suffix) + "_residualized_maps.dscalar.nii"
 
 
 def source_paths(
     rsa_root: Path,
     model: str,
     config: str,
-    normal_maps_filename: str,
+    stem: str,
 ) -> dict[str, Path]:
     """Return the three conventional source paths for a model."""
     return {
@@ -68,29 +60,14 @@ def source_paths(
             / config
             / "partial_corr_r_searchlight.dscalar.nii"
         ),
-        "linear_resid_unimodal": (
-            rsa_root / f"{model}_av_linear_resid_unimodal_av" / normal_maps_filename
-        ),
-        "projection_resid_own": (
-            rsa_root / f"{model}_av_projection_resid_own_av" / normal_maps_filename
-        ),
-        "linear_resid_own": (
-            rsa_root / f"{model}_av_linear_resid_own_av" / normal_maps_filename
-        ),
+        **{name: searchlight_path(rsa_root, f"{model}_av_{name}", "av", stem)
+           for name in ("linear_resid_unimodal", "projection_resid_own", "linear_resid_own")},
     }
 
 
-def output_path(
-    rsa_root: Path,
-    model: str,
-    normal_maps_filename: str,
-) -> Path:
+def output_path(rsa_root: Path, model: str, stem: str) -> Path:
     """Return the consolidated residual-suite CIFTI path."""
-    return (
-        rsa_root
-        / f"{model}_av"
-        / residualized_filename(normal_maps_filename)
-    )
+    return rsa_root / model / f"{stem}_residualized_maps.dscalar.nii"
 
 
 def missing_map_names(destination: Path) -> list[str]:
@@ -104,11 +81,11 @@ def append_residualized_maps(
     model: str,
     rsa_root: Path,
     config: str,
-    normal_maps_filename: str,
+    stem: str,
     template_cifti: Path,
 ) -> list[str]:
     """Append only missing residual-analysis scalars and return their names."""
-    destination = output_path(rsa_root, model, normal_maps_filename)
+    destination = output_path(rsa_root, model, stem)
     maps_needed = missing_map_names(destination)
     for map_name in MAP_ORDER:
         if map_name not in maps_needed:
@@ -117,7 +94,7 @@ def append_residualized_maps(
         log.info("All residualized RSA maps already exist; nothing to do")
         return []
 
-    sources = source_paths(rsa_root, model, config, normal_maps_filename)
+    sources = source_paths(rsa_root, model, config, stem)
     absent = [sources[name] for name in maps_needed if not sources[name].is_file()]
     if absent:
         detail = "\n".join(f"  {path}" for path in absent)
@@ -129,7 +106,7 @@ def append_residualized_maps(
         if map_name == "partial_correlation":
             data = load_single_map(source)
         else:
-            data = load_named_map(source, SEARCHLIGHT_MAP_NAME)
+            data = load_named_map(source, "rho_j")
         merge_into_combined(
             np.asarray(data, dtype=np.float32),
             map_name,
@@ -148,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--rsa-root", required=True)
     parser.add_argument("--config", required=True)
-    parser.add_argument("--normal-maps-filename", required=True)
+    parser.add_argument("--stem", required=True, help="searchlight.py file stem of the residual-embedding runs.")
     parser.add_argument("--template-cifti", required=True)
     return parser.parse_args()
 
@@ -160,7 +137,7 @@ def main() -> None:
         model=args.model,
         rsa_root=Path(args.rsa_root),
         config=args.config,
-        normal_maps_filename=args.normal_maps_filename,
+        stem=args.stem,
         template_cifti=Path(args.template_cifti),
     )
     log.info("Added %d residualized RSA maps for %s", len(added), args.model)

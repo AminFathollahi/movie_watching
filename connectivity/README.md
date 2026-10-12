@@ -25,7 +25,7 @@ Time points between a clip's official end and its `movie_timing.csv` end belong 
 Run from the repository root.
 
 ```bash
-python rsa/draw_rsa_borders.py --rsa-npy <.../rsa_59k_..._searchlight.npy> \
+python rsa/draw_rsa_borders.py --rsa-cifti <.../rsa_59k_..._joint_only_models.dscalar.nii> --map-name rho_j \
     --threshold-mode percentile --top-pct 5 --min-verts 10
 
 python connectivity/seed_connectivity.py \
@@ -35,7 +35,7 @@ python connectivity/seed_connectivity.py \
     --out-dir outputs/connectivity/pe-av-small-16-frame_av_top5pct/group_average
 ```
 
-`draw_rsa_borders.py` keeps the top 5 percent of cortical vertices by RSA correlation (jointly over both hemispheres), removes connected islands smaller than 10 vertices, and writes `{stem}_top5pct_{lh,rh}.border` next to the input array.
+`draw_rsa_borders.py` keeps the top 5 percent of cortical vertices by RSA correlation (jointly over both hemispheres), removes connected islands smaller than 10 vertices, and writes `{stem}_top5pct_{lh,rh}.border` next to the input file.
 
 Required arguments are `--border-lh`, `--border-rh`, `--roi-name`, `--mode` (`group_average` or `per_subject`) and `--out-dir`. The main optional arguments are:
 

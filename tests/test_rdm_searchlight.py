@@ -118,3 +118,15 @@ def test_crossnobis_matches_explicit_cross_validation():
                     db = parts[b][tril[0]] - parts[b][tril[1]]
                     d += np.einsum("pi,ij,pj->p", da, P, db)
         assert np.isclose(rho[0, v], spearmanr(d, target).statistic)
+
+
+def test_subject_files_hold_one_kind_with_block_maps():
+    from rsa.rdm_searchlight import KINDS, block_names, subject_config, subject_map_path
+    cfg = subject_config(100, 5.0, 5.0, 5.0, "center")
+    path = subject_map_path("out", "100610", "m", "mae", "semipartial", cfg, "raw", shifted=True)
+    assert path.as_posix() == ("out/subject_data/100610/m/"
+                               "rsa_59k_raw_k100_delay5s_bin5s_skip5s_euclidean_spearman_center_mae_shifted_semipartial.dscalar.nii")
+    names = block_names(KINDS["models"], 2)
+    assert names == ["rho_a_block01", "rho_a_block02", "rho_v_block01", "rho_v_block02", "rho_j_block01", "rho_j_block02"]
+    blocks = np.arange(3 * 2 * 4).reshape(2, 3, 4)
+    assert np.array_equal(np.stack(list(blocks), axis=1).reshape(-1, 4)[names.index("rho_v_block02")], blocks[1, 1])

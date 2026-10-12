@@ -70,7 +70,7 @@ from cifti_io import (  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-CONFIG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
+CONFIG = f"k100_delay5s_bin5s_skip5s_pearson_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 SEARCHLIGHT_FILENAME = "partial_corr_r_searchlight.dscalar.nii"
 # kind="integration" runs (rsa/partial_rsa.py) save under this filename instead;
 # only the reused peav_av_given_both layer of own_unimodal needs it.

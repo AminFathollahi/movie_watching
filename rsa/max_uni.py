@@ -50,7 +50,6 @@ A binary fdr_mask is saved as a companion dscalar.
 import argparse
 import json
 import logging
-import re
 import sys
 from pathlib import Path
 
@@ -65,8 +64,8 @@ from cifti_io import (
     save_cifti_map,
     save_cifti_multimap,
 )
-from rsa.shared.naming import add_model_norm_arg, method_label
-from rsa.shared.rsa_utils import aggregate_blocks, corrected_2factor_bootstrap
+from rsa.shared.naming import add_model_norm_arg, method_label, searchlight_path, single_model
+from rsa.shared.rsa_utils import corrected_2factor_bootstrap, load_subject_maps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,8 +150,8 @@ def parse_args():
     p.add_argument("--out-dir",       required=True, dest="out_dir")
     p.add_argument("--alpha",         type=float, default=0.05)
     p.add_argument("--n-blocks",      type=int, default=4, dest="n_blocks",
-                   help="Number of temporal blocks expected in per-subject block .npy files "
-                        "(from searchlight.py --n-blocks). Set to 1 to skip 2-factor bootstrap.")
+                   help="Number of temporal blocks for the corrected 2-factor bootstrap (block maps of "
+                        "searchlight.py --n-blocks N, N a multiple). Set to 1 to skip it.")
     p.add_argument("--n-bootstrap",   type=int, default=2000, dest="n_bootstrap",
                    help="Bootstrap iterations for the corrected 2-factor variance estimate "
                         "(Schütt et al. 2023, Eq. 5).")
@@ -183,126 +182,17 @@ def _parse_baseline_pairs(tokens: list[str]) -> list[tuple[str, str]]:
 # Per-subject rho loading
 # =============================================================================
 
-def _config_path_parts(k, bin_sec, skip_sec, delay_sec, method):
-    bin_int  = int(bin_sec)
-    skip_int = int(skip_sec)
-    delay_tag = f"delay{int(delay_sec)}s"
-    config    = f"k{k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{method}"
-    fname     = (f"rsa_59k_{{fmri_tag}}_k{k}_{delay_tag}"
-                 f"_bin{bin_int}s_skip{skip_int}s_{method}_searchlight.npy")
-    return config, fname
-
-
-def load_rho_stack(
-    output_dir: str,
-    model: str,
-    modality: str,
-    k: int,
-    bin_sec: float,
-    skip_sec: float,
-    delay_sec: float,
-    method: str,  # comparator label incl. model norm, e.g. spearman_center
-    fmri_tag: str,
-) -> tuple[np.ndarray, list[str]]:
-    """Load per-subject rho .npy files for one model/modality.
-
-    Returns
-    -------
-    rho_stack  : (n_subs, n_verts) float32
-    subject_ids: list[str]  — parent dir names, one per subject
-    """
-    bin_int   = int(bin_sec)
-    skip_int  = int(skip_sec)
-    delay_tag = f"delay{int(delay_sec)}s"
-    config    = f"k{k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{method}"
-    fname     = (f"rsa_59k_{fmri_tag}_k{k}_{delay_tag}"
-                 f"_bin{bin_int}s_skip{skip_int}s_{method}_searchlight.npy")
-    model_mod = f"{model}_{modality}"
-
-    files = sorted(
-        Path(output_dir).glob(f"subject_data/*/{model_mod}/{config}/{fname}")
-    )
+def load_rho_stack(output_dir, model: str, modality: str, stem: str, n_blocks: int = 1):
+    """Per-subject searchlight.py rho maps of one model and modality, their block maps averaged down to n_blocks
+    (None if absent) and the subject IDs."""
+    root = Path(output_dir) / "subject_data"
+    pattern = f"*/{model}/{searchlight_path('', model, modality, stem).name}"
+    files = sorted(root.glob(pattern))
     if not files:
-        raise FileNotFoundError(
-            f"No per-subject rho files found for {model}/{modality}.\n"
-            f"Pattern: {output_dir}/subject_data/*/{model_mod}/{config}/{fname}"
-        )
-
-    rho_maps = [np.load(str(f)).astype(np.float32) for f in files]
-    subject_ids = [f.parent.parent.parent.name for f in files]
+        raise FileNotFoundError(f"No per-subject rho files found for {model}/{modality}: {root}/{pattern}")
+    rho, blocks = load_subject_maps(files, single_model(modality)[1], n_blocks)
     log.info(f"  Loaded {len(files)} subjects for {model}/{modality}")
-    return np.stack(rho_maps, axis=0), subject_ids
-
-
-def load_block_stack(
-    output_dir: str,
-    model: str,
-    modality: str,
-    k: int,
-    bin_sec: float,
-    skip_sec: float,
-    delay_sec: float,
-    method: str,  # comparator label incl. model norm, e.g. spearman_center
-    fmri_tag: str,
-    n_blocks: int,
-) -> tuple[np.ndarray, list[str]]:
-    """Load per-subject block-wise rho .npy files, with aggregation fallback.
-
-    If exact n_blocks files are not found, searches for the smallest available
-    N_file that (a) is larger than n_blocks and (b) divides evenly, then
-    aggregates via aggregate_blocks().  This lets a single searchlight run at
-    a large N serve multiple group_stats sweep values without re-running.
-
-    Returns
-    -------
-    block_stack : (n_subs, n_blocks, n_verts) float32
-    subject_ids : list[str]
-    """
-    bin_int   = int(bin_sec)
-    skip_int  = int(skip_sec)
-    delay_tag = f"delay{int(delay_sec)}s"
-    config    = f"k{k}_{delay_tag}_bin{bin_int}s_skip{skip_int}s_{method}"
-    model_mod = f"{model}_{modality}"
-
-    def _collect(n_b):
-        fname = (f"rsa_59k_{fmri_tag}_k{k}_{delay_tag}"
-                 f"_bin{bin_int}s_skip{skip_int}s_{method}_searchlight_nblocks{n_b}.npy")
-        return sorted(Path(output_dir).glob(f"subject_data/*/{model_mod}/{config}/{fname}"))
-
-    files = _collect(n_blocks)
-    n_file = n_blocks
-
-    if not files:
-        available_ns = sorted(set(
-            int(m.group(1))
-            for f in Path(output_dir).glob(
-                f"subject_data/*/{model_mod}/{config}/*_nblocks*.npy"
-            )
-            for m in [re.search(r'_nblocks(\d+)\.npy$', f.name)]
-            if m
-        ))
-        candidates = [n for n in available_ns if n > n_blocks and n % n_blocks == 0]
-        if candidates:
-            n_file = min(candidates)
-            files = _collect(n_file)
-
-    if not files:
-        raise FileNotFoundError(
-            f"No block rho files found for {model}/{modality} "
-            f"(n_blocks={n_blocks} or any divisible multiple).\n"
-            f"Pattern: {output_dir}/subject_data/*/{model_mod}/{config}/*_nblocks*.npy"
-        )
-
-    block_maps  = [np.load(str(f)).astype(np.float32) for f in files]
-    subject_ids = [f.parent.parent.parent.name for f in files]
-    raw_stack   = np.stack(block_maps, axis=0)
-
-    if n_file != n_blocks:
-        raw_stack = aggregate_blocks(raw_stack, n_blocks)
-        log.info(f"  Aggregated {n_file}→{n_blocks} blocks for {model}/{modality}")
-
-    log.info(f"  Loaded {len(files)} block stacks for {model}/{modality} ({n_blocks} blocks)")
-    return raw_stack, subject_ids
+    return rho, blocks, [f.relative_to(root).parts[0] for f in files]
 
 
 def _align_stacks(
@@ -459,29 +349,19 @@ def main():
     legacy_out_stem = f"delta_rho_{tgt_slug}_vs_{base_slug}_{config}"
 
     # ── Load rho stacks ───────────────────────────────────────────────────────
+    stem = f"rsa_59k_{args.fmri_tag}_{config}"
     log.info("Loading target rho maps ...")
-    target_stack, target_subs = load_rho_stack(
-        args.output_dir, args.target[0], args.target[1],
-        args.k, args.bin_sec, args.skip_sec, args.delay_sec,
-        method, args.fmri_tag,
-    )
+    target_stack, target_block_stack, target_subs = load_rho_stack(
+        args.output_dir, args.target[0], args.target[1], stem, args.n_blocks)
 
     log.info("Loading baseline rho maps ...")
-    baseline_stacks = []
-    baseline_sub_lists = []
-    for model, modality in baseline_pairs:
-        bs, subs = load_rho_stack(
-            args.output_dir, model, modality,
-            args.k, args.bin_sec, args.skip_sec, args.delay_sec,
-            method, args.fmri_tag,
-        )
-        baseline_stacks.append(bs)
-        baseline_sub_lists.append(subs)
+    baselines = [load_rho_stack(args.output_dir, model, modality, stem, args.n_blocks)
+                 for model, modality in baseline_pairs]
 
     # ── Align subjects ────────────────────────────────────────────────────────
     target_stack, baseline_stacks, common_subs = _align_stacks(
         target_stack, target_subs,
-        baseline_stacks, baseline_sub_lists,
+        [b[0] for b in baselines], [b[2] for b in baselines],
         baseline_labels,
     )
 
@@ -493,41 +373,17 @@ def main():
     for path in migrated:
         log.info("Migrated legacy artifact: %s", path.name)
 
-    # ── Try to load block stacks for 2-factor bootstrap ───────────────────────
-    have_blocks = False
-    if args.n_blocks > 1:
-        try:
-            target_block_stack, tgt_blk_subs = load_block_stack(
-                args.output_dir, args.target[0], args.target[1],
-                args.k, args.bin_sec, args.skip_sec, args.delay_sec,
-                method, args.fmri_tag, args.n_blocks,
-            )
-            baseline_block_stacks = []
-            for model, modality in baseline_pairs:
-                bs_blk, _ = load_block_stack(
-                    args.output_dir, model, modality,
-                    args.k, args.bin_sec, args.skip_sec, args.delay_sec,
-                    method, args.fmri_tag, args.n_blocks,
-                )
-                baseline_block_stacks.append(bs_blk)
-            # Align block stacks to the same subject set as the full-series stacks
-            blk_idx_map = {s: i for i, s in enumerate(tgt_blk_subs)}
-            common_idx  = [blk_idx_map[s] for s in common_subs if s in blk_idx_map]
-            if len(common_idx) == n_subs:
-                target_block_stack  = target_block_stack[common_idx]
-                baseline_block_stacks = [b[common_idx] for b in baseline_block_stacks]
-                have_blocks = True
-                log.info(
-                    f"Block files found ({n_subs} subjects, {args.n_blocks} blocks) — "
-                    f"will run corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)"
-                )
-            else:
-                log.warning(
-                    f"Block subject set doesn't fully overlap ({len(common_idx)}/{n_subs}) — "
-                    f"skipping 2-factor bootstrap."
-                )
-        except FileNotFoundError as e:
-            log.info(f"Block files not available — skipping 2-factor bootstrap.\n  {e}")
+    # ── Block maps for the 2-factor bootstrap, aligned like the full-series stacks ──
+    have_blocks = target_block_stack is not None and all(b[1] is not None for b in baselines)
+    if have_blocks:
+        def _common(stack, subs):
+            return stack[[subs.index(s) for s in common_subs]]
+        target_block_stack = _common(target_block_stack, target_subs)
+        baseline_block_stacks = [_common(b[1], b[2]) for b in baselines]
+        log.info(f"Block maps found ({n_subs} subjects, {args.n_blocks} blocks) — "
+                 f"will run corrected 2-factor bootstrap (Schütt et al. 2023, Eq. 5)")
+    elif args.n_blocks > 1:
+        log.info("Block maps not available — skipping 2-factor bootstrap.")
 
     out_path      = out_dir / f"{out_stem}_{n_subs}subs.dscalar.nii"
     fdr_mask_path = out_dir / f"{out_stem}_{n_subs}subs_fdr_mask.dscalar.nii"

@@ -31,10 +31,7 @@ else is computed here -- no permutation testing, no null distributions, no
 significance counts, no FDR/BH, no winner-take-all group test, no 4-class
 sensitivity scheme, no reliability/disattenuation/split-half machinery. All
 of that previously lived in this module and has been deleted; see
-``cf_modeling/deprecated/persubject_cca_channel_1pct.py`` and
-``rsa/channel_class_rsa.py`` for the two downstream consumers that had to be
-updated (the latter is deprecated, not deleted, and now defines its own
-local ``CLASS_ORDER`` rather than importing it from here).
+``cf_modeling/deprecated/persubject_cca_channel_1pct.py``.
 """
 
 from __future__ import annotations

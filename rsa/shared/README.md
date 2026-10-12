@@ -28,6 +28,7 @@ Binning functions use the clip table `movie_timing.csv` (`onset_sec` in global t
 | `correlate_rdms_rho_a(rdm1, rdm2)` | Kendall's tau (`scipy.stats.kendalltau`) of the lower triangles |
 | `corrected_2factor_bootstrap(rho_stack, block_stack, n_boot=2000, rng=None)` | Corrected two-factor bootstrap variance of the group-mean `rho` (Schutt et al. 2023, Eq. 5) from resampling subjects, blocks and both: `var_c2f = clip(2 (var_subj + var_block) - var_both, lower, upper)`, `lower = max(var_subj, var_block)`, `upper = max(var_both, lower)`. Inputs `rho_stack (n_subjects, n_vertices)` and `block_stack (n_subjects, n_blocks, n_vertices)`; returns `var_c2f, var_subj, var_block` |
 | `aggregate_blocks(block_stack, n_target)` | Averages adjacent blocks to reduce the stored block count to `n_target` (must divide it) |
+| `load_subject_maps(files, name, n_blocks=1)` | Stacks map `name` of per-subject `searchlight.py` files and, with `n_blocks > 1`, their block maps `{name}_block01` ... averaged down to `n_blocks`; returns `(subjects, grayordinates)` and `(subjects, n_blocks, grayordinates)` or `None` |
 
 ## naming.py
 
@@ -38,7 +39,10 @@ Binning functions use the clip table `movie_timing.csv` (`onset_sec` in global t
 | `add_model_norm_arg(parser)` | Adds `--model-norm {zscore,center}` (default `center`) |
 | `searchlight_config(k, delay_sec, bin_sec, skip_sec, method, model_norm, hrf=False)` | `k{k}_delay{D}s_bin{B}s_skip{S}s_{method}_{model_norm}`; with `hrf=True`, `delay{D}s` becomes `hrf` |
 | `searchlight_stem(fmri_tag, k, delay_sec, bin_sec, skip_sec, method, model_norm)` | `rsa_59k_{fmri_tag}_{searchlight_config}` |
-| `method_label(method, model_norm)` | `{method}_{model_norm}`, or just `rho_a` (crossnobis does not depend on the model normalization) |
+| `method_label(method, model_norm)` | `{rdm}_{method}_{model_norm}` (`pearson_spearman_center`), or just `rho_a` (crossnobis does not depend on the model normalization) |
+| `rsa_method(method, distance="correlation")` | `{rdm}_{method}`: `pearson` for the correlation distance, `euclidean` otherwise |
+| `single_model(modality)` | Name tag and map name of a `searchlight.py` run on one embedding: `("joint_only", "rho_j")` for `av`, else `("{modality}_only", "rho_{modality}")` |
+| `searchlight_path(root, model, modality, stem)` | `{root}/{model}/{stem}_{tag}_models.dscalar.nii`, with `root` the `group_average` or `subject_data/{subject}` folder |
 
 ## model_registry.py
 

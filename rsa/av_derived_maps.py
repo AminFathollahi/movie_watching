@@ -20,9 +20,9 @@ Three maps are made per family (nine total):
 * ``av_max_uni_<family>`` is the signed continuous contrast
   ``AV - max(A, V)``.
 
-All inputs are ordinary group-average searchlight rho ``.npy`` maps computed
-with exactly the same preprocessing, searchlight, delay, bin/stride, and RSA
-method. The maps are added to the target model's normal combined AV dscalar.
+All inputs are group-average searchlight.py maps ({model}/{stem}_{joint_only,a_only,v_only}_models.dscalar.nii,
+maps rho_j, rho_a, rho_v) computed with exactly the same preprocessing, searchlight, delay, bin/stride, and RSA
+method. The maps are written to {model}/{stem}_av_derived.dscalar.nii of the target model.
 """
 
 from __future__ import annotations
@@ -37,8 +37,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from cifti_io import get_combined_map_names, merge_into_combined  # noqa: E402
+from cifti_io import get_combined_map_names, load_named_map, merge_into_combined  # noqa: E402
 from rsa.shared.model_registry import av_derived_baselines  # noqa: E402
+from rsa.shared.naming import searchlight_path, single_model  # noqa: E402
 
 
 log = logging.getLogger(__name__)
@@ -65,8 +66,8 @@ def parse_args() -> argparse.Namespace:
     target.add_argument(
         "--all-existing",
         action="store_true",
-        help="Backfill every supported natural *_av combined CIFTI matching the "
-             "selected config/rho filename under --rsa-root.",
+        help="Backfill every supported natural joint model with a searchlight.py "
+             "file of --stem under --rsa-root.",
     )
     parser.add_argument(
         "--list-dependencies",
@@ -77,16 +78,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--rsa-root",
-        help="Group-average RSA root containing {model}_{modality}/{config}/.",
+        help="Group-average RSA root containing {model}/{stem}_*_models.dscalar.nii.",
     )
-    parser.add_argument("--config", help="Searchlight config directory name.")
-    parser.add_argument(
-        "--rho-filename",
-        help="Searchlight rho .npy filename shared by target and baselines.",
-    )
+    parser.add_argument("--stem", help="searchlight.py file stem shared by target and baselines.")
     parser.add_argument(
         "--combined-output",
-        help="Target model's normal combined AV .dscalar.nii file.",
+        help="Output .dscalar.nii of the target model ({model}/{stem}_av_derived.dscalar.nii).",
     )
     parser.add_argument(
         "--template-cifti",
@@ -186,22 +183,11 @@ def compute_derived_maps(
     return result
 
 
-def _rho_path(
-    rsa_root: Path,
-    model: str,
-    modality: str,
-    config: str,
-    rho_filename: str,
-) -> Path:
-    return rsa_root / f"{model}_{modality}" / config / rho_filename
-
-
 def append_derived_maps(
     *,
     target_model: str,
     rsa_root: Path,
-    config: str,
-    rho_filename: str,
+    stem: str,
     combined_output: Path,
     template_cifti: Path,
 ) -> list[str]:
@@ -219,30 +205,27 @@ def append_derived_maps(
         family for family in FAMILY_ORDER
         if any(name.endswith(f"_{family}") for name in maps_needed)
     )
-    av_path = _rho_path(rsa_root, target_model, "av", config, rho_filename)
-    source_paths = {"target AV": av_path}
+    source_paths = {"target AV": (target_model, "av")}
     for family in FAMILY_ORDER:
         if family not in families_needed:
             continue
         (audio_model, audio_mod), (video_model, video_mod) = baselines[family]
-        source_paths[f"{family} A"] = _rho_path(
-            rsa_root, audio_model, audio_mod, config, rho_filename
-        )
-        source_paths[f"{family} V"] = _rho_path(
-            rsa_root, video_model, video_mod, config, rho_filename
-        )
+        source_paths[f"{family} A"] = (audio_model, audio_mod)
+        source_paths[f"{family} V"] = (video_model, video_mod)
+    source_paths = {label: (searchlight_path(rsa_root, model, modality, stem), single_model(modality)[1])
+                    for label, (model, modality) in source_paths.items()}
 
-    missing = [(label, path) for label, path in source_paths.items() if not path.is_file()]
+    missing = [(label, path) for label, (path, _) in source_paths.items() if not path.is_file()]
     if missing:
         detail = "\n".join(f"  {label}: {path}" for label, path in missing)
         raise FileNotFoundError(f"Missing RSA rho map(s):\n{detail}")
 
-    av = np.load(av_path).astype(np.float32)
+    av = load_named_map(*source_paths["target AV"])
     baseline_maps: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for family in families_needed:
         baseline_maps[family] = (
-            np.load(source_paths[f"{family} A"]).astype(np.float32),
-            np.load(source_paths[f"{family} V"]).astype(np.float32),
+            load_named_map(*source_paths[f"{family} A"]),
+            load_named_map(*source_paths[f"{family} V"]),
         )
 
     maps = compute_derived_maps(av, baseline_maps, families_needed)
@@ -277,7 +260,7 @@ def main() -> None:
             print(model, modality)
         return
 
-    required = ["rsa_root", "config", "rho_filename", "template_cifti"]
+    required = ["rsa_root", "stem", "template_cifti"]
     if not args.all_existing:
         required.append("combined_output")
     missing_args = [f"--{name.replace('_', '-')}" for name in required if not getattr(args, name)]
@@ -288,27 +271,20 @@ def main() -> None:
     rsa_root = Path(args.rsa_root)
     template_cifti = Path(args.template_cifti)
     if args.all_existing:
-        suffix = "_searchlight.npy"
-        if not args.rho_filename.endswith(suffix):
-            raise SystemExit(f"--rho-filename must end with {suffix!r}")
-        combined_name = args.rho_filename.removesuffix(suffix) + "_maps.dscalar.nii"
         targets = []
-        for combined_output in sorted(rsa_root.glob(f"*_av/{combined_name}")):
-            model = combined_output.parent.name.removesuffix("_av")
+        for rho_path in sorted(rsa_root.glob(f"*/{searchlight_path('', '', 'av', args.stem).name}")):
+            model = rho_path.parent.name
             if av_derived_baselines(model) is not None:
-                targets.append((model, combined_output))
+                targets.append((model, rho_path.parent / f"{args.stem}_av_derived.dscalar.nii"))
         if not targets:
-            raise FileNotFoundError(
-                f"No supported AV combined CIFTIs named {combined_name!r} under {rsa_root}"
-            )
+            raise FileNotFoundError(f"No supported joint-model searchlight files of {args.stem!r} under {rsa_root}")
         total_added = 0
         for model, combined_output in targets:
             log.info("AV derived-map backfill: %s", model)
             total_added += len(append_derived_maps(
                 target_model=model,
                 rsa_root=rsa_root,
-                config=args.config,
-                rho_filename=args.rho_filename,
+                stem=args.stem,
                 combined_output=combined_output,
                 template_cifti=template_cifti,
             ))
@@ -320,8 +296,7 @@ def main() -> None:
         names = append_derived_maps(
             target_model=args.target_model,
             rsa_root=rsa_root,
-            config=args.config,
-            rho_filename=args.rho_filename,
+            stem=args.stem,
             combined_output=Path(args.combined_output),
             template_cifti=template_cifti,
         )

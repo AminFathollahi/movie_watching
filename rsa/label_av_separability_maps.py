@@ -12,8 +12,8 @@ rsa/localizer_naming.py's summary_json_name()) used by the localizer and the
 shell runner, so this always merges exactly the clusters that were actually
 run -- nothing hardcoded.
 
-Everything for one analysis lives together: raw per-cluster/all-clusters
-searchlight runs under group_average/<analysis>/raw/, the merged deliverable
+The per-cluster and all-clusters searchlight.py files are
+group_average/<cluster model>/..._joint_only_models.dscalar.nii; the merged deliverable is
 at group_average/<analysis>/<analysis>_all_clusters_maps.dscalar.nii, and the
 cluster summary at group_average/<analysis>/summary.json (already copied
 there by the shell runner) -- so "how many clusters were there in total"
@@ -35,17 +35,17 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cifti_io import merge_into_combined  # noqa: E402
 from paths import OUTPUTS  # noqa: E402
-from rsa.shared.naming import DEFAULT_MODEL_NORM  # noqa: E402
+from rsa.shared.naming import DEFAULT_MODEL_NORM, searchlight_path  # noqa: E402
 from rsa.localizer_naming import base_name as loc_base_name, summary_json_name  # noqa: E402
 
 EMBEDDINGS_DIR = OUTPUTS / "model_embeddings"
 GROUP_DIR = OUTPUTS / "rsa/raw/group_average"
-CONFIG = f"k100_delay5s_bin5s_skip5s_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
+CONFIG = f"k100_delay5s_bin5s_skip5s_pearson_spearman_{os.environ.get('MODEL_NORM', DEFAULT_MODEL_NORM)}"
 
 SRC_MAPS = {
-    "searchlight_spearman_rho": "rho",
-    "searchlight_spearman_rho_sigmap_uncorr": "p_uncorr_mask",
-    "searchlight_spearman_rho_sigmap_fdr": "fdr_mask",
+    "rho_j": "rho",
+    "rho_j_sigmap_uncorr": "p_uncorr_mask",
+    "rho_j_sigmap_fdr": "fdr_mask",
 }
 
 
@@ -59,7 +59,6 @@ def main():
     summary = json.load(open(summary_json))
 
     analysis_dir = GROUP_DIR / base_name
-    raw_dir = analysis_dir / "raw"
 
     targets = [(f"{base_name}_c{r['cluster_idx']}",
                 f"cluster{r['cluster_idx']}", r) for r in summary["significant_clusters"]]
@@ -68,7 +67,7 @@ def main():
     out_path = analysis_dir / f"{base_name}_all_clusters_maps.dscalar.nii"
 
     for folder, short_name, r in targets:
-        path = raw_dir / f"{folder}_av" / f"rsa_59k_raw_{CONFIG}_maps.dscalar.nii"
+        path = searchlight_path(GROUP_DIR, folder, "av", f"rsa_59k_raw_{CONFIG}")
         if not path.exists():
             print(f"[MISSING] {folder}: {path}")
             continue

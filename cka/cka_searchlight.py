@@ -88,9 +88,9 @@ def build_parser():
     return parser
 
 
-def map_stem(args, method, suffix=""):
+def map_stem(args, method, suffix="", space="59k"):
     config = searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec, method, args.feature_scaling)
-    return f"cka_59k_{args.fmri_suffix}_{config}{suffix}"
+    return f"cka_{space}_{args.fmri_suffix}_{config}{suffix}"
 
 
 def load_embedding(args, model, kind, timing, run_trs):
@@ -121,8 +121,8 @@ def write_provenance(path, entries):
     path.write_text(json.dumps(entries, indent=2) + "\n")
 
 
-def save_models(args, cka, model, directory, definition, **entries):
-    stem = f"{map_stem(args, 'noncv')}_{args.tag}"
+def save_models(args, cka, model, directory, definition, space="59k", **entries):
+    stem = f"{map_stem(args, 'noncv', space=space)}_{args.tag}"
     directory.mkdir(parents=True, exist_ok=True)
     save_cifti_multimap(cka, COMPONENT_MAPS, args.template_cifti, str(directory / f"{stem}_models.dscalar.nii"))
     audio, video = component_models(args, model)
@@ -156,14 +156,14 @@ def semipartial_provenance(cosines):
     )
 
 
-def save_maps(args, results, grams, root, definition, **entries):
+def save_maps(args, results, grams, root, definition, space="59k", **entries):
     """CKA, semi-partial and commonality maps of each model from `noncv_pass` results, under root/{model}."""
     for model in args.models:
         columns = np.stack([grams[(model, c)] for c in "avj"]).astype(np.float64)
         cosines = columns @ columns.T
         cka = np.stack([results[(model, c)] for c in "avj"])
         directory = root / model
-        stem = save_models(args, cka, model, directory, definition, **entries, commonality=COMMONALITY,
+        stem = save_models(args, cka, model, directory, definition, space, **entries, commonality=COMMONALITY,
                            **semipartial_provenance(cosines))
         save_cifti_multimap(kernels.semipartial(cka, cosines).astype(np.float32), SEMIPARTIAL_MAPS, args.template_cifti,
                             str(directory / f"{stem}_semipartial.dscalar.nii"))
@@ -204,7 +204,7 @@ def run(args):
     keep = ~np.isin(s.videos, args.exclude_video_ids.split(","))
     grams = {model: kernels.model_gram(s.embeddings[(model, "j")][keep]) for model in args.models}
     for model, array in kernels.noncv_pass(binned[keep], grams, s.ncols, s.verts, s.device).items():
-        save_map(array, args, out / model / "diagnostics", "noncv", "cka", "_norepeats")
+        save_map(array, args, out / model / "diagnostics", "noncv", "cka_j", "_norepeats")
 
     grams = {key: kernels.model_gram(x) for key, x in s.embeddings.items()}
     save_maps(args, kernels.noncv_pass(binned, grams, s.ncols, s.verts, s.device), grams, out, NONCV, n_windows=len(s.videos))

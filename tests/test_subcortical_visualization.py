@@ -51,12 +51,12 @@ def test_discovery_excludes_subject_results(tmp_path: Path):
 def test_result_slug_encodes_full_analysis_identity(tmp_path: Path):
     output_dir = tmp_path
     source = (output_dir / "group_average" / "nemotron_layer18_lt_av" /
-              "k100_delay5s_bin5s_skip5s_spearman" /
-              "rsa_subcortical_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii")
+              "k100_delay5s_bin5s_skip5s_pearson_spearman_zscore" /
+              "rsa_subcortical_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_zscore_maps.dscalar.nii")
     category, slug = result_category_and_slug(source, output_dir)
     assert category == "group_average"
-    assert slug == ("nemotron_layer18_lt_av__k100_delay5s_bin5s_skip5s_spearman"
-                     "__rsa_subcortical_raw_k100_delay5s_bin5s_skip5s_spearman_maps")
+    assert slug == ("nemotron_layer18_lt_av__k100_delay5s_bin5s_skip5s_pearson_spearman_zscore"
+                     "__rsa_subcortical_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_zscore_maps")
     filename = f"{slug}__BILATERAL_THALAMUS.func.gii"
     # Different analyses never collide on filename alone.
     other_source = source.with_name("integration_partial_r_searchlight.dscalar.nii")

@@ -34,15 +34,13 @@ def _template(path: Path, n_vertices: int = 4) -> None:
 
 def test_append_residualized_maps_consolidates_and_resumes_per_scalar(tmp_path):
     model = "pe-av-small-16-frame"
-    config = "k100_delay5s_bin5s_skip5s_spearman"
-    normal_filename = (
-        "rsa_59k_raw_k100_delay5s_bin5s_skip5s_spearman_maps.dscalar.nii"
-    )
+    config = "k100_delay5s_bin5s_skip5s_pearson_spearman"
+    stem = "rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_center"
     rsa_root = tmp_path / "group_average"
     template = tmp_path / "template.dtseries.nii"
     _template(template)
 
-    sources = source_paths(rsa_root, model, config, normal_filename)
+    sources = source_paths(rsa_root, model, config, stem)
     values = {
         "partial_correlation": np.full(4, 0.1, dtype=np.float32),
         "linear_resid_unimodal": np.full(4, 0.2, dtype=np.float32),
@@ -51,10 +49,10 @@ def test_append_residualized_maps_consolidates_and_resumes_per_scalar(tmp_path):
     }
     for name, source in sources.items():
         source.parent.mkdir(parents=True, exist_ok=True)
-        scalar_name = "partial_source" if name == "partial_correlation" else "searchlight_spearman_rho"
+        scalar_name = "partial_source" if name == "partial_correlation" else "rho_j"
         save_cifti_multimap(values[name][None, :], [scalar_name], str(template), str(source))
 
-    destination = output_path(rsa_root, model, normal_filename)
+    destination = output_path(rsa_root, model, stem)
     destination.parent.mkdir(parents=True, exist_ok=True)
     preserved = np.full(4, 7, dtype=np.float32)
     save_cifti_multimap(
@@ -68,7 +66,7 @@ def test_append_residualized_maps_consolidates_and_resumes_per_scalar(tmp_path):
         model=model,
         rsa_root=rsa_root,
         config=config,
-        normal_maps_filename=normal_filename,
+        stem=stem,
         template_cifti=template,
     )
 
@@ -84,7 +82,7 @@ def test_append_residualized_maps_consolidates_and_resumes_per_scalar(tmp_path):
         model=model,
         rsa_root=rsa_root,
         config=config,
-        normal_maps_filename=normal_filename,
+        stem=stem,
         template_cifti=template,
     ) == []
     np.testing.assert_array_equal(

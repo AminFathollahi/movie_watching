@@ -633,3 +633,20 @@ def aggregate_blocks(block_stack: np.ndarray, n_target: int) -> np.ndarray:
         )
     group = n_file // n_target
     return block_stack.reshape(n_subs, n_target, group, n_verts).mean(axis=2).astype(block_stack.dtype)
+
+
+def load_subject_maps(files, name, n_blocks=1):
+    """Stack map `name` of per-subject searchlight.py files and, with n_blocks > 1, their block maps `{name}_block01` ...
+    averaged down to n_blocks (None when absent or not a multiple of n_blocks)."""
+    rho, blocks = [], []
+    for f in files:
+        img = nib.load(str(f))
+        names = list(img.header.get_axis(0).name)
+        data = np.asarray(img.dataobj, dtype=np.float32)
+        rho.append(data[names.index(name)])
+        blocks.append(data[[i for i, n in enumerate(names) if n.startswith(f"{name}_block")]])
+    counts = {len(b) for b in blocks}
+    n_file = counts.pop() if len(counts) == 1 else 0
+    if n_blocks <= 1 or not n_file or n_file % n_blocks:
+        return np.stack(rho), None
+    return np.stack(rho), aggregate_blocks(np.stack(blocks), n_blocks)

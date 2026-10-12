@@ -47,7 +47,7 @@ from rsa.shared.rsa_utils import (
 # Reuse the established geodesic-neighbour cache implementation.
 sys.path.insert(0, str(Path(__file__).parent))
 from searchlight import get_neighbors  # noqa: E402
-from rsa.shared.naming import add_model_norm_arg, searchlight_config, searchlight_stem  # noqa: E402
+from rsa.shared.naming import add_model_norm_arg, rsa_method, searchlight_config, searchlight_stem  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -352,7 +352,7 @@ def run_analysis(args):
     timing_df = pd.read_csv(args.timing_csv)
     fmri_tag = _fmri_tag(args)
     config = searchlight_config(args.k, args.delay_sec, args.bin_sec, args.skip_sec,
-                                args.method, args.model_norm)
+                                rsa_method(args.method), args.model_norm)
     subject_root = (
         Path(args.output_dir) / "group_average"
         if args.subject == "group_average"
@@ -361,7 +361,7 @@ def run_analysis(args):
     out_dir = subject_root / cfg.label / config
     full_npy = out_dir / (
         searchlight_stem(fmri_tag, args.k, args.delay_sec, args.bin_sec, args.skip_sec,
-                         args.method, args.model_norm) + "_searchlight.npy"
+                         rsa_method(args.method), args.model_norm) + "_searchlight.npy"
     )
     blocks_npy = full_npy.with_name(
         full_npy.name.replace("_searchlight.npy", f"_searchlight_nblocks{args.n_blocks}.npy")

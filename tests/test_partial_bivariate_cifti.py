@@ -1,4 +1,4 @@
-"""Tests for additive Workbench 2-D partial-correlation exports."""
+"""Tests for the Workbench 2-D export of the ROI-mean partial correlations."""
 
 import importlib.util
 import sys
@@ -17,63 +17,36 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
-def _partial_cifti(path: Path, roi_a: str, roi_p: str) -> None:
-    names = [
-        f"roi_mean_timeseries_partial_pearson_r_{roi_a}_given_{roi_p}_bilateral",
-        f"roi_mean_timeseries_partial_pearson_r_{roi_p}_given_{roi_a}_bilateral",
-        f"roi_mean_timeseries_partial_pearson_r_{roi_a}_given_{roi_p}_within_hemisphere",
-        f"roi_mean_timeseries_partial_pearson_r_{roi_p}_given_{roi_a}_within_hemisphere",
-        f"roi_mean_timeseries_partial_pearson_r_{roi_a}_given_{roi_p}_L",
-        f"roi_mean_timeseries_partial_pearson_r_{roi_p}_given_{roi_a}_L",
-        f"roi_mean_timeseries_partial_pearson_r_{roi_a}_given_{roi_p}_R",
-        f"roi_mean_timeseries_partial_pearson_r_{roi_p}_given_{roi_a}_R",
-    ]
-    scalar = nib.cifti2.ScalarAxis(names)
-    brain = nib.cifti2.BrainModelAxis.from_mask(
-        np.ones(6, dtype=bool), name="CortexLeft"
-    )
-    data = np.linspace(-0.2, 0.5, 48, dtype=np.float32).reshape(8, 6)
-    nib.save(
-        nib.Cifti2Image(
-            data,
-            header=nib.cifti2.Cifti2Header.from_axes((scalar, brain)),
-        ),
-        path,
-    )
+def _connectivity_cifti(path: Path, roi_a: str, roi_b: str, label: str) -> None:
+    _, names = MODULE.roi_mean_connectivity_names(roi_a, roi_b, label)
+    brain = nib.cifti2.BrainModelAxis.from_mask(np.ones(6, dtype=bool), name="CortexLeft")
+    data = np.linspace(-0.2, 0.5, 12, dtype=np.float32).reshape(2, 6)
+    data[0, 0] = np.nan
+    nib.save(nib.Cifti2Image(data, header=nib.cifti2.Cifti2Header.from_axes((nib.cifti2.ScalarAxis(names), brain))), path)
 
 
-def test_export_writes_all_four_views_with_shared_scale(tmp_path, monkeypatch):
-    roi_a, roi_p = "cca_a_test", "cca_p_test"
-    source = tmp_path / "partial.dscalar.nii"
-    _partial_cifti(source, roi_a, roi_p)
+def test_export_writes_one_dlabel_with_nan_unlabelled(tmp_path, monkeypatch):
+    source = tmp_path / "connectivity.dscalar.nii"
+    _connectivity_cifti(source, "A5", "FFC", "raw_per_run_zscore")
     texture = np.ones((4, 4, 4), dtype=np.float32)
-    texture[..., 3] = 1.0
     monkeypatch.setattr(MODULE, "find_pycortex_colormap", lambda _: tmp_path / "cmap.png")
     monkeypatch.setattr(MODULE, "load_rgba_texture", lambda _: texture)
     monkeypatch.setattr(MODULE, "save_legend", lambda *args, **kwargs: None)
-
-    outputs = MODULE.export_partial_bivariate_views(
-        source, tmp_path, roi_a, roi_p, bins=4, vmin=0.0, vmax=0.4
-    )
-    for view in ("bilateral", "within_hemisphere", "L", "R"):
-        image = nib.load(outputs[view])
-        assert image.shape == (1, 6)
-        assert image.header.get_axis(0).name[0].endswith(f"({view}, 4x4)")
+    outputs = MODULE.export_connectivity_bivariate(source, tmp_path, "A5", "FFC", "raw_per_run_zscore", bins=4)
+    assert outputs["dlabel"].name == "bivariate_roi_mean_timeseries_connectivity_A5_FFC_raw_per_run_zscore_4bin.dlabel.nii"
+    image = nib.load(outputs["dlabel"])
+    assert image.shape == (1, 6)
+    assert np.asarray(image.dataobj)[0, 0] == 0
     assert outputs["metadata"].parent == tmp_path.parent
-    metadata = outputs["metadata"].read_text()
-    assert "signed values are preserved" in metadata
+    assert "signed values are preserved" in outputs["metadata"].read_text()
 
 
 def test_rejects_wrong_map_order(tmp_path):
-    roi_a, roi_p = "cca_a_test", "cca_p_test"
-    source = tmp_path / "partial.dscalar.nii"
-    _partial_cifti(source, roi_a, roi_p)
+    source = tmp_path / "connectivity.dscalar.nii"
+    _connectivity_cifti(source, "A5", "FFC", "raw_per_run_zscore")
     image = nib.load(source)
-    names = list(image.header.get_axis(0).name)
-    names[0], names[1] = names[1], names[0]
-    header = nib.cifti2.Cifti2Header.from_axes(
-        (nib.cifti2.ScalarAxis(names), image.header.get_axis(1))
-    )
+    names = list(image.header.get_axis(0).name)[::-1]
+    header = nib.cifti2.Cifti2Header.from_axes((nib.cifti2.ScalarAxis(names), image.header.get_axis(1)))
     nib.save(nib.Cifti2Image(np.asarray(image.dataobj), header=header), source)
     with pytest.raises(ValueError, match="map names/order"):
-        MODULE.export_partial_bivariate_views(source, tmp_path, roi_a, roi_p)
+        MODULE.export_connectivity_bivariate(source, tmp_path, "A5", "FFC", "raw_per_run_zscore")

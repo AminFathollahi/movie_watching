@@ -2,13 +2,13 @@
 subcortical/subcortical_noise_ceiling.py
 ==========================================
 Vertex-wise inter-subject noise ceiling for subcortical searchlight RSA.
-Mandatory reliability gate (subcortex.txt §4) — subcortical BOLD SNR is
-lower than cortex and must be interpreted relative to its own ceiling, not
+Reliability gate: subcortical BOLD SNR is
+lower than cortex, so maps are interpreted relative to their own ceiling, not
 compared to cortex-grade rho.
 
-Reuses rsa/noise_ceiling.py's GPU/CPU kernels (_compute_nc_gpu/_compute_nc_cpu)
+Reuses shared/noise_ceiling.py's GPU/CPU kernels (_compute_nc_gpu/_compute_nc_cpu)
 verbatim — they are geometry-agnostic given neighbors + surface_indices +
-vertex_to_col, exactly like run_searchlight. The only new logic is looping
+vertex_to_col, exactly like run_searchlight. The only difference is looping
 over subcortical structures instead of two cortical hemispheres.
 
 Streaming mode only (reads raw CIFTIs directly per subject) — mirrors how
@@ -28,12 +28,11 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "rsa"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from rsa.shared.rsa_utils import preprocess_fmri  # noqa: E402
-from cifti_io import save_cifti_multimap  # noqa: E402
-from noise_ceiling import _compute_nc_gpu, _compute_nc_cpu  # noqa: E402
+from shared.binning import preprocess_fmri  # noqa: E402
+from shared.cifti_io import save_cifti_multimap  # noqa: E402
+from shared.noise_ceiling import _compute_nc_gpu, _compute_nc_cpu  # noqa: E402
 from subcortical_io import (  # noqa: E402
     SUBCORTICAL_STRUCTURES, struct_slices, structure_neighbors,
     preprocess_subject_subcortical,

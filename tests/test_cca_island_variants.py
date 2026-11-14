@@ -1,4 +1,4 @@
-"""Unit tests for CCA threshold variants and legacy naming compatibility."""
+"""Unit tests for CCA threshold variants."""
 
 import importlib.util
 from pathlib import Path

@@ -25,16 +25,12 @@ import numpy as np
 from scipy import stats as scipy_stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from paths import OUTPUTS  # noqa: E402
+from shared.paths import OUTPUTS  # noqa: E402
 
 try:
-    from cf_modeling.cf_naming import (
-        cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
-    )
+    from cf_modeling.cf_naming import cf_model_map_stems
 except ModuleNotFoundError:
-    from cf_naming import (
-        cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
-    )
+    from cf_naming import cf_model_map_stems
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)s  %(message)s",
@@ -70,12 +66,12 @@ def _save_dscalar(arr, name, bm_axis, out_dir):
 # Per-subject map collection
 # =============================================================================
 
-def collect_maps(subjects_dir, map_name, min_subjects, legacy_name=None):
-    """Load canonical subject CF maps, with a temporary legacy fallback."""
+def collect_maps(subjects_dir, map_name, min_subjects):
+    """Stack the named map of every subject directory that has it."""
     sub_dirs = sorted(glob(os.path.join(subjects_dir, "*")))
     arrays, missing = [], []
     for sd in sub_dirs:
-        path = resolve_cf_model_map_path(sd, map_name, legacy_name)
+        path = os.path.join(sd, f"{map_name}.npy")
         if os.path.exists(path):
             arrays.append(np.load(path))
         else:
@@ -132,13 +128,12 @@ def run_per_subject(args):
 
     log.info("\nLoading per-subject null-corrected R² maps …")
     stems = cf_model_map_stems(args.roi_a, args.roi_b)
-    legacy_stems = legacy_cf_model_map_stems(args.roi_a, args.roi_b)
     maps_a = collect_maps(subjects_dir, stems["null_corrected_split_r2_a"],
-                          args.min_subjects, legacy_stems["null_corrected_split_r2_a"])
+                          args.min_subjects)
     maps_b = collect_maps(subjects_dir, stems["null_corrected_split_r2_b"],
-                          args.min_subjects, legacy_stems["null_corrected_split_r2_b"])
+                          args.min_subjects)
     maps_product = collect_maps(subjects_dir, stems["joint_split_r2_geomean"],
-                                args.min_subjects, legacy_stems["joint_split_r2_geomean"])
+                                args.min_subjects)
     N = maps_a.shape[0]
     log.info(f"  N subjects: {N}")
 

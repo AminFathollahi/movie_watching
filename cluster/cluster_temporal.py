@@ -50,7 +50,7 @@ def fit_hmm(features: np.ndarray, lengths: np.ndarray, n_states: int = 10,
 
 def sweep_states(features: np.ndarray, lengths: np.ndarray, k_min: int = 2, k_max: int = 15,
                  n_init: int = 10, covariance_type: str = "diag", random_state: int = 0):
-    """DIAGNOSTIC sweep over K (n_states). Not branched on this pass.
+    """Diagnostic sweep over K (n_states).
 
     For each K: leave-one-run-out CV log-likelihood (primary), full-fit BIC
     (secondary), and restart-stability ARI between the best and 2nd-best

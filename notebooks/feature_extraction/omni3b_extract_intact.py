@@ -1,37 +1,30 @@
 """
 notebooks/feature_extraction/omni3b_extract_intact.py
 ==========================================================
-Fixes a methodological bug found while implementing Move 1 (best-additive AV
-integration contrast) of the AV-integration extension: omni3b.ipynb's
-existing "_a"/"_v" embeddings are mean-pooled from AUDIO-/VIDEO-token
-positions within a SINGLE JOINT (audio+video) forward pass, and "_av" is
-defined as the elementwise average `(_a + _v) / 2`. That means "_av" is a
-deterministic function of "_a" and "_v" in raw feature space (verified
-empirically: av == (a+v)/2 bit-for-bit), and "_a"/"_v" are themselves not
-pure unimodal baselines (audio-token hidden states are still contextualized
-by attention over the video tokens present in the same forward pass, and
-vice versa). Both properties undermine a "does av carry unique fusion
-information beyond [a,v]" contrast.
+Unimodal "_a" and "_v" embeddings from separate forward passes, plus a
+last-token joint embedding, for omni3b (layers 9, 18, 27).
 
-This script re-extracts "_a" and "_v" from GENUINELY SEPARATE forward passes
-(audio-only input with no video tokens in the sequence at all; video-only
-input with no audio tokens), for layers {9, 18, 27} only (the layers used by
-Move 1/4/5 of the AV-integration extension). "_av" itself is left UNCHANGED
-on disk (still the joint-pass (a+v)/2 value) -- only "_a"/"_v" are replaced,
-so the integration residual (av regressed on [a_new, v_new]) is no longer
-tautological.
+Mean-pooling the audio-token and video-token positions of a single joint
+(audio+video) forward pass gives "_a" and "_v" that are not pure unimodal
+baselines (audio-token hidden states are contextualized by attention over the
+video tokens in the same pass, and vice versa), and defining the joint
+embedding "_av" as the elementwise average (_a + _v) / 2 makes it a
+deterministic function of "_a" and "_v". Both properties undermine a test of
+whether "_av" carries information beyond [a, v].
 
-ADDITIONALLY: saves a genuinely emergent joint-AV alternative,
-"{tag}_layer{N}_lt_av.npy" -- the hidden state at the LAST sequence
-position of the SAME joint (audio+video) forward pass used for the original
-"_av", rather than a masked-position average. The last position has
-attended, via self-attention, over the entire preceding multimodal context,
-so (unlike (a+v)/2) it is not a deterministic function of the "_a"/"_v"
-masked-position pools -- closer to how the Topo-Omni paper itself reads out
-a per-clip summary (last-layer activation of the final token) for its own
-stimulus embeddings (Sec 4.7.2). This is a THIRD condition, not a
-replacement -- both "_av" (masked-pool average) and "_av_lasttoken" are kept
-for comparison.
+This script extracts "_a" and "_v" from separate forward passes (audio-only
+input with no video tokens in the sequence; video-only input with no audio
+tokens). The joint "_av" (average of the masked-position pools of the joint
+pass) is left as is, so the integration residual (av regressed on [a, v]) is
+not tautological.
+
+It also saves "{tag}_layer{N}_lt_av.npy", the hidden state at the last
+sequence position of the same joint forward pass. The last position has
+attended over the entire preceding multimodal context, so (unlike (a+v)/2) it
+is not a deterministic function of the masked-position pools; the Topo-Omni
+paper reads out a per-clip summary the same way (last-layer activation of the
+final token, Sec 4.7.2). Both "_av" (masked-pool average) and the last-token
+"_av" are kept.
 
 Run with:
     conda run --no-capture-output -n avtransformer \
@@ -60,7 +53,7 @@ for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy"):
 MODEL_PATH      = "Qwen/Qwen2.5-Omni-3B"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import OUTPUTS, EXTERNAL  # noqa: E402
+from shared.paths import OUTPUTS, EXTERNAL  # noqa: E402
 
 DATA_BASE       = Path(os.environ.get("STIMULUS_DIR", str(EXTERNAL / "data/segmented_stimulus/filtered")))
 EMBEDDINGS_BASE = Path(os.environ.get("EMBEDDINGS_BASE", str(OUTPUTS / "model_embeddings")))

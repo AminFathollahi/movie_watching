@@ -87,7 +87,7 @@ ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
 
 DATA_BASE="$ROOT/data"
 HCP_DIR="${MOVIE_HCP_DIR:-$DATA_BASE/HCP_S1200_GroupAvg_v1}"
-PYCORTEX_STORE="${DATA_BASE}/hedger2026"
+PYCORTEX_STORE="${DATA_BASE}/vicsompy_data"
 export PYCORTEX_FILESTORE="$PYCORTEX_STORE"
 OUTPUTS_BASE="$ROOT/outputs"
 
@@ -466,7 +466,7 @@ run_preprocess() {
     [ "$GSR"       = "true" ] && GSR_FLAG="--gsr"
 
     # shellcheck disable=SC2086
-    run_python "${SCRIPT_DIR}/../preprocess_individual.py" \
+    run_python "${SCRIPT_DIR}/../../preprocessing/preprocess_individual.py" \
         --raw-dir        "$CIFTI_DIR" \
         --out-dir        "$PREPROCESSED_INDIV_DIR" \
         --subjects-list  "$SUBJECTS_LIST" \
@@ -773,7 +773,7 @@ run_existing_visualization() {
     log "[05] Render existing pycortex visualizations (${ROI_A}×${ROI_B}) ..."
     CCA_VIZ_ROI_A="$ROI_A" CCA_VIZ_ROI_P="$ROI_B" MPLBACKEND=Agg \
         conda run --no-capture-output -n "$CONDA_ENV" ipython -c \
-        "import json, os, sys; nb=json.load(open('${SCRIPT_DIR}/viz.ipynb')); code='\\n'.join(''.join(nb['cells'][i]['source']) for i in (1,2,3)); code='\\n'.join(line for line in code.splitlines() if not line.startswith('%')); exec(compile(code, '${SCRIPT_DIR}/viz.ipynb', 'exec')); cortex.options.config.set('webgl', 'colormaps', os.path.join(sys.prefix, 'share', 'pycortex', 'colormaps')); plot_all_for_pair(os.environ['CCA_VIZ_ROI_A'], os.environ['CCA_VIZ_ROI_P'])"
+        "import json, os, sys; nb=json.load(open('${SCRIPT_DIR}/../notebooks/visualization/cf_modeling_figures.ipynb')); code='\\n'.join(''.join(nb['cells'][i]['source']) for i in (1,2,3)); code='\\n'.join(line for line in code.splitlines() if not line.startswith('%')); exec(compile(code, '${SCRIPT_DIR}/../notebooks/visualization/cf_modeling_figures.ipynb', 'exec')); cortex.options.config.set('webgl', 'colormaps', os.path.join(sys.prefix, 'share', 'pycortex', 'colormaps')); plot_all_for_pair(os.environ['CCA_VIZ_ROI_A'], os.environ['CCA_VIZ_ROI_P'])"
     log "[05] Done"
 }
 

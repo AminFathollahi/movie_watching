@@ -5,7 +5,7 @@ Extract PE-AV's native joint "audio_video_embeds" ("cls-av") using only ONE
 real modality at a time, by feeding a fixed synthetic blank/silent
 placeholder for the other modality.
 
-Why this is necessary (not a workaround of convenience): PE-AV's forward()
+Why: PE-AV's forward()
 (transformers.models.pe_audio_video.modeling_pe_audio_video.PeAudioVideoModel)
 routes to a COMPLETELY DIFFERENT code path when either pixel_values_videos
 or input_values is None -- it returns audio_plus_text_embeds or
@@ -19,15 +19,14 @@ video; symmetrically real video + a fixed silent dummy audio for the other
 condition. This keeps the SAME embedding space (2048-d? see actual shape
 printed at runtime) across all three conditions (real av, dummy-video+real-a,
 dummy-audio+real-v) so they are directly comparable as driving embeddings for
-the Move-5 stimulus-clustering localizer -- unlike a/v (audio_embeds/
+the stimulus-clustering localizer -- unlike a/v (audio_embeds/
 video_embeds), which live in different, unimodal-specific embedding spaces.
 
 Dummy stimuli (generated once, reused for all 626 segments):
   data/segmented_stimulus/dummy_blank/dummy_black_5s.mp4   (1024x720, 24fps, solid black, 5s)
   data/segmented_stimulus/dummy_blank/dummy_silence_5s.wav (44100Hz stereo, all-zero, 5s)
-Chosen over a real HCP inter-clip "REST" screen (searched for on disk, not
-present as a standalone stimulus file in this project) per analyst decision:
-a synthetic dummy is simpler and unambiguously content-free.
+A synthetic dummy is used rather than an inter-clip "REST" screen because it
+is unambiguously content-free.
 
 Run with:
     conda run --no-capture-output -n avtransformer \
@@ -54,7 +53,7 @@ MODEL_NAME  = "pe-av-small-16-frame"
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 DATA_BASE   = DATA / "segmented_stimulus/filtered"
 OUTPUT_BASE = OUTPUTS / "model_embeddings"

@@ -10,11 +10,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from rsa.searchlight import _config_label, _file_stem
-from rsa.shared.naming import (
+from shared.naming import (
     DEFAULT_MODEL_NORM, MODEL_NORMS, add_model_norm_arg, method_label, searchlight_config,
 )
-from rsa.shared.rsa_utils import preprocess_fmri, process_model_embeddings
+from shared.binning import preprocess_fmri, process_model_embeddings
 
 
 @pytest.fixture
@@ -75,16 +74,6 @@ def test_cli_default_is_center_and_only_two_values_are_accepted():
     assert parser.parse_args(["--model-norm", "zscore"]).model_norm == "zscore"
     with pytest.raises(SystemExit):
         parser.parse_args(["--model-norm", "demean"])
-
-
-@pytest.mark.parametrize("model_norm", MODEL_NORMS)
-def test_output_names_carry_model_norm_after_method(model_norm):
-    args = SimpleNamespace(k=100, delay_sec=5.0, bin_sec=5.0, skip_sec=5.0, hrf=False,
-                           method="spearman", model_norm=model_norm)
-    assert _config_label(args) == f"k100_delay5s_bin5s_skip5s_pearson_spearman_{model_norm}"
-    assert _file_stem(args, "raw") == f"rsa_59k_raw_k100_delay5s_bin5s_skip5s_pearson_spearman_{model_norm}"
-    hrf = searchlight_config(100, 5.0, 5.0, 5.0, "spearman", model_norm, hrf=True)
-    assert hrf == f"k100_hrf_bin5s_skip5s_spearman_{model_norm}"
 
 
 def test_crossnobis_method_label_has_no_model_norm():

@@ -9,7 +9,7 @@ from scipy.stats import spearmanr
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from rsa.searchlight import _precompute_model_rdm, _searchlight_vertex_fast, run_searchlight_gpu
+from shared.searchlight import _precompute_model_rdm, _searchlight_vertex_fast, run_searchlight_gpu
 
 def make_data(n_bins=24, n_verts=40, k=6, n_features=11, seed=0):
     rng = np.random.default_rng(seed)

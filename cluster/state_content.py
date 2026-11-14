@@ -20,7 +20,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 from io_cluster import GROUP_AVG_TRS, get_segment_metadata  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

@@ -1,119 +1,130 @@
 # Encoding: banded-ridge variance partition
 
-Encoding models predict the response of each of the 108,441 cortical grayordinates in the HCP 7T movie-watching data from model embeddings of the same movie window. Three feature spaces are compared: A, the embedding of the window's audio alone; V, of its video alone; and J, the model's joint audiovisual embedding. Seven banded ridge models, one per non-empty subset of {A, V, J}, are fitted and scored on the same rows, and their held-out R² values are partitioned into unique and shared parts (Lescroart et al. 2015; de Heer et al. 2017). `unique_j` is the variance J explains beyond A and V together.
+Voxelwise encoding models predict the fMRI response of each cortical grayordinate (108,441) or subcortical voxel from model embeddings of the same movie window. Three feature spaces are compared: **A**, an embedding of the window's audio; **V**, of its video; and **J**, the joint audiovisual embedding of a multimodal model (PE-AV or Nemotron). One banded ridge model is fitted for each of the seven non-empty subsets of {A, V, J}, and their held-out R² values are partitioned into unique and shared parts (Lescroart et al. 2015; de Heer et al. 2017).
 
 ## Method
 
-### Responses and embeddings
+- **Data.** Group-average responses of 175 HCP 7T subjects (4 runs, TR = 1 s). Each clip is cut into non-overlapping windows of B = 1, 2, 5 or 10 s; the response of a window is the mean signal over the B seconds starting 5 s after the window onset (hemodynamic delay).
+- **Cross-validation.** Leave one run out (`--split loro`). The repeated clip that ends every run is kept once (its first showing) and its three later showings are excluded.
+- **Scaling.** Responses and every embedding channel are z-scored within each run (`--feature-scaling zscore`; `demean` is a robustness variant). Embeddings get the same rows and statistics as the responses.
+- **Model.** Banded ridge (himalaya `GroupRidgeCV`, Dupré la Tour et al. 2022): one penalty per band, chosen per grayordinate by inner leave-one-run-out cross-validation over 20 random draws of the band weights × 23 overall penalties.
+- **Score.** R² = 1 − Σ(y − ŷ)² / Σ(y − ȳ)² on the pooled held-out windows; negative values are kept.
+- **Partition.** With R²(S) the held-out R² of subset S:
 
-Responses are the group average of 175 subjects (four runs, TR = 1 s, `raw` preprocessing). The 18 clips of `data/movie_timing.csv` are cut into non-overlapping windows of B = 5, 2 or 1 s (626 at 5 s). The response of window i of a clip with run-local onset t is the mean signal over the B seconds starting at t + 5 s + i·B; the shift accounts for the hemodynamic delay (`--hrf` also convolves the embeddings with the SPM canonical hemodynamic response function).
+| Quantity | Definition |
+|---|---|
+| `shared_av` | R²(A) + R²(V) − R²(AV) |
+| `gain_a_over_v`, `gain_v_over_a` | R²(AV) − R²(V), R²(AV) − R²(A) |
+| `gain_a_over_v_times_gain_v_over_a` | max(gain_a_over_v, 0) · max(gain_v_over_a, 0) |
+| `unique_j` | R²(AVJ) − R²(AV) |
+| `unique_a`, `unique_v` | R²(AVJ) − R²(VJ), R²(AVJ) − R²(AJ) |
+| `shared_avj`, `shared_av_only`, `shared_aj_only`, `shared_vj_only` | the remaining regions of the three-set Venn diagram (inclusion–exclusion) |
 
-Embeddings are read from `outputs/model_embeddings/{model}/bin{B}s_skip{B}s/{model}_{a,v,av}.npy` (A, V, J), one row per window (extraction: `notebooks/feature_extraction/README.md`). A and V are the audio and video tower outputs for PE-AV, and audio-only and video-only passes pooled at J's layer for Nemotron. The last clip of each run (`video5`, `video9`, `video14`, `video18`) is the same 83 s stimulus, shown once per run.
+## Feature sets
 
-### Cross-validation
+J is always the multimodal model's joint embedding. A and V come from a pair named `{audio}_{video}`. The audio and video encoders of a pair are matched in training objective and size, and each encoder appears in one pair only.
 
-`--split loro` (default) holds out each run in turn, with the repeated clips excluded; `loco` holds out each clip in turn; `fixed` holds out the four repeated clips (Hedger et al. 2025). Held-out predictions are pooled over outer folds before scoring.
+| Pair | Training objective | Audio | Video |
+|---|---|---|---|
+| `dasheng12b_videomaev2gd50` | masked autoencoding | Dasheng 1.2B | VideoMAE V2 giant (50 % depth) |
+| `dasheng06bd75_videomaev2ld75` | masked autoencoding | Dasheng 0.6B (75 %) | VideoMAE V2 large (75 %) |
+| `openbeatsli2_vjepa2ld75` | masked token / latent prediction | OpenBEATs large | V-JEPA 2 ViT-L (75 %) |
+| `w2vbert2d75_vjepa2gd75` | masked token / latent prediction | w2v-BERT 2.0 (75 %) | V-JEPA 2 ViT-g (75 %) |
+| `languagebinda_languagebindv` | contrastive with text | LanguageBind audio | LanguageBind video |
+| `clap_viclip` | contrastive with text | CLAP | ViCLIP L/14 |
+| `whisperl30_qwen25vl3bvitl32` | text-generative | Whisper large-v3 encoder (hidden state 30 of 32) | Qwen2.5-VL 3B vision encoder (hidden state 32 of 32, the last block) |
+| `peavs16fa_peavs16fv` | own towers | PE-AV audio-only | PE-AV video-only |
+| `nemotronl18mpcata_nemotronl18mpcatv` | own towers | Nemotron audio-only pass | Nemotron video-only pass |
+| `peavs16fdummya_peavs16fdummyv` | dummy modality | PE-AV joint, blank video | PE-AV joint, silent audio |
 
-### Normalization
-
-Embeddings are scaled over the same rows and with the same statistics as the responses.
-
-- Leave-one-run-out (`--split loro`, response scaling `run`, the default): each grayordinate is z-scored within each run on that run's own rows, the held-out run on its own. Each embedding channel is demeaned (`--feature-scaling demean`, the default) or z-scored (`zscore`) within each run in the same way. Per-run z-scoring of responses and features follows Huth et al. (2016) and Deniz et al. (2019). Under `fixed`, the repeated clip of each run is scaled separately from the run's training rows.
-- Leave-one-clip-out (`--split loco`, requires `--response-scaling train`): in each fold, each run is scaled with the mean and standard deviation of its training rows, applied unchanged to the held-out clip, for responses and embeddings alike; no statistic is computed from held-out rows (Poldrack, Huckins & Varoquaux 2020). `loco` with per-run scaling is refused, because the held-out clip would enter its run's statistics.
-
-`--response-scaling clip` and `none` are also available. `--n-components N` replaces each band by its first N principal components, fitted on the fold's training rows after scaling and applied to the held-out rows.
-
-### Banded ridge
-
-For a subset S of bands, Ŷ = Σ_{b∈S} X_b W_b, with W minimizing ‖Y − Σ_b X_b W_b‖² + Σ_b λ_b ‖W_b‖² (Dupré la Tour et al. 2022; himalaya `GroupRidgeCV`). Penalties are chosen per grayordinate by leave-one-run-out cross-validation within the training rows: 20 random draws of the relative band scalings, each with 23 overall penalties in logspace(−2, 9). The training mean of Y serves as the intercept.
-
-### Scoring and partition
-
-For each grayordinate, on the pooled held-out rows, R² = 1 − Σ(y − ŷ)² / Σ(y − ȳ)², with ȳ the mean of the held-out responses. Negative values are kept; R² is undefined where the held-out response is constant. With R²(S) the held-out R² of subset S:
-
-- unique A = R²(AVJ) − R²(VJ); unique V = R²(AVJ) − R²(AJ); unique J = R²(AVJ) − R²(AV)
-- pairwise overlap I(X, Y) = R²(X) + R²(Y) − R²(XY)
-- triple overlap T = R²(AVJ) − R²(A) − R²(V) − R²(J) + I(A,V) + I(A,J) + I(V,J)
-- shared A and V only = I(A,V) − T, likewise for A–J and V–J; shared A, V and J = T
-
-The seven regions sum to R²(AVJ) and can be negative where adding a band lowers held-out accuracy. The partition uses separate fits per subset, not the split R² of one joint fit (Dupré la Tour et al. 2022). Pearson r is not partitioned.
-
-### Feature sets
-
-J is always the fitted model's joint embedding; the tag names the source of A and V. The tag `screen` marks single-encoder fits (`--subsets a` or `v`).
-
-| Tag | A | V |
-|---|---|---|
-| `unimodal_own` | the model's own audio-only embedding | the model's own video-only embedding |
-| `dummy_av` (PE-AV) | joint embedding of real audio and blank video (all pixels at the normalized value of black, −1) | joint embedding of silent audio (zero waveform) and real video |
-| control set name | the set's audio encoder | the set's video encoder |
-
-Control sets take A and V from independent unimodal encoders. `-d50` and `-d75` denote the layer at 50% and 75% of the encoder's depth, a plain name the final layer; for each encoder, the depth with the highest leave-one-run-out single-model R² (`screen`), averaged over the 5% of grayordinates where the encoder family predicts best, was used.
-
-| Set | Audio | Video |
-|---|---|---|
-| `mae` | dasheng-0.6b-d75 | videomaev2-large-d75 |
-| `mae-large` | dasheng-1.2b | videomaev2-giant-d50 |
-| `latent` | openbeats-large-i2 | vjepa2-vitl-d75 |
-| `large-mixed` | dasheng-1.2b | vjepa2-vitg-d75 |
-| `speech-wavlm` | wavlm-large-d75 | vjepa2-vitl-d75 |
-| `speech-w2vbert` | w2v-bert-2.0-d75 | vjepa2-vitl-d75 |
-| `text-contrastive` | clap-larger | pe-core-l14 |
-| `text-asr` | whisper-large-v3 | pe-core-l14 |
+The dummy pair is fitted for PE-AV only. In the Whisper/Qwen2.5-VL pair each encoder is taken at the hidden state of highest mean held-out Pearson r in its layer sweep (see Layer sweeps): hidden state 30 for Whisper, 32 (the last block, mean held-out r 0.243) for the Qwen2.5-VL vision encoder.
 
 ## Usage
 
-Dependencies are listed in `encoding/environment.yml`; input and output roots are set in the `CONFIG` block of `encoding/analysis.sh`.
+Dependencies: `encoding/environment.yml`. Input and output roots: `shared/paths.py` (`MOVIE_ROOT`).
 
 ```bash
-bash encoding/analysis.sh variance_partition --models pe-av-small-16-frame --bins 5 --variants loro:demean
+bash encoding/analysis.sh preprocess          # group-average responses
+bash encoding/run_all.sh                      # all fits, time-resolved analysis, collected files
+python encoding/variance_partition.py --help  # a single fit
 ```
 
-The runner fits each model with `unimodal_own`, `dummy_av` (PE-AV) and every control set (`--controls SET...|all|none`). `--variants` takes `split:feature_scaling` pairs; `loco` needs `--response-scaling train` and keeps one showing of the repeated clip (15 folds). `screen --audio-models M... --video-models M...` fits single encoders. `factorial_interaction` replaces J by the crossed-pair interaction J(v, a) + J(v′, a′) − J(v, a′) − J(v′, a), (v′, a′) being a training-run window of another clip. Each fit calls `encoding/variance_partition.py` (see `--help`).
+## Running
 
-### Dummy-modality contrasts
+`run_all.sh` calls three resumable runners in order: `run_variance_partition.sh` (pair fits), `run_time_resolved.sh` (time-resolved analysis) and `run_collect.sh` (multi-map files, including the layer sweeps). A unit of work is skipped when its output exists and was made with the requested settings, so after a stop or a reboot the same command carries on.
 
-`bash encoding/run_diff_study.sh [partition|consolidate|all]` refits each joint model with J from a dummy-modality condition (`clsav_from_a`: dummy video; `clsav_from_v`: dummy audio) and the intact A and V. `encoding/diff_maps.py` then writes `encoding_diff_..._dummy.dscalar.nii` per condition (`joint_r_dummy`, `unique_j_dummy`, `diff_joint_r` = r_J(intact) − r_J(dummy)) and `encoding_diff_..._modality_presence.dscalar.nii` per model (`modality_presence_diff` = unique J(intact) − the larger dummy unique J).
+```bash
+bash encoding/run_all.sh --status     # done / to run per runner, and the running PIDs
+bash encoding/run_all.sh --dry-run    # what would run
+setsid nohup bash encoding/run_all.sh >> run_all.log 2>&1 < /dev/null &   # detached
+```
+
+Stop with `kill <runner PID> <job PID>` (both printed by `--status`); start again to resume. Options (flags or environment variables): `--spaces`, `--bins`, `--scalings`, `--models`, `--n-iter`; `GPU_LOCK` (run each GPU job under `flock` on that file), `ON_OOM` (command run before retrying a job that ran out of GPU memory), `MIN_FREE_GB` (default 60). A failed job is retried once and then listed in `{runner}.failed.tsv`.
 
 ## Outputs
 
-Files go to `outputs/encoding/group_average/{model}/delay{D}s_bin{B}s_skip{B}s/`, `{model}` being the J model (the encoder for `screen`). Names follow `encoding_{metric}_{split}_{scaling}_{tag}_{content}`, where `{scaling}` is the feature scaling followed by `_trainscaled`, `_clipdemeaned` or `_rawresponse` for response scalings other than `run`, and by `_pca{N}` with `--n-components`.
+```
+outputs/encoding/group_average/partitions/delay5s_bin{B}s_skip{B}s/        # cortex fits and collected files
+outputs/encoding/group_average/time_resolved/delay5s_bin{B}s_skip{B}s/     # time-resolved files
+outputs/encoding/group_average/layers/delay5s_bin{B}s_skip{B}s/            # layer sweeps
+outputs/subcortical/encoding/group_average/...                             # the same for subcortex
+```
+
+`{J}` is `peav` or `nemotron`, `{scaling}` is `zscore` or `demean`. Multi-map files hold one map per pair, named by the pair.
 
 | File | Contents |
 |---|---|
-| `encoding_r2_..._models.dscalar.nii` | `r2_a`, `r2_v`, `r2_j`, `r2_av`, `r2_aj`, `r2_vj`, `r2_avj`: held-out R² of each subset |
-| `encoding_pearson_r_..._models.dscalar.nii` | `r_a` … `r_avj`: held-out Pearson r |
-| `encoding_r2_..._partition.dscalar.nii` | the seven regions (`unique_a`, `unique_v`, `unique_j`, `shared_av_only`, `shared_aj_only`, `shared_vj_only`, `shared_avj`); `gain_j_over_a` = R²(AJ) − R²(A); `gain_j_over_v` = R²(VJ) − R²(V); `j_minus_av` = R²(J) − R²(AV); `shared_av` = R²(A) + R²(V) − R²(AV). For tags other than `unimodal_own` also `own_avj_minus_av` = R²(AVJ) of `unimodal_own` − R²(AV) of this tag, and `own_shared_av_minus_shared_av` = `shared_av` of `unimodal_own` − `shared_av` of this tag |
-| `encoding_r2_{split}_{scaling}_own_vs_controls.dscalar.nii` | mean (`mean_…`) and minimum (`min_…`) of `own_shared_av_minus_shared_av` over the control sets, and `n_controls_own_shared_av_greater`, the number of control sets with a lower `shared_av` than `unimodal_own` |
-| `encoding_r2_..._per_fold.npz` | R², penalties and band scalings per fold and grayordinate; per-clip R² for `fixed` |
-| `encoding_r2_..._provenance.json` | settings, embedding sources and definitions |
+| `encoding_{r2,pearson_r}_loro_{scaling}_{J}_{pair}_models.dscalar.nii` | one fit: `r2_a` … `r2_avj` (held-out R² of the seven subsets), `r_a` … `r_avj` |
+| `encoding_r2_loro_{scaling}_{J}_{pair}_provenance.json`, `…_per_fold.npz` | settings and embedding sources of the fit; per-fold R², penalties and band scalings |
+| `{quantity}_{scaling}.dscalar.nii` | `shared_av`, `gain_a_over_v`, `gain_v_over_a`, `gain_a_over_v_times_gain_v_over_a`: quantities without J, all pairs |
+| `{quantity}_{J}_{scaling}.dscalar.nii` | `unique_j`, `unique_a`, `unique_v`, `shared_avj`, `shared_av_only`, `shared_aj_only`, `shared_vj_only`, `j_minus_av`, `gain_j_over_a`, `gain_j_over_v`, `own_avj_minus_av`, `own_shared_av_minus_shared_av`, `own_vs_controls`: quantities with J, all pairs |
+| `av_bivariate_{r2,gain}_{scaling}.dlabel.nii` | colour maps, red = audio, blue = video (`r2`: R²(A) vs R²(V); `gain`: `gain_a_over_v` vs `gain_v_over_a`); white = both high; fixed limits 0.20 (`r2`) and 0.10 (`gain`) for every pair, window length, scaling and space |
+| `av_bivariate_{r2,gain}_legend.png`, `av_bivariate_provenance.json`, `partitions_provenance.json` | colour keys; limits and colour-region shares; sources of the J-free quantities |
+| `…_{observed,predictions_{a,v,av,j,avj}}.npy`, `…_rows.csv` | held-out responses and predictions of a fit made with `--save-predictions` (kept only while the time-resolved analysis needs them) |
 
-## Current results (5 October 2026)
+## Layer sweeps
 
-Group average, 5-s windows, demeaned embeddings. Each cell is the held-out value averaged over the 108,441 cortical grayordinates, leave-one-run-out / leave-one-clip-out. Shared AV = R²(A) + R²(V) − R²(AV); unique J = R²(AVJ) − R²(AV). The first three rows take A and V from the J model itself; the last eight from the control sets above.
+The single-model (`screen`) fit of every hidden layer of a model shows at which depth its features predict the response. The embeddings of every layer are written by `notebooks/feature_extraction/extract_embeddings.py --all-layers` as `{model}-l{k:02d}` (hidden state `k`, 0 the embedding-layer output), each layer is fitted with the `screen` runner, and `collect_layers.py` gathers the fits. The sweep of another model changes only the model name; the Whisper large-v3 encoder (33 hidden states, `--audio-models whisper-large-v3-l{00..32}`) is swept the same way.
 
-| A and V from | R²(A) | R²(V) | R²(AV) | shared AV | R²(AVJ), J = PE-AV | unique J, PE-AV | R²(AVJ), J = Nemotron | unique J, Nemotron |
-|---|---|---|---|---|---|---|---|---|
-| PE-AV (`unimodal_own`) | 0.0482 / 0.0472 | 0.0754 / 0.0790 | 0.1003 / 0.0986 | +0.0233 / +0.0275 | 0.1011 / 0.0983 | +0.0008 / −0.0003 | – | – |
-| Nemotron (`unimodal_own`) | 0.0468 / 0.0503 | 0.0872 / 0.0926 | 0.1190 / 0.1171 | +0.0150 / +0.0259 | – | – | 0.1207 / 0.1184 | +0.0017 / +0.0013 |
-| PE-AV (`dummy_av`) | 0.0426 / 0.0453 | 0.0807 / 0.0831 | 0.1009 / 0.1015 | +0.0224 / +0.0270 | 0.0998 / 0.1016 | −0.0010 / +0.0001 | – | – |
-| `mae` | 0.0290 / 0.0344 | 0.0727 / 0.0809 | 0.0908 / 0.0943 | +0.0108 / +0.0209 | 0.0983 / 0.0927 | +0.0075 / −0.0016 | 0.1175 / 0.1158 | +0.0266 / +0.0215 |
-| `mae-large` | 0.0325 / 0.0346 | 0.0636 / 0.0662 | 0.0823 / 0.0795 | +0.0137 / +0.0214 | 0.0944 / 0.0888 | +0.0120 / +0.0093 | 0.1237 / 0.1193 | +0.0414 / +0.0397 |
-| `latent` | 0.0334 / 0.0390 | 0.0880 / 0.0842 | 0.0984 / 0.0960 | +0.0230 / +0.0273 | 0.1037 / 0.0994 | +0.0053 / +0.0034 | 0.1151 / 0.1175 | +0.0167 / +0.0215 |
-| `large-mixed` | 0.0325 / 0.0346 | 0.0879 / 0.0833 | 0.1051 / 0.0930 | +0.0153 / +0.0250 | 0.1067 / 0.0930 | +0.0017 / +0.0001 | 0.1211 / 0.1109 | +0.0161 / +0.0179 |
-| `speech-wavlm` | 0.0307 / 0.0360 | 0.0880 / 0.0842 | 0.1031 / 0.0952 | +0.0156 / +0.0250 | 0.1090 / 0.1008 | +0.0059 / +0.0057 | 0.1194 / 0.1155 | +0.0163 / +0.0203 |
-| `speech-w2vbert` | 0.0315 / 0.0388 | 0.0880 / 0.0842 | 0.1061 / 0.0991 | +0.0134 / +0.0240 | 0.1098 / 0.1029 | +0.0037 / +0.0039 | 0.1207 / 0.1182 | +0.0146 / +0.0192 |
-| `text-contrastive` | 0.0269 / 0.0276 | 0.0643 / 0.0651 | 0.0741 / 0.0712 | +0.0171 / +0.0216 | 0.0881 / 0.0885 | +0.0140 / +0.0174 | 0.1090 / 0.1105 | +0.0349 / +0.0393 |
-| `text-asr` | 0.0396 / 0.0489 | 0.0643 / 0.0651 | 0.0835 / 0.0877 | +0.0205 / +0.0263 | 0.0851 / 0.0863 | +0.0016 / −0.0013 | 0.1102 / 0.1142 | +0.0267 / +0.0265 |
+```bash
+python notebooks/feature_extraction/extract_embeddings.py --models qwen2.5-vl-3b-vit --bins 5 --all-layers
+bash encoding/analysis.sh screen --video-models qwen2.5-vl-3b-vit-l{00..32} qwen2.5-vl-3b-vit-merger --bins 5 --variants loro:zscore
+bash encoding/run_collect.sh --bins 5 --scalings zscore     # collected files and their provenance
+```
 
-Against the model's own A and V, unique J is within 0.002 of zero for both models, and its map correlates only 0.40 (PE-AV) and 0.30 (Nemotron) between the two splits. Using PE-AV's joint embedding with the other modality blanked as A and V (`dummy_av`) gives the same result. Against the control pairs, Nemotron's J adds 0.015 to 0.041 and its maps correlate 0.72 to 0.86 between splits; PE-AV's J adds −0.002 to +0.017.
+Each layer's fit is stored in its own folder like any single-model fit (`outputs/encoding/group_average/{model}-l{k:02d}/delay5s_bin{B}s_skip{B}s/`). `run_collect.sh` collects every model that has such folders; its work list marks a model's collection as to run when a layer fit is newer than the provenance file.
 
-Three control pairs have a higher mean R²(AV) than PE-AV's R²(AVJ) under leave-one-run-out, and one under leave-one-clip-out. PE-AV's full model is above all eight pairs at 26% / 25% of grayordinates, Nemotron's at 36% / 36%.
+| File (`outputs/encoding/group_average/layers/delay5s_bin{B}s_skip{B}s/`) | Contents |
+|---|---|
+| `encoding_{pearson_r,r2}_loro_{scaling}_screen_{model}_layers.dscalar.nii` | held-out Pearson r and R² of the single-model fit of every layer, one map per layer: `layer_01` is hidden state 0, `layer_02` hidden state 1, and so on, in layer order |
+| `encoding_loro_{scaling}_screen_{model}_layers_provenance.json` | per map the hidden-state index and the fit it came from; the fit settings, which are checked to be identical across the layers |
 
-Where PE-AV's own R²(AV) exceeds 0.05, its own A and V share 0.038 / 0.043. The `latent` pair shares as much (PE-AV larger at 50% / 48% of these grayordinates), and the mean over all eight pairs is lower by 0.012 / 0.006. A model's own A and V share more than all eight pairs at 17% / 15% of cortex for PE-AV and 14% / 16% for Nemotron.
+`notebooks/visualization/main_figures.ipynb` plots the mean and the maximum of the held-out r over the cortical grayordinates against layer.
 
-Between the two splits, the R²(AVJ) maps correlate 0.93 to 0.96 and the shared AV maps 0.51 to 0.82. Reducing each band to 32 or 128 principal components (fitted on training rows) changes R²(AVJ) by −0.003 to +0.002 and leaves the between-split agreement of unique J unchanged (0.21 to 0.45, against 0.28 to 0.40 with the full embeddings).
+## Time-resolved analysis
+
+Following Pushpita and Wehbe (bioRxiv 2025.11.05.686819), `time_resolved.py` asks window by window which feature set predicts each grayordinate. From the held-out predictions of a fit it computes per window:
+
+- c_S(t) = z(y)(t) · z(ŷ_S)(t), the product of response and prediction z-scored within run (the paper's measure);
+- rho_S(t) = [(y(t) − ȳ)² − (y(t) − ŷ_S(t))²] / Σ(y − ȳ)², the window's contribution to the held-out R² (Σ_t rho_S(t) = R²_S), and the partition terms built from it.
+
+A window is flagged when a series exceeds chance: block permutation of the response (1,000 shuffles, 10 s blocks), threshold-free cluster enhancement over time, and a maximum-statistic test per run (`_fwe20`: family-wise error 0.2, the paper's criterion; `_fwe05`). Flagged windows are counted in seconds, and the series are related to speech and face/body labels by regression. Run for four pairs (`peavs16fa_peavs16fv`, `clap_viclip`, `languagebinda_languagebindv`, `dasheng12b_videomaev2gd50`) at 1 s, for both scalings, in cortex and subcortex. `notebooks/visualization/time_resolved_figures.ipynb` draws the figures from these files: audio and video series, shared and joint-embedding series before and after label removal with their flag strips, label-correlation bars and flat maps (`SCALING` selects the scaling of the maps and bars, `SERIES_SCALING` the fit whose saved predictions feed the area-level permutation test, which runs on the CPU). `notebooks/visualization/time_resolved_partition_figures.ipynb` draws, for `peavs16fa_peavs16fv` at 1 s with `zscore`, the area means (A5, FFC, STSdp) of `rho_a`, `rho_v`, `rho_j` and `shared_av` with the four runs on one axis, before and after leave-one-run-out removal of the speech and face labels, label-part bars with a block-shuffle null and partial correlations, and the table `partition_label_loro_*.csv` (`partition_figures/` in the time_resolved folder).
+
+The joint model alone is added for the pairs `peavs16fa_peavs16fv` and `clap_viclip` at 1 s (`JOINT_SERIES_*` in `job_list.py`): a fit of subsets `av` and `j` with saved predictions in `outputs/encoding/joint_fits/` (the stored partitions stay untouched), then `time_resolved.py --joint-series` writes `rho_j_{J}(t)` of the joint model and `delta_j_{J}(t) = rho_j(t) - rho_av(t)` next to the other series, and the predictions are removed. `run_time_resolved.sh --bins 1 --scalings zscore` carries out both jobs.
+
+| File | Contents |
+|---|---|
+| `encoding_loro_{scaling}_{pair}_{B}s_{series}.dtseries.nii` | one series per file: `c_a`, `c_v`, `rho_a`, `rho_v`, `unique_a`, `unique_v`, `unique_j_{J}`, `rho_j_{J}` and `delta_j_{J}` (joint model alone, and its gap to the pair's own audio-video fit), `shared_av`, the `joint_c` and `joint_rho` indicators, and the `_resid_speech` and `_resid_speech_fob` versions of `shared_av` and `unique_j_{J}` |
+| `encoding_loro_{scaling}_{pair}_{B}s_rows.csv` | one row per held-out window: run, clip, response and stimulus onset, fold |
+| `maps/{pair}_{scaling}.{npz,json}` | per-grayordinate maps and run settings of one pair |
+| `encoding_{pair}_delay5s_bin{B}s_skip{B}s_{scaling}.dscalar.nii` | every per-grayordinate map of one pair, named without the pair: the time-resolved maps plus the pair's `r2_*`, partition and J maps from the partitions folder |
+| `time_resolved_{scaling}.dscalar.nii` | the time-resolved maps of every pair, `{pair}_{map}` |
+| `av_bivariate_seconds_{scaling}.dlabel.nii`, `av_bivariate_seconds_legend.png` | flagged audio (red) vs video (blue) seconds, five maps per pair: `timeresolved_*` (c) and `partition_*` (rho); colour key (symmetric: grey when both low, red for audio-higher, blue for video-higher, equal luminance so swapping audio and video swaps hue only); shared limit per window length and space: cortex 200 s at 1 s windows and 250 s at 2 s windows, subcortex 60 s at 1 s and 100 s at 2 s (`av_bivariate_provenance.json`) |
+| `README_files.md` | list of the file families of the folder |
 
 ## Tests
 
-`tests/test_fold_evaluator.py`, `tests/test_no_leakage.py`, `tests/test_encoding.py`, `tests/test_variance_partition.py`.
+```bash
+python -m pytest tests/test_fold_evaluator.py tests/test_no_leakage.py tests/test_encoding.py \
+    tests/test_variance_partition.py tests/test_time_resolved.py tests/test_runners.py
+```

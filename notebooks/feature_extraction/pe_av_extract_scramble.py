@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
 
 # Must run before any transformers/huggingface_hub import -- HF_HOME is read
 # at import time, so setting it later has no effect on cache resolution.
@@ -99,7 +99,7 @@ def main():
     pairing.add_argument("--factorial-run", type=int, choices=(1, 2, 3, 4))
     p.add_argument("--seed", type=int, default=SCRAMBLE_SEED,
                    help="Pairing seed. "
-                        "Seed 42 is the canonical control and keeps the legacy output name; "
+                        "Seed 42 is the canonical control and has the untagged output name; "
                         "any other seed is tagged into the output model name.")
     p.add_argument("--force", action="store_true")
     p.add_argument("--timing-csv", type=Path, default=TIMING_CSV)

@@ -63,10 +63,8 @@ Mean-over-all-own-modality-tokens is the natural single-modality analogue of
 "_mp": both pool exhaustively over every token that belongs to the unit's
 own input, with no cherry-picking.
 
-DATA_BASE note: topo_omni_extract_intact.py's DATA_BASE symlink
-(data/segmented_stimulus -> the external drive) can be a dead symlink when
-that drive is not attached. The identical data is also mirrored under
-external/data -- DATA_BASE below tries the symlink first, then that mirror.
+DATA_BASE note: DATA_BASE below tries data/segmented_stimulus first, then
+the copy under external/data.
 
 Run with:
     conda run --no-capture-output -n topo_omni \
@@ -98,7 +96,7 @@ from tqdm import tqdm
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT, DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+from shared.paths import ROOT, DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
 
 TOPO_OMNI_REPO = ROOT / "Model Repos/topo-omni"
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"
@@ -111,12 +109,8 @@ from qwen_vl_utils import process_vision_info
 
 TOPO_MODEL_ID = "epfl-neuroai/topo-omni"
 
-# ~/.cache/huggingface/hub/models--epfl-neuroai--topo-omni is ALSO a dead
-# symlink to the unattached EXTERNAL_USB drive on this machine (same issue as
-# DATA_BASE below) -- snapshot_download(local_files_only=True) fails through
-# it even though a perfectly good mirror of the same snapshot sits on the
-# ADATA HD710 PRO drive, which IS mounted. Resolve the snapshot dir directly
-# instead of trusting HF_HOME resolution.
+# The snapshot directory is resolved directly from the candidate locations
+# below, with HF_HOME resolution as the fallback.
 _HF_SNAPSHOT_CANDIDATES = [
     Path.home() / ".cache/huggingface/hub/models--epfl-neuroai--topo-omni",
     MODELS / "hub/models--epfl-neuroai--topo-omni",
@@ -400,16 +394,10 @@ def main():
     # ── Validation: layer-18 slice must be the unique best-correlating decoder
     # layer against the reference (topoomni_layer18_sheet_mp_av.npy) ──
     #
-    # NOT an absolute-correlation threshold (e.g. frac_units_corr>0.999) --
-    # that reference was extracted from stimulus mp4s on the now-unmounted
-    # EXTERNAL_USB drive. topo_omni_extract_intact.py (the very script that
-    # made the reference), re-run today unmodified against today's
-    # ADATA-mirror mp4s, reproduces layer 18's mean_corr=0.7076 exactly (4
-    # decimal places) against the same reference -- so 0.7076 is the ceiling
-    # this environment can achieve, not a bug in this script. What the gate
-    # can actually test is layout: that layer 18's slice is still uniquely
-    # the best match among all 36 decoder layers, i.e. the sheet's rows
-    # weren't shuffled/mislaid.
+    # The gate is not an absolute-correlation threshold: the correlation with
+    # the reference depends on the stimulus files used to extract it. It tests
+    # layout: that layer 18's slice is the unique best match among all 36
+    # decoder layers, i.e. the sheet's rows are in the expected order.
     ref_path = (EMBEDDINGS_BASE / "topoomni_layer18_sheet_mp" /
                f"bin{dur_int}s_skip{skip_int}s" / "topoomni_layer18_sheet_mp_av.npy")
     if not ref_path.exists():

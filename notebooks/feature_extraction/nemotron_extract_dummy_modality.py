@@ -6,7 +6,7 @@ dummy_modality.py -- extracts nvidia/omni-embed-nemotron-3b's own joint
 embedding with one real modality and one fixed content-free dummy
 substitute, so Nemotron can serve as an independent clustering driver/judge
 for the 3-condition (av / clsav_from_a / clsav_from_v) in-silico AV-
-integration localizer (rsa/topoomni_av_separability_localizer.py --design
+integration localizer (deprecated/rsa/topoomni_av_separability_localizer.py --design
 dummy), alongside its existing role as a driver for the scramble design
 (nemotron_layer{N}_mp_avscramble.npy, from nemotron_extract_scramble.py).
 
@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, MODELS  # noqa: E402
 
 # Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
 # proxy config gets locked in at import time, so stripping these afterward

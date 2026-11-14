@@ -16,7 +16,7 @@ sys.path = [path for path in sys.path if path != SCRIPT_DIR]
 sys.path.insert(0, str(ROOT))
 
 from cf_modeling.roi_mean_partial_connectivity import _save_dscalar
-from rsa.glasser import load_glasser_parcels
+from shared.glasser import load_glasser_parcels
 
 
 def parse_args(argv=None) -> argparse.Namespace:

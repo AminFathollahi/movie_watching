@@ -10,22 +10,12 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from paths import OUTPUTS  # noqa: E402
+from shared.paths import OUTPUTS  # noqa: E402
 
 try:
-    from cf_modeling.cf_naming import (
-        cf_model_map_stems,
-        legacy_cf_model_map_stems,
-        per_subject_mean_stem,
-        resolve_cf_model_map_path,
-    )
+    from cf_modeling.cf_naming import CF_ESTIMATES, cf_model_map_stems, per_subject_mean_stem
 except ModuleNotFoundError:
-    from cf_naming import (
-        cf_model_map_stems,
-        legacy_cf_model_map_stems,
-        per_subject_mean_stem,
-        resolve_cf_model_map_path,
-    )
+    from cf_naming import CF_ESTIMATES, cf_model_map_stems, per_subject_mean_stem
 
 # Support package imports and direct script execution.
 try:
@@ -83,24 +73,16 @@ def main() -> None:
     output_dir = args.output_dir or pair_root / "cifti_maps"
     output_dir.mkdir(parents=True, exist_ok=True)
     stems = cf_model_map_stems(args.roi_a, args.roi_b)
-    legacy_stems = legacy_cf_model_map_stems(args.roi_a, args.roi_b)
 
     # Match plot_fig3a exactly: ROI B is dim1/blue/horizontal and ROI A is
     # dim2/red/vertical.
     if args.mode == "group_average":
-        roi_a_path = resolve_cf_model_map_path(
-            source_dir, stems["split_r2_a"], legacy_stems["split_r2_a"])
-        roi_b_path = resolve_cf_model_map_path(
-            source_dir, stems["split_r2_b"], legacy_stems["split_r2_b"])
-        estimate = "fit_to_group_mean_timeseries"
+        roi_a_path = source_dir / f"{stems['split_r2_a']}.npy"
+        roi_b_path = source_dir / f"{stems['split_r2_b']}.npy"
     else:
-        roi_a_path = resolve_cf_model_map_path(
-            source_dir, per_subject_mean_stem(stems["split_r2_a"]),
-            f"{legacy_stems['split_r2_a']}_avg")
-        roi_b_path = resolve_cf_model_map_path(
-            source_dir, per_subject_mean_stem(stems["split_r2_b"]),
-            f"{legacy_stems['split_r2_b']}_avg")
-        estimate = "mean_of_subject_maps"
+        roi_a_path = source_dir / f"{per_subject_mean_stem(stems['split_r2_a'])}.npy"
+        roi_b_path = source_dir / f"{per_subject_mean_stem(stems['split_r2_b'])}.npy"
+    estimate = CF_ESTIMATES[args.mode]
     roi_a_values = np.load(roi_a_path)
     roi_b_values = np.load(roi_b_path)
     texture_path = find_pycortex_colormap(args.colormap_png)

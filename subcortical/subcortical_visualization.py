@@ -39,11 +39,12 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from subcortical_io import struct_slices  # noqa: E402
-from paths import OUTPUTS  # noqa: E402
+from shared.paths import OUTPUTS  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_DIR = OUTPUTS / "subcortical"
+ENCODING_SUBDIR = Path("encoding")
 DEFAULT_WB = Path("/opt/workbench/bin_linux64/wb_command")
 
 # ``carrier`` is Workbench's fixed structure enum.  For a bilateral mesh we
@@ -301,10 +302,9 @@ def result_category_and_slug(source: Path, output_dir: Path) -> tuple[str, str]:
     stem) joined with '__' -- this is what makes each exported filename
     self-describing without needing to open it or inspect its parent dirs.
     """
-    try:
+    rel = Path(source.stem)
+    if source.is_relative_to(output_dir):
         rel = source.relative_to(output_dir)
-    except ValueError:
-        rel = Path(source.stem)
     parts = list(rel.parts)
     category = parts[0] if parts else "result"
     tail = parts[1:] if len(parts) > 1 else [source.stem]
@@ -351,7 +351,7 @@ def _load_maps(path: Path, expected_columns: int) -> list[tuple[str, np.ndarray]
 
 def discover_group_results(output_dir: Path) -> list[Path]:
     """Return every current group-level CIFTI, never per-subject intermediates."""
-    roots = [output_dir / "group_average", output_dir / "groupstats", output_dir / "noise_ceiling"]
+    roots = [output_dir / "group_average", output_dir / "groupstats", output_dir / "noise_ceiling", output_dir / ENCODING_SUBDIR / "group_average"]
     paths = []
     for root in roots:
         if root.exists():

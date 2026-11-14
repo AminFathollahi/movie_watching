@@ -1,10 +1,9 @@
-"""Tests for exact paired ROI-mean partial correlations."""
+"""Tests for leave-one-run-out ROI-mean partial correlations."""
 
 import importlib.util
 from pathlib import Path
 
 import numpy as np
-from scipy.stats import pearsonr
 
 
 MODULE_PATH = (Path(__file__).resolve().parents[1] / "cf_modeling" /
@@ -19,28 +18,39 @@ def _residualize(x, nuisance):
     return x - design @ np.linalg.lstsq(design, x, rcond=None)[0]
 
 
-def test_paired_partial_correlations_match_residual_definition():
+def test_loro_partial_correlations_match_training_coefficient_definition():
     rng = np.random.default_rng(7)
-    first = rng.normal(size=200)
-    second = 0.4 * first + rng.normal(size=200)
-    targets = np.column_stack([
-        0.7 * first + 0.2 * second + rng.normal(size=200),
-        -0.3 * first + 0.8 * second + rng.normal(size=200),
-    ])
-    run_trs = np.array([100, 100])
+    run_trs = np.array([60, 70, 50])
+    n = run_trs.sum()
+    first = rng.normal(size=n)
+    second = 0.4 * first + rng.normal(size=n)
+    targets = np.column_stack([0.7 * first + 0.2 * second + rng.normal(size=n), -0.3 * first + 0.8 * second + rng.normal(size=n)])
     first_z = MODULE._runwise_standardize(first, run_trs)[:, 0]
     second_z = MODULE._runwise_standardize(second, run_trs)[:, 0]
     targets_z = MODULE._runwise_standardize(targets, run_trs)
-    got_first, got_second = MODULE.paired_partial_correlations(
-        targets_z, first_z, second_z)
-    expected_first = [pearsonr(_residualize(targets_z[:, i], second_z),
-                               _residualize(first_z, second_z)).statistic
-                      for i in range(targets.shape[1])]
-    expected_second = [pearsonr(_residualize(targets_z[:, i], first_z),
-                                _residualize(second_z, first_z)).statistic
-                       for i in range(targets.shape[1])]
-    np.testing.assert_allclose(got_first, expected_first, atol=1e-6)
-    np.testing.assert_allclose(got_second, expected_second, atol=1e-6)
+    got_first, got_second = MODULE.loro_partial_correlations(targets_z, first_z, second_z, run_trs)
+    run = np.repeat(np.arange(3), run_trs)
+
+    def expected(role, control):
+        total = np.zeros(targets.shape[1])
+        for held_out in range(3):
+            train, test = run != held_out, run == held_out
+            design = np.column_stack([np.ones(train.sum()), control[train]])
+            test_design = np.column_stack([np.ones(test.sum()), control[test]])
+            residual = lambda y: y[test] - test_design @ np.linalg.lstsq(design, y[train], rcond=None)[0]
+            x = residual(role)
+            total += test.sum() * np.array([np.corrcoef(residual(targets_z[:, i]), x)[0, 1] for i in range(targets.shape[1])])
+        return total / n
+
+    np.testing.assert_allclose(got_first, expected(first_z, second_z), atol=1e-6)
+    np.testing.assert_allclose(got_second, expected(second_z, first_z), atol=1e-6)
+
+
+def test_geodesic_exclusion_follows_mesh_edges():
+    coords = np.column_stack([np.arange(8, dtype=float), np.zeros(8), np.zeros(8)])
+    faces = np.array([[i, i + 1, min(i + 2, 7)] for i in range(7)])
+    got = MODULE.geodesic_exclusion(np.arange(8), coords, faces, np.array([0]), 2.5)
+    assert got.tolist() == [True, True, True, False, False, False, False, False]
 
 
 def test_runwise_standardization_removes_run_offsets():

@@ -90,13 +90,12 @@ for _v in ("SOCKS_PROXY", "socks_proxy", "ALL_PROXY", "all_proxy"):
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────
-# ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-Omni-3B is a dead symlink to
-# an unmounted drive on this machine -- resolve the checkpoint snapshot dir
-# directly against whichever mirror is actually mounted (same pattern as
-# topo_omni_extract_full_sheet.py's _HF_SNAPSHOT_CANDIDATES).
+# The checkpoint snapshot dir is resolved directly against the candidate
+# locations below (as in topo_omni_extract_full_sheet.py's
+# _HF_SNAPSHOT_CANDIDATES).
 _MODEL_SNAPSHOT_CANDIDATES = [
     Path.home() / ".cache/huggingface/hub/models--Qwen--Qwen2.5-Omni-3B",
     MODELS / "hub/models--Qwen--Qwen2.5-Omni-3B",

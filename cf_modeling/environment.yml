@@ -2,8 +2,7 @@ name: movie
 # Shared conda environment for all analyses: CF modeling, RSA, and encoding.
 # All three pillars run in this single environment.
 #
-# The environment was originally built with CUDA-enabled torch (RTX 5070Ti).
-# Recreating it from scratch:
+# Built with CUDA-enabled torch (RTX 5070Ti). To create it:
 #
 #   conda env create -f cf_modeling/environment.yml
 #   conda activate movie
@@ -14,7 +13,7 @@ name: movie
 #   VICSOMPY_REPO=<MOVIE_ROOT>/Vicarious_somatotopy  (default)
 #   sys.path.insert(0, VICSOMPY_REPO)  (done in every CF modeling script)
 #
-# Verified package versions (movie env, 2026-05):
+# Verified package versions (movie env):
 #   torch          2.11.0+cu128  (CUDA 12.8 — RTX 5070Ti compatible)
 #   himalaya       0.4.11
 #   pycortex       1.3.0

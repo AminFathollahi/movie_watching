@@ -15,8 +15,11 @@ timing_df and run_trs to locate each clip, applies the haemodynamic delay,
 bins to bin_sec resolution, z-scores each run's training bins and each run's
 held-out clips separately, and splits by video_id.
 
-This matches the convention used in rsa/shared/rsa_utils.py (preprocess_fmri).
+This matches the convention used in shared/binning.py (preprocess_fmri).
 """
+
+import os
+from pathlib import Path
 
 import nibabel as nib
 import numpy as np
@@ -56,7 +59,7 @@ def _bin_and_split_fmri(fmri: np.ndarray, timing_df: pd.DataFrame,
                          skip_sec: float = None, zscore: bool = True) -> tuple:
     """Extract movie segments from continuous fMRI, z-score per run, bin, split.
 
-    Uses global onset_sec from timing_df (same convention as rsa_utils.preprocess_fmri):
+    Uses global onset_sec from timing_df (same convention as binning.preprocess_fmri):
     onset_sec is cumulative across runs; run_start_sec is subtracted internally to
     get the within-run TR index.  Rest periods between clips are skipped.
 
@@ -224,3 +227,11 @@ def save_cifti_maps(maps: dict, template_path: str, output_path: str) -> None:
     header = nib.cifti2.Cifti2Header.from_axes((nib.cifti2.ScalarAxis(list(maps)), axis))
     data = np.stack([np.asarray(values, dtype=np.float32) for values in maps.values()])
     nib.save(nib.Cifti2Image(data, header=header), output_path)
+
+
+def write_text_atomic(path, text: str) -> None:
+    """Writes beside the target and renames, so a killed run never leaves a truncated file behind."""
+    path = Path(path)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(text)
+    os.replace(temporary, path)

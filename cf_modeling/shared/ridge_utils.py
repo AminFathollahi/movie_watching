@@ -26,7 +26,7 @@ from sklearn.preprocessing import StandardScaler
 
 # Ensure vicsompy is importable from the source repo (no pip install required)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT  # noqa: E402
+from shared.paths import ROOT  # noqa: E402
 
 _DEFAULT_VICSOMPY_REPO = os.environ.get("VICSOMPY_REPO", str(ROOT / "Vicarious_somatotopy"))
 if _DEFAULT_VICSOMPY_REPO not in sys.path:

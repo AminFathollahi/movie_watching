@@ -2,9 +2,8 @@
 cluster/reduce.py
 ==================
 Dimensionality reduction for the temporal (stimulus embedding) and spatial
-(brain vertex) axes of the cluster pipeline. PCA is the default and only
-method run this pass; tphate/phate are wired but import lazily so their
-absence never blocks a pca/pca run (they are not installed yet).
+(brain vertex) axes of the cluster pipeline. PCA is the default; tphate/phate import lazily
+so their absence never blocks a pca run (optional dependencies).
 """
 
 import logging
@@ -39,7 +38,7 @@ def reduce_temporal(emb: np.ndarray, method: str = "pca",
         info.update(n_components=k, explained_variance_ratio=evr.tolist(),
                     cumulative_evr=cum_evr.tolist())
     elif method == "tphate":
-        import tphate  # lazy — deferred this pass, not installed
+        import tphate  # lazy, optional dependency
         model = tphate.TPHATE(n_components=adv_n_components)
         features = model.fit_transform(emb)
         info.update(n_components=adv_n_components)
@@ -75,7 +74,7 @@ def reduce_spatial(X: np.ndarray, method: str = "pca",
         info.update(n_components=k, explained_variance_ratio=evr.tolist(),
                     cumulative_evr=cum_evr.tolist())
     elif method == "phate":
-        import phate  # lazy — deferred this pass, not installed
+        import phate  # lazy, optional dependency
         model = phate.PHATE(n_components=adv_n_components, n_landmark=2000)
         features = model.fit_transform(X)
         info.update(n_components=adv_n_components)

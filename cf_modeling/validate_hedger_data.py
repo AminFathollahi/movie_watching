@@ -15,11 +15,11 @@ import nibabel as nib
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cf_naming import cf_model_map_stems
-from paths import ROOT as MOVIE_ROOT
+from shared.paths import ROOT as MOVIE_ROOT
 
 REPO_ROOT     = MOVIE_ROOT / "movie_watching"
 CF_DIR        = REPO_ROOT / "cf_modeling"
-HEDGER_SUB    = MOVIE_ROOT / "data/hedger2026/hcp_movie/hcp_movie/subjects/999999"
+HEDGER_SUB    = MOVIE_ROOT / "data/vicsompy_data/hcp_movie/hcp_movie/subjects/999999"
 OUTPUT_BASE   = MOVIE_ROOT / "outputs/cf_modeling"
 VALIDATE_DIR  = OUTPUT_BASE / "validation_hedger999999"
 VALIDATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,7 +31,7 @@ GLASSER_DLABEL = str(
     ".CorticalAreas_dil_Final_Final_Areas_Group_Colors"
     ".59k_fs_LR.dlabel.nii"
 )
-PYCORTEX_STORE = str(MOVIE_ROOT / "data/hedger2026")
+PYCORTEX_STORE = str(MOVIE_ROOT / "data/vicsompy_data")
 MASKS_DIR      = str(OUTPUT_BASE / "masks")
 N_LBOE         = 200
 

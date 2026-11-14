@@ -38,7 +38,7 @@ driver or the scored sheet, to avoid the (a+v)/2 circularity.
 ALSO saves the HIDDEN (X_hat, pre-cortical-bottleneck) pooled + last-token
 variants (topoomni_layer{N}_mp_clsav_from_{a,v} / topoomni_layer{N}_lt_
 clsav_from_{a,v}), matching the real topoomni_layer{N}_mp_av.npy naming -- needed
-for the whole-embedding dummy-modality diff study (rsa/dummy_diff_maps.py),
+for the whole-embedding dummy-modality diff study (deprecated/rsa/dummy_diff_maps.py),
 which diffs against the real hidden embedding, not the cortical sheet.
 
 --dummy-modality a: dummy VIDEO + real AUDIO -> topoomni_layer{N}_sheet_mp_clsav_from_a
@@ -77,7 +77,7 @@ from tqdm import tqdm
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT, DATA, OUTPUTS  # noqa: E402
+from shared.paths import ROOT, DATA, OUTPUTS  # noqa: E402
 
 TOPO_OMNI_REPO = ROOT / "Model Repos/topo-omni"
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"

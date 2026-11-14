@@ -51,11 +51,11 @@ sys.path.insert(0, str(ROOT))
 import cf_modeling.deprecated.persubject_cca_channel_1pct as pcca1pct  # noqa: E402
 from cf_modeling.cf_naming import persubject_output_root  # noqa: E402
 from cf_modeling.deprecated.run_cca_islands import DEFAULT_TEMPLATE  # noqa: E402
-from cifti_io import save_cifti_map, save_cifti_multimap, get_bm_axis  # noqa: E402
-from paths import OUTPUTS  # noqa: E402
+from shared.cifti_io import save_cifti_map, save_cifti_multimap, get_bm_axis  # noqa: E402
+from shared.paths import OUTPUTS  # noqa: E402
 from connectivity.seed_connectivity import compute_seed_connectivity  # noqa: E402
-from preprocess_individual import preprocess_subject  # noqa: E402
-from rsa.glasser import load_glasser_parcels  # noqa: E402
+from preprocessing.preprocess_individual import preprocess_subject  # noqa: E402
+from shared.glasser import load_glasser_parcels  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("persubject_cca_maps")

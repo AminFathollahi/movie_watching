@@ -25,23 +25,19 @@ import numpy as np
 from scipy.stats import spearmanr
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 try:
-    from cf_modeling.cf_naming import (
-        cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
-    )
+    from cf_modeling.cf_naming import cf_model_map_stems
 except ModuleNotFoundError:
-    from cf_naming import (
-        cf_model_map_stems, legacy_cf_model_map_stems, resolve_cf_model_map_path,
-    )
+    from cf_naming import cf_model_map_stems
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)s  %(message)s",
                     datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
 
-_DATA_BASE = str(DATA / "Setareh")
+_DATA_BASE = str(DATA)
 _HCP_DIR   = f"{_DATA_BASE}/HCP_S1200_GroupAvg_v1"
 _OUT_BASE  = str(OUTPUTS / "cf_modeling")
 _RSA_BASE  = str(OUTPUTS / "searchlight_rsa_output")
@@ -226,16 +222,9 @@ def run_group_average(args):
 
     log.info("\nLoading CF-model integration maps …")
     stems = cf_model_map_stems(args.roi_a, args.roi_b)
-    legacy_stems = legacy_cf_model_map_stems(args.roi_a, args.roi_b)
-    product_map = np.load(resolve_cf_model_map_path(
-        prep_dir, stems["joint_split_r2_geomean"],
-        legacy_stems["joint_split_r2_geomean"]))
-    R2_a_nc = np.load(resolve_cf_model_map_path(
-        prep_dir, stems["null_corrected_split_r2_a"],
-        legacy_stems["null_corrected_split_r2_a"]))
-    R2_b_nc = np.load(resolve_cf_model_map_path(
-        prep_dir, stems["null_corrected_split_r2_b"],
-        legacy_stems["null_corrected_split_r2_b"]))
+    product_map = np.load(f"{prep_dir}/{stems['joint_split_r2_geomean']}.npy")
+    R2_a_nc = np.load(f"{prep_dir}/{stems['null_corrected_split_r2_a']}.npy")
+    R2_b_nc = np.load(f"{prep_dir}/{stems['null_corrected_split_r2_b']}.npy")
     log.info(f"  product_map: frac>0={np.mean(product_map>0):.1%}")
 
     bm_axis        = _bm_axis_from_template(args.template_cifti)

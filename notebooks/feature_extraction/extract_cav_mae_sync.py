@@ -7,7 +7,7 @@ Run with:
     conda run --no-capture-output -n cav-mae-sync \
         python extract_cav_mae_sync.py
 
-    # Move 3 (temporal-scramble binding control): each video segment is paired
+    # Temporal-scramble binding control: each video segment is paired
     # with a RANDOMLY PERMUTED audio segment (fixed seed) instead of its own
     # temporally-corresponding audio, breaking correct A-V temporal binding
     # while preserving each modality's own marginal content distribution.
@@ -37,7 +37,7 @@ import torchaudio
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT, OUTPUTS, EXTERNAL  # noqa: E402
+from shared.paths import ROOT, OUTPUTS, EXTERNAL  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -94,7 +94,7 @@ def gather_pairs(seg_sec: float) -> list:
         wav_all.extend(wavs)
 
     if SCRAMBLE_AV:
-        # Move 3: break correct A-V temporal binding. Permute the GLOBAL audio
+        # Break correct A-V temporal binding. Permute the GLOBAL audio
         # segment order (across all 18 videos, not within-video only) so each
         # video segment is paired with a random OTHER segment's audio, fixed
         # seed for reproducibility. A permutation with no fixed points (a

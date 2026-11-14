@@ -36,7 +36,7 @@ MODEL_NAME  = "pe-av-small-16-frame"
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 DATA_BASE   = Path(os.environ.get("STIMULUS_DIR", str(DATA / "segmented_stimulus/filtered")))
 OUTPUT_BASE = Path(os.environ.get("EMBEDDINGS_BASE", str(OUTPUTS / "model_embeddings")))

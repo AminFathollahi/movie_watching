@@ -1,20 +1,19 @@
 """
 notebooks/feature_extraction/topo_omni_extract_intact.py
 =============================================================
-Topo-Omni analogue of omni3b_extract_intact.py -- fixes the same
-methodological bug for topoomni_layer{9,18,27} (hidden/X_hat) and
-topoomni_layer{9,18,27}_sheet (cortical-sheet/Z): the existing "_a"/"_v"
-are mean-pooled from audio-/video-token positions within a SINGLE JOINT
-forward pass, and "_av" = (_a + _v) / 2 exactly (verified empirically,
-bit-identical). See omni3b_extract_intact.py's docstring for the full
-rationale -- identical reasoning applies here, just with Topo-Omni's custom
-CorticalAdaptor-patched Thinker class instead of the stock one.
+Topo-Omni analogue of omni3b_extract_intact.py for topoomni_layer{9,18,27}
+(hidden/X_hat) and topoomni_layer{9,18,27}_sheet (cortical-sheet/Z). Mean-
+pooling audio-/video-token positions within a single joint forward pass
+gives "_a"/"_v" that are not unimodal and an "_av" = (_a + _v) / 2 that is a
+deterministic function of them. See omni3b_extract_intact.py's docstring for
+the rationale; here the model is Topo-Omni's CorticalAdaptor-patched Thinker
+class instead of the stock one.
 
-Re-extracts "_a"/"_v" (both hidden and sheet) from GENUINELY SEPARATE
-audio-only / video-only forward passes, for layers {9, 18, 27} only.
-Also saves "_lasttoken" hidden+sheet variants (last sequence position of the
-joint pass) as a non-tautological alternative to the masked-pool "_av".
-"_av" itself is left unchanged on disk.
+Extracts "_a"/"_v" (both hidden and sheet) from separate audio-only /
+video-only forward passes, for layers {9, 18, 27}. Also saves "_lasttoken"
+hidden+sheet variants (last sequence position of the joint pass) as a
+non-tautological alternative to the masked-pool "_av". The masked-pool "_av"
+is unchanged.
 
 Run with:
     conda run --no-capture-output -n topo_omni \
@@ -47,7 +46,7 @@ from tqdm import tqdm
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT, OUTPUTS, EXTERNAL  # noqa: E402
+from shared.paths import ROOT, OUTPUTS, EXTERNAL  # noqa: E402
 
 TOPO_OMNI_REPO = ROOT / "Model Repos/topo-omni"
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"

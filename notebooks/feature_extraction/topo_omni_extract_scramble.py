@@ -1,15 +1,15 @@
 """
 notebooks/feature_extraction/topo_omni_extract_scramble.py
 =============================================================
-Topo-Omni analogue of omni3b_extract_scramble.py -- Move 3 (temporal-scramble
-binding control) for topoomni_layer{9,18,27}. Extracts BOTH the hidden
+Topo-Omni analogue of omni3b_extract_scramble.py (temporal-scramble binding
+control) for topoomni_layer{9,18,27}. Extracts BOTH the hidden
 (X_hat) stream, used as a whole-embedding diff-study input, AND the cortical
 sheet (Z), used as the scored/sheet model in the scramble-design in-silico
-localizer (rsa/topoomni_av_separability_localizer.py --design scramble).
+localizer (deprecated/rsa/topoomni_av_separability_localizer.py --design scramble).
 
-Unimodal "_a"/"_v" (hidden) do NOT need re-extraction: since
-topo_omni_extract_intact.py they come from genuinely separate audio-only /
-video-only forward passes and cannot depend on which audio was paired with
+Unimodal "_a"/"_v" (hidden) do not need re-extraction: those of
+topo_omni_extract_intact.py come from separate audio-only / video-only
+forward passes and cannot depend on which audio was paired with
 which video. Only the JOINT forward pass depends on pairing, so this script
 re-runs only that pass with video[i] paired against a RANDOMLY PERMUTED
 audio[perm(i)] (fixed seed 42, same convention as the other scramble
@@ -49,7 +49,7 @@ from tqdm import tqdm
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT, DATA, OUTPUTS  # noqa: E402
+from shared.paths import ROOT, DATA, OUTPUTS  # noqa: E402
 
 TOPO_OMNI_REPO = ROOT / "Model Repos/topo-omni"
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"
@@ -167,10 +167,9 @@ def main():
         Returns (pooled_hidden, lasttoken_hidden, pooled_sheet, lasttoken_sheet)
         dicts keyed by layer idx.
 
-        The HIDDEN (X_hat) pooling below intentionally keeps its original,
-        UNTRIMMED audio mask (no n_valid_audio clipping) to leave the
-        already-computed/used topoomni_layer{N}_mp_avscramble_av.npy values
-        unchanged on rerun. The new SHEET (Z) pooling uses the SAME
+        The HIDDEN (X_hat) pooling below uses the untrimmed audio mask (no
+        n_valid_audio clipping), matching the topoomni_layer{N}_mp_avscramble_av.npy
+        convention. The SHEET (Z) pooling uses the same
         n_valid_audio-trimmed audio mask as every other sheet computation in
         this repo (topo_omni_extract.py, topo_omni_extract_dummy_modality.py),
         since the sheet is compared directly against the real/dummy sheet

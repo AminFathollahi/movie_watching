@@ -18,7 +18,7 @@ CLUSTER_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(CLUSTER_DIR))
 
-from paths import OUTPUTS  # noqa: E402
+from shared.paths import OUTPUTS  # noqa: E402
 from vertex_clustering import (  # noqa: E402
     labels_path, cluster_profiles, profile_correlation_summary, vertex_exclude_labels,
 )
@@ -26,7 +26,7 @@ from io_cluster import load_group_average  # noqa: E402
 from channel_timeseries_clustering import (  # noqa: E402
     channel_model_selection_dir, load_channel_timeseries, parse_args as channel_parse_args,
 )
-from rsa.shared.rsa_utils import preprocess_fmri  # noqa: E402
+from shared.rsa_utils import preprocess_fmri  # noqa: E402
 
 FAMILIES = ("peav", "nemotron_layer18_mp")
 OUTPUT_DIR = OUTPUTS / "cluster"

@@ -1,15 +1,11 @@
 """
 notebooks/feature_extraction/omni3b_extract_scramble.py
 ==========================================================
-Move 3 (temporal-scramble binding control) for omni3b -- companion to
+Temporal-scramble binding control for omni3b -- companion to
 pe_av_extract_scramble.py and extract_cav_mae_sync.py's --scramble-av mode.
-omni3b/topo-omni are the two models where the av=(a+v)/2 circularity bug was
-found and fixed (see omni3b_extract_intact.py); the same models are central
-enough to Move 1/4/5 that the binding control needs to run on them too, not
-just the smaller cav-mae-sync check.
 
-Unimodal "_a"/"_v" embeddings do NOT need re-extraction here: since
-omni3b_extract_intact.py, they come from genuinely separate forward passes
+Unimodal "_a"/"_v" embeddings do not need re-extraction here: those of
+omni3b_extract_intact.py come from separate forward passes
 with no cross-modal tokens present, so they cannot depend on which audio was
 paired with which video. Only the JOINT (audio+video) forward pass depends on
 pairing -- so this script re-runs only the joint pass, with video[i] paired
@@ -17,8 +13,8 @@ against a RANDOMLY PERMUTED audio[perm(i)] (fixed seed 42, same convention as
 the other scramble scripts), and re-extracts both joint-pass readouts:
   {tag}_layer{N}_mp_avscramble_av.npy          -- masked-pool (a+v)/2, scrambled pairing
   {tag}_layer{N}_lt_avscramble_av.npy          -- last-token joint readout, scrambled pairing
-Both compared against their INTACT counterparts (already on disk from
-omni3b_extract_intact.py's _av and _lasttoken_av) to test whether the
+Both are compared against their intact counterparts (the _av and last-token
+_av of omni3b_extract_intact.py) to test whether the
 integration signal survives temporal/identity mismatch between modalities.
 
 Run with:
@@ -54,7 +50,7 @@ MODEL_PATH      = "Qwen/Qwen2.5-Omni-3B"
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 DATA_BASE       = DATA / "segmented_stimulus/filtered"
 EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"

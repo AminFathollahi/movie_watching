@@ -4,8 +4,8 @@ cluster/run_cluster.py
 Single-(model, modality) driver for the dual-clustering pipeline: HMM states
 over reduced stimulus-embedding features (temporal axis) crossed against
 HDBSCAN networks over reduced brain-vertex features (spatial axis), related
-via a block-permutation interaction test. Mirrors subcortical_rsa.py's
-structure (group-average loading, config-tag naming, skip-if-exists guard).
+via a block-permutation interaction test. Group-average loading, config-tag naming and a
+skip-if-exists guard follow subcortical/subcortical_rsa.py.
 
 Spatial clustering is brain-only (modality-invariant), so it is computed
 ONCE per spatial_config and cached under
@@ -24,10 +24,9 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "rsa"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 from io_cluster import (  # noqa: E402
     GROUP_AVG_CIFTI, GROUP_AVG_TRS, load_group_average, write_dlabel,
     preprocess_fmri, process_model_embeddings, get_run_bin_counts, align_and_assert_bins,
@@ -164,7 +163,7 @@ def main():
     args = parse_args()
 
     if args.mode == "persubject":
-        log.warning("mode=persubject is a stub this pass — not implemented. Exiting.")
+        log.warning("mode=persubject is not implemented. Exiting.")
         return
 
     bin_int, skip_int, delay_int = _int_tag(args.bin_sec), _int_tag(args.skip_sec), _int_tag(args.delay_sec)

@@ -16,14 +16,13 @@ starting at t=0 so no keyframe-seek inaccuracy) into a temp file, extracted,
 then deleted -- avoids storing ~18 videos worth of quadratic-in-segment-count
 duplicated media on disk.
 
-GPU feasibility (see conversation / fork investigation, empirically tested
-on an RTX 5070 Ti Laptop, 12GB):
+GPU memory (measured on an RTX 5070 Ti Laptop, 12GB):
   - Model weights alone (bf16) = 9.53GB. Headroom for activations on a 12GB
     card runs out around 60-70s of cumulative context (with
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True) -- NOT enough for the
     longest videos here (up to 258s / 51 segments).
-  - Per explicit user decision: do NOT quantize the model to work around
-    this. This script is written for a >=24GB GPU (lab 4090), where
+  - The model is not quantized to work around this. The script is meant for
+    a >=24GB GPU (e.g. an RTX 4090), where
     weights (9.53GB) + activations for the longest cumulative clip
     (~258s, extrapolated ~10GB) fit comfortably (~20GB of 24GB).
   - Per-segment OOM is still caught and the segment is zero-filled (same
@@ -32,7 +31,7 @@ on an RTX 5070 Ti Laptop, 12GB):
 
 Smoke-test on a small GPU: set NEMOTRON_CUMULATIVE_LIMIT=N to only process
 the first N cumulative segments (short-duration ones), e.g. to sanity-check
-correctness locally before the full run on the 4090.
+correctness locally before the full run on a larger GPU.
 
 Run with:
     conda run --no-capture-output -n avtransformer \
@@ -48,7 +47,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, MODELS  # noqa: E402
 
 os.environ["HF_HOME"] = str(MODELS)
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"

@@ -6,12 +6,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from paths import EXTERNAL  # noqa: E402
+from shared.paths import EXTERNAL  # noqa: E402
 
 LBOE_SUFFIX = re.compile(r"_lboe(?P<count>[1-9][0-9]*)$")
 
-# External drive per-subject CF outputs were moved to (root SSD is chronically
-# near-full; see 2026-09-04 migration). Mirrors OUTPUTS/cf_modeling/ layout.
+# Per-subject CF outputs are written under this mount, in the layout of OUTPUTS/cf_modeling/.
 PERSUBJECT_MOUNT = EXTERNAL
 PERSUBJECT_SUBPATH = "outputs/cf_modeling"
 
@@ -52,6 +51,12 @@ def roi_mean_preprocessing_label(preprocessing: str) -> str:
     return ROI_MEAN_PREPROCESSING_OPTIONS[preprocessing]
 
 
+def roi_mean_connectivity_names(roi_a: str, roi_b: str, label: str) -> tuple[str, list[str]]:
+    stem = f"roi_mean_timeseries_connectivity_{roi_a}_{roi_b}_{label}"
+    return stem, [f"roi_mean_timeseries_connectivity_{roi_a}_given_{roi_b}_{label}",
+                  f"roi_mean_timeseries_connectivity_{roi_b}_given_{roi_a}_{label}"]
+
+
 def cf_model_map_stems(roi_a: str, roi_b: str) -> dict[str, str]:
     return {
         "full_r2": "cf_model_full_r2",
@@ -69,28 +74,11 @@ def cf_model_map_stems(roi_a: str, roi_b: str) -> dict[str, str]:
     }
 
 
-def legacy_cf_model_map_stems(roi_a: str, roi_b: str) -> dict[str, str]:
-    return {
-        "full_r2": "R2_full",
-        "split_r2_a": f"R2_{roi_a}",
-        "split_r2_b": f"R2_{roi_b}",
-        "roi_mean_null_r2_a": f"R2_null_{roi_a}",
-        "roi_mean_null_r2_b": f"R2_null_{roi_b}",
-        "null_corrected_split_r2_a": f"R2_{roi_a}_nc",
-        "null_corrected_split_r2_b": f"R2_{roi_b}_nc",
-        "joint_split_r2_geomean": "product_map",
-        "joint_null_corrected_split_r2_geomean": "product_map_nc",
-    }
+CF_ESTIMATES = {"group_average": "fit_to_group_mean_timeseries", "per_subject": "mean_of_subject_maps"}
 
 
-def resolve_cf_model_map_path(directory: str | Path, canonical_stem: str,
-                              legacy_stem: str | None = None) -> Path:
-    directory = Path(directory)
-    canonical = directory / f"{canonical_stem}.npy"
-    if canonical.is_file() or legacy_stem is None:
-        return canonical
-    legacy = directory / f"{legacy_stem}.npy"
-    return legacy if legacy.is_file() else canonical
+def cf_maps_stem(roi_a: str, roi_b: str, mode: str) -> str:
+    return f"cf_model_maps_{roi_a}_{roi_b}_{CF_ESTIMATES[mode]}"
 
 
 def per_subject_mean_stem(cf_model_stem: str) -> str:
@@ -98,13 +86,11 @@ def per_subject_mean_stem(cf_model_stem: str) -> str:
 
 
 def persubject_output_root() -> Path:
-    """Root directory for per-subject CF outputs (external drive, not the SSD).
+    """Root directory for per-subject CF outputs (external drive).
 
     Honours ``MOVIE_PERSUBJECT_ROOT`` as an override. Raises if the target
-    isn't reachable: writing per-subject outputs through a symlink to an
-    unmounted drive would otherwise silently fall back onto the root
-    filesystem, which is exactly the near-full-disk failure this move exists
-    to prevent.
+    isn't reachable: writing through a symlink to an unmounted drive would
+    otherwise silently fall back onto the root filesystem.
     """
     override = os.environ.get("MOVIE_PERSUBJECT_ROOT")
     if override:

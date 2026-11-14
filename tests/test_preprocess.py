@@ -15,7 +15,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from preprocess_individual import (
+from preprocessing.preprocess_individual import (
     apply_gsr,
     apply_psc,
     apply_sg_filter,

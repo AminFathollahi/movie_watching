@@ -1,6 +1,6 @@
 # Connectivity: seed-based functional connectivity
 
-`seed_connectivity.py` computes whole-cortex functional connectivity from a seed region defined by Workbench border files, for example the top-RSA islands written by `rsa/draw_rsa_borders.py`.
+`seed_connectivity.py` computes whole-cortex functional connectivity from a seed region defined by Workbench border files, for example the top-RSA islands written by `deprecated/rsa/draw_rsa_borders.py`.
 
 ## Method
 
@@ -15,7 +15,7 @@
 | Window | Time points |
 |---|---|
 | `full` (default) | All time points |
-| `rest` | Official inter-clip rest blocks (block label `0` in `data/HCP_7T_Movie_Clip_Timing.csv`, converted from run-local to global time by `official_timing.py`), dropping the first `--rest-trim-sec` seconds (default 6) of each block |
+| `rest` | Official inter-clip rest blocks (block label `0` in `data/HCP_7T_Movie_Clip_Timing.csv`, converted from run-local to global time by `shared/official_timing.py`), dropping the first `--rest-trim-sec` seconds (default 6) of each block |
 | `stim` | The clip windows in `data/movie_timing.csv` (`onset_sec` to `end_sec`), the windows used by RSA and encoding |
 
 Time points between a clip's official end and its `movie_timing.csv` end belong to neither `rest` nor `stim`.
@@ -25,7 +25,7 @@ Time points between a clip's official end and its `movie_timing.csv` end belong 
 Run from the repository root.
 
 ```bash
-python rsa/draw_rsa_borders.py --rsa-cifti <.../rsa_59k_..._joint_only_models.dscalar.nii> --map-name rho_j \
+python deprecated/rsa/draw_rsa_borders.py --rsa-cifti <.../rsa_59k_..._joint_only_models.dscalar.nii> --map-name rho_j \
     --threshold-mode percentile --top-pct 5 --min-verts 10
 
 python connectivity/seed_connectivity.py \
@@ -48,7 +48,7 @@ Required arguments are `--border-lh`, `--border-rh`, `--roi-name`, `--mode` (`gr
 | `--timing-csv`, `--official-timing-csv` | `data/movie_timing.csv`, `data/HCP_7T_Movie_Clip_Timing.csv` | Tables for `--window stim` and `--window rest` |
 | `--run-trs-npy` | `data/preprocessed/average_sub/raw/group_average_raw_run_trs.npy` | TRs per run, for the rest-block time conversion in `group_average` mode |
 
-Surfaces, the Workbench executable and the template for `per_subject` mode have defaults listed by `--help`. `per_subject` mode loads each subject's four raw runs through `preprocess_individual.preprocess_subject` with Savitzky-Golay filtering, percent signal change and global signal regression all off, and concatenates the runs. It processes every subject in the list and takes a long time; subjects that fail to load are skipped with a warning. The Glasser summary uses `data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii` and is skipped with a warning if loading fails.
+Surfaces, the Workbench executable and the template for `per_subject` mode have defaults listed by `--help`. `per_subject` mode loads each subject's four raw runs through `preprocessing.preprocess_individual.preprocess_subject` with Savitzky-Golay filtering, percent signal change and global signal regression all off, and concatenates the runs. It processes every subject in the list and takes a long time; subjects that fail to load are skipped with a warning. The Glasser summary uses `data/HCP_S1200_GroupAvg_v1/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii` and is skipped with a warning if loading fails.
 
 ## Outputs
 

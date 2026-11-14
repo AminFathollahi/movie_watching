@@ -29,6 +29,10 @@ Banded ridge, scoring and the partition for one split. Inputs arrive already sca
 | `partition_variance(r2)` | The seven inclusion–exclusion regions from the seven subset R² maps; they sum to R²(AVJ) |
 | `_r2_per_target`, `_pearson_per_target` | Per-grayordinate R² (negatives kept, NaN for constant targets) and Pearson r |
 
+## `tags.py` and `layout.py`
+
+`tags.py` holds the short model names and pair tags (`pair_tag`, `own_tag`), the short names of the joint models (`JOINT_NAMES`: `peav`, `nemotron`), the matched and dummy pairs, the pairs excluded from the collected files and `pair_order`, the order of the maps in the collected files. `layout.py` gives the output folders: `group_dir(space)` (`outputs/encoding/group_average` or `outputs/subcortical/encoding/group_average`), `fit_folder` (the `partitions` folder for PE-AV and Nemotron, the model folder otherwise) and `fit_stem` (the file-name prefix with the joint model).
+
 ## `encoding_utils.py`
 
 | Name | Purpose |

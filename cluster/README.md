@@ -88,7 +88,7 @@ bash cluster/run_vertex_clustering.sh     # grayordinates, group average
 python cluster/channel_timeseries_clustering.py --family peav   # channels; families: peav, nemotron_layer18_mp, topoomni_layer18_sheet_mp
 ```
 
-The channel input is the intact audiovisual embedding of the family, binned to the same 626 segments (5 s windows, 5 s delay); family names and embedding files come from `MODEL_CONFIGS` in `cf_modeling/deprecated/channel_cca_analysis.py`. The shell runner takes its settings from environment variables (listed at the top of the script; its default `REDUCTIONS` omits UMAP, which the Python default includes), and the Python entry points take them as flags (see `--help`). Each result is cached and a rerun fills in missing combinations.
+The channel input is the intact audiovisual embedding of the family, binned to the same 626 segments (5 s windows, 5 s delay); family names and embedding files come from `MODEL_CONFIGS` in `cluster/io_cluster.py`. The shell runner takes its settings from environment variables (listed at the top of the script; its default `REDUCTIONS` omits UMAP, which the Python default includes), and the Python entry points take them as flags (see `--help`). Each result is cached and a rerun fills in missing combinations.
 
 ```text
 outputs/cluster/group_average/_vertex/norm-zscore_raw/fixed_nc3_landmarks2000/

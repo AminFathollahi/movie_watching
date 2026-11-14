@@ -55,13 +55,10 @@ if str(_CF_DIR) not in sys.path:
     sys.path.insert(0, str(_CF_DIR))
 
 sys.path.insert(0, str(_CF_DIR.parent))
-from paths import OUTPUTS  # noqa: E402
+from shared.paths import OUTPUTS  # noqa: E402
 
 from lib.data_adapter import grayord_to_sphere_space, N_VERTS_PER_HEM
-from cf_naming import (
-    cf_model_map_stems, legacy_cf_model_map_stems, per_subject_mean_stem,
-    resolve_cf_model_map_path,
-)
+from cf_naming import cf_model_map_stems, per_subject_mean_stem
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,15 +83,11 @@ def _load_r2_maps(output_base: str, mode: str, src_a: str, src_b: str) -> tuple:
         prep_dir = os.path.join(output_base, "per_subject", roi_tag, "group")
 
     stems = cf_model_map_stems(src_a, src_b)
-    legacy_stems = legacy_cf_model_map_stems(src_a, src_b)
     required = ("full_r2", "null_corrected_split_r2_a", "null_corrected_split_r2_b")
     paths = {}
     for key in required:
-        if mode == "group_average":
-            path = resolve_cf_model_map_path(prep_dir, stems[key], legacy_stems[key])
-        else:
-            path = resolve_cf_model_map_path(
-                prep_dir, per_subject_mean_stem(stems[key]), f"{legacy_stems[key]}_avg")
+        stem = stems[key] if mode == "group_average" else per_subject_mean_stem(stems[key])
+        path = os.path.join(prep_dir, f"{stem}.npy")
         paths[key] = path
         if not os.path.exists(path):
             raise FileNotFoundError(

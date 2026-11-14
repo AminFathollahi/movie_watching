@@ -1,14 +1,14 @@
 """
 notebooks/feature_extraction/segment_official.py
 ==================================================
-Cut the 18 movie clips and their 1 s, 2 s and 5 s windows straight from the four
+Cut the 18 movie clips and their 1 s, 2 s, 5 s and 10 s windows straight from the four
 full run movies at the official HCP 7T clip times (data/HCP_7T_Movie_Clip_Timing.csv).
 Only the 20 s rest blocks are removed, plus the end credits of video1.
 
 Writes the same layout the extraction scripts already read:
   {OUT}/Video{N}/Video{N}_chunks_{B}s/Video{N}_part_{NNN}.mp4      muted video window
   {OUT}/Audio{N}/Audio{N}_chunks_{B}s/Audio{N}_part_{NNN}.wav      audio window
-  {OUT}/Video{N}/Video{N}_av_chunks_{B}s/Video{N}_part_{NNN}.mp4   muxed window (B = 1, 2, 5)
+  {OUT}/Video{N}/Video{N}_av_chunks_{B}s/Video{N}_part_{NNN}.mp4   muxed window (B = 1, 2, 5 only)
 and data/movie_timing.csv (global onset, official duration, run).
 
 Window i of a clip starts at clip_start + i * B; the last partial window is dropped.
@@ -28,13 +28,13 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from official_timing import add_global_time, load_official_timing  # noqa: E402
-from paths import DATA, EXTERNAL  # noqa: E402
+from shared.official_timing import add_global_time, load_official_timing  # noqa: E402
+from shared.paths import DATA, EXTERNAL  # noqa: E402
 
 STIMULUS = EXTERNAL / "data/segmented_stimulus"
 FULL, OUT = STIMULUS / "full", STIMULUS / "filtered"
 MOVIES = {1: "7T_MOVIE1_CC1_v2", 2: "7T_MOVIE2_HO1_v2", 3: "7T_MOVIE3_CC2_v2", 4: "7T_MOVIE4_HO2_v2"}
-BINS = (1, 2, 5)
+BINS = (1, 2, 5, 10)
 AV_BINS = (1, 2, 5)
 FRAME = 1 / 24
 CREDITS_START = {"video1": 5579 * FRAME}  # first credit frame of clip 1.1 (film ends at frame 5557)

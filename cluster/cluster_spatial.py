@@ -3,8 +3,8 @@ cluster/cluster_spatial.py
 ============================
 Vertex-level spatial clustering into brain "networks". HDBSCAN (sklearn's
 built-in, since 1.3 — no standalone `hdbscan` package) is the default and
-only method run this pass. NMF is a documented alternative for signed fMRI
-data (pos/neg split), wired but not run.
+only method used. NMF is available as an alternative for signed fMRI
+data (pos/neg split).
 """
 
 import logging
@@ -16,7 +16,7 @@ from sklearn.metrics import silhouette_score
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-SILHOUETTE_SUBSAMPLE_CAP = 10_000  # ponytail: silhouette on 108k pts is O(n^2); cap the sample
+SILHOUETTE_SUBSAMPLE_CAP = 10_000  # silhouette on 108k pts is O(n^2); cap the sample
 
 
 def cluster_spatial(features: np.ndarray, method: str = "hdbscan",
@@ -30,7 +30,7 @@ def cluster_spatial(features: np.ndarray, method: str = "hdbscan",
         clusterer = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples)
         labels = clusterer.fit_predict(features)
     elif method == "nmf":
-        # DOCUMENTED ALTERNATIVE (not run this pass): fMRI is signed, so split
+        # Alternative: fMRI is signed, so split
         # into positive/negative parts before NMF (which requires X >= 0),
         # then take the argmax over W as the hard label. Rank selection would
         # use silhouette + cophenetic/consensus stability (not implemented —

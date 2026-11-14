@@ -1,13 +1,13 @@
 """
 cluster/av_integration.py
 ============================
-Principled AV-integration cartography, replacing the earlier "which of a/v/av
-has more FDR-sig cells" heuristic (which trivially favors av everywhere,
-since a richer joint embedding explains more variance regardless of whether
-the brain actually needs correct audiovisual correspondence).
+AV-integration cartography. Comparing the number of FDR-sig cells of a/v/av
+would trivially favor av everywhere, since a richer joint embedding explains
+more variance regardless of whether the brain needs correct audiovisual
+correspondence.
 
-Reuses the CONTROL-CONDITION idea from rsa/topoomni_av_separability_localizer.py
-(the repo's own in-silico AV-integration localizer): genuine integration means
+Uses the control-condition idea of deprecated/rsa/topoomni_av_separability_localizer.py
+(an in-silico AV-integration localizer): genuine integration means
 the brain cares about the CORRECT pairing of the two streams, not just their
 joint richness. So for each network, "real av" state partition is compared
 against three controls, each computed by run_cluster.py exactly like a normal
@@ -25,7 +25,7 @@ FDR-significant cell count (Stein & Meredith-style superadditivity: AV
 response > every unimodal/mismatched control, not just richer-on-average).
 
 Also cross-references each network against the Glasser MMP atlas (reused
-from rsa/glasser.py) to report whether it aligns with a KNOWN named region
+from shared/glasser.py) to report whether it aligns with a KNOWN named region
 or is spread thinly across many (a novel/heterogeneous functional grouping
 not captured by an anatomically/multimodally-defined atlas).
 """
@@ -41,12 +41,11 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "rsa"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 from io_cluster import write_dlabel, get_bm_axis, GROUP_AVG_CIFTI  # noqa: E402
-from rsa.glasser import load_glasser_parcels  # noqa: E402
+from shared.glasser import load_glasser_parcels  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)

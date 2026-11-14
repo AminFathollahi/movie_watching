@@ -6,31 +6,29 @@
 # Usage
 # -----
 #   bash encoding/analysis.sh preprocess
-#   bash encoding/analysis.sh variance_partition [--models M...] [--bins B...]
-#                             [--variants split:scaling...] [--controls SET...|none|all]
-#                             [--subsets S...] [--response-scaling run|none]
 #   bash encoding/analysis.sh screen [--audio-models M...] [--video-models M...]
 #                             [--bins B...] [--variants split:scaling...]
+#                             [--fmri-space cortex_59k|subcortical]
 #   bash encoding/analysis.sh factorial_interaction [--models M...] [--bins 5]
 #
 #   preprocess           Preprocess all 175 subjects from SUBJECTS_LIST:
-#                        per-subject CIFTIs → PREPROCESSED_INDIV_DIR
-#                        group-average CIFTI → PREPROCESSED_DIR
+#                        per-subject CIFTIs -> PREPROCESSED_INDIV_DIR
+#                        group-average CIFTI -> PREPROCESSED_DIR
 #                        Respects SG_FILTER/PSC/GSR flags and resumes.
-#   variance_partition   Seven banded-ridge models and the A/V/J variance
-#                        partition for each model: once with A, V, J from the
-#                        model itself (tag unimodal_own), once per entry of
-#                        OWN_SETS (A and V from the entry's models, tagged with
-#                        the entry's tag), and once per control set in
-#                        CONTROL_SETS (A and V from the set's models, tagged
-#                        with the set name); J is always the model's.
 #   screen               Single-feature ridge (tag "screen") for each audio
 #                        and video model, in that model's own directory.
 #   factorial_interaction  Crossed-pair interaction representation
 #
-# Defaults: --models pe-av-small-16-frame nemotron_layer18_mp, --bins 5 2 1,
-# --variants loro:demean, --controls all, --subsets all seven (a v j av aj vj
-# avj); a fit with fewer subsets adds its maps to those already stored.
+# The variance-partition pair fits, the time-resolved analysis and the collected
+# files are made by the resumable runners run_variance_partition.sh,
+# run_time_resolved.sh, run_collect.sh and run_all.sh (encoding/README.md, Running).
+#
+# --fmri-space subcortical fits the 62,053 subcortical voxels (group average and
+# template from outputs/subcortical, fits written to outputs/subcortical/encoding).
+#
+# Defaults: --models pe-av-small-16-frame nemotron_layer18_mpcat, --bins 5 2 1,
+# --variants loro:zscore, --subsets all seven (a v j av aj vj avj); a fit with
+# fewer subsets adds its maps to those already stored.
 #
 # Excluded subjects
 #   Subjects without individual midthickness surfaces are listed in
@@ -101,45 +99,28 @@ TR=1.0
 
 # ── Backend ───────────────────────────────────────────────────────────────
 # torch_cuda: GPU-accelerated (requires himalaya ≥0.4.11 — older versions
-# have a device-mismatch bug when n_samples < n_features)
+# fail with a device mismatch when n_samples < n_features)
 BACKEND="torch_cuda"
 
 PARTITION_N_ITER=20
 PARTITION_MODEL_RANDOM_STATE=0
 
-# Control sets: "name audio_model video_model"; the name is the output tag.
-CONTROL_SETS=(
-    "mae dasheng-0.6b-d75 videomaev2-large-d75"
-    "mae-large dasheng-1.2b videomaev2-giant-d50"
-    "latent openbeats-large-i2 vjepa2-vitl-d75"
-    "large-mixed dasheng-1.2b vjepa2-vitg-d75"
-    "speech-wavlm wavlm-large-d75 vjepa2-vitl-d75"
-    "speech-w2vbert w2v-bert-2.0-d75 vjepa2-vitl-d75"
-    "text-contrastive clap-larger pe-core-l14"
-    "text-asr whisper-large-v3 pe-core-l14"
-)
-
-# Further own sets beyond unimodal_own: "model tag audio_model video_model".
-OWN_SETS=(
-    "pe-av-small-16-frame dummy_av pe-av-small-16-frame_dummy_av pe-av-small-16-frame_dummy_av"
-)
-
-MODELS=(pe-av-small-16-frame nemotron_layer18_mp)
+MODELS=(pe-av-small-16-frame nemotron_layer18_mpcat)
 BINS=(5 2 1)
-VARIANTS=(loro:demean)
+VARIANTS=(loro:zscore)
 LOCO_EXCLUDED="video9,video14,video18"
-CONTROLS=(all)
 SUBSETS=()
 RESPONSE_SCALING=(run)
 AUDIO_MODELS=()
 VIDEO_MODELS=()
+FMRI_SPACE=cortex_59k
 read -ra PAIRING_SEEDS <<< "${PAIRING_SEEDS:-0}"
 SEGMENTED_DIR="${MOVIE_SEGMENTED_DIR:-$ROOT/external/data/segmented_stimulus/filtered}"
 
 CONDA_ENV="movie"
 # =============================================================================
 
-MODE=${1:-variance_partition}
+MODE=${1:-}
 shift || true
 
 parse_options() {
@@ -149,11 +130,11 @@ parse_options() {
             --models) MODELS=(); target=MODELS ;;
             --bins) BINS=(); target=BINS ;;
             --variants) VARIANTS=(); target=VARIANTS ;;
-            --controls) CONTROLS=(); target=CONTROLS ;;
             --subsets) SUBSETS=(); target=SUBSETS ;;
             --response-scaling) RESPONSE_SCALING=(); target=RESPONSE_SCALING ;;
             --audio-models) AUDIO_MODELS=(); target=AUDIO_MODELS ;;
             --video-models) VIDEO_MODELS=(); target=VIDEO_MODELS ;;
+            --fmri-space) FMRI_SPACE="$2"; shift; target="" ;;
             --*) echo "Unknown option: $1" >&2; exit 1 ;;
             *)
                 [ -n "$target" ] || { echo "Unexpected argument: $1" >&2; exit 1; }
@@ -163,6 +144,12 @@ parse_options() {
     done
 }
 parse_options "$@"
+
+if [ "$FMRI_SPACE" = subcortical ]; then
+    OUTPUT_DIR="${OUTPUTS_BASE}/subcortical/encoding"
+    PREPROCESSED_DIR="${OUTPUTS_BASE}/subcortical/group_average_cache"
+    TEMPLATE_CIFTI="${OUTPUTS_BASE}/subcortical/subcortical_template.dscalar.nii"
+fi
 
 # BIN_SEC/SKIP_SEC are set per iteration of the BINS sweep in DISPATCH below.
 
@@ -193,7 +180,7 @@ run_preprocess() {
     [ "$PSC"       = "true" ] && PSC_FLAG="--psc"
     [ "$GSR"       = "true" ] && GSR_FLAG="--gsr"
 
-    run_python "${SCRIPT_DIR}/../preprocess_individual.py" \
+    run_python "${SCRIPT_DIR}/../preprocessing/preprocess_individual.py" \
         --raw-dir        "$CIFTI_DIR" \
         --out-dir        "$PREPROCESSED_INDIV_DIR" \
         --subjects-list  "$SUBJECTS_LIST" \
@@ -230,7 +217,7 @@ fit_variants() {
             --split "${VARIANT%%:*}" --feature-scaling "${VARIANT##*:}" "${SPLIT_ARGS[@]}" \
             --response-scaling "${RESPONSE_SCALING[0]}" \
             --preprocessed-dir "$PREPROCESSED_DIR" \
-            --fmri-suffix "$FMRI_SUFFIX" \
+            --fmri-suffix "$FMRI_SUFFIX" --fmri-space "$FMRI_SPACE" \
             --subject group_average \
             --timing-csv "$TIMING_CSV" \
             --embeddings-dir "$EMBEDDINGS_DIR" \
@@ -242,36 +229,6 @@ fit_variants() {
             --model-random-state "$PARTITION_MODEL_RANDOM_STATE" \
             --backend "$BACKEND" \
             "$@" || { log "FAILED: $*"; FAILURES=$((FAILURES + 1)); }
-    done
-}
-
-run_variance_partition() {
-    local MODEL_NAME NAME ENTRY OWN_MODEL SET AUDIO_MODEL VIDEO_MODEL TAGGED
-    local SETS=()
-    for NAME in "${CONTROLS[@]}"; do
-        case "$NAME" in
-            none) ;;
-            all) SETS=("${CONTROL_SETS[@]}") ;;
-            *)
-                for ENTRY in "${CONTROL_SETS[@]}"; do
-                    [ "${ENTRY%% *}" = "$NAME" ] && { SETS+=("$ENTRY"); continue 2; }
-                done
-                echo "Unknown control set: $NAME" >&2; exit 1 ;;
-        esac
-    done
-    for MODEL_NAME in "${MODELS[@]}"; do
-        fit_variants --model "$MODEL_NAME" --tag unimodal_own
-        for ENTRY in "${OWN_SETS[@]}"; do
-            read -r OWN_MODEL SET AUDIO_MODEL VIDEO_MODEL <<< "$ENTRY"
-            [ "$OWN_MODEL" = "$MODEL_NAME" ] || continue
-            fit_variants --model "$MODEL_NAME" --tag "$SET" \
-                --audio-model "$AUDIO_MODEL" --video-model "$VIDEO_MODEL"
-        done
-        for ENTRY in "${SETS[@]}"; do
-            read -r SET AUDIO_MODEL VIDEO_MODEL <<< "$ENTRY"
-            fit_variants --model "$MODEL_NAME" --tag "$SET" \
-                --audio-model "$AUDIO_MODEL" --video-model "$VIDEO_MODEL"
-        done
     done
 }
 
@@ -303,13 +260,13 @@ run_interaction_control_fit() {
         TEMPLATE_ARGS=(--joint-model-template "$JOINT_TEMPLATE")
     fi
     run_python "${SCRIPT_DIR}/variance_partition.py" \
-        --split loro --feature-scaling demean \
+        --split loro --feature-scaling zscore \
         --preprocessed-dir "$PREPROCESSED_DIR" \
         --fmri-suffix "$FMRI_SUFFIX" \
         --subject group_average \
         --timing-csv "$TIMING_CSV" \
         --embeddings-dir "$EMBEDDINGS_DIR" \
-        --model "$MODEL_NAME" --tag unimodal_own \
+        --model "$MODEL_NAME" --audio-model "$MODEL_NAME" --video-model "$MODEL_NAME" \
         --output-name "$OUTPUT_NAME" \
         --output-dir "$RESULT_DIR" \
         --bin-sec "$BIN_SEC" --skip-sec "$SKIP_SEC" \
@@ -354,12 +311,11 @@ run_factorial_interaction() {
 # =============================================================================
 case "$MODE" in
     preprocess) run_preprocess ;;
-    variance_partition|screen|factorial_interaction)
+    screen|factorial_interaction)
         for BIN_SEC in "${BINS[@]}"; do
             SKIP_SEC="$BIN_SEC"
             log "=== BIN_SEC=${BIN_SEC}s SKIP_SEC=${SKIP_SEC}s ==="
             case "$MODE" in
-                variance_partition) run_variance_partition ;;
                 screen) run_screen ;;
                 factorial_interaction) run_factorial_interaction ;;
             esac
@@ -367,7 +323,7 @@ case "$MODE" in
         ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Use: preprocess | variance_partition | screen | factorial_interaction" >&2
+        echo "Use: preprocess | screen | factorial_interaction" >&2
         exit 1 ;;
 esac
 

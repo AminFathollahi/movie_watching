@@ -1,12 +1,12 @@
 """
 notebooks/feature_extraction/build_scramble_unimodal_copies.py
 =================================================================
-Move 3 support script -- omni3b/topoomni's TRUE unimodal "_a"/"_v" embeddings
-(from omni3b_extract_intact.py / topo_omni_extract_intact.py) come from
-forward passes with NO cross-modal tokens present at all, so they cannot
-depend on which audio was paired with which video. This means the nuisance
-regressors for the Move-3 scrambled integration contrast can be built by
-pure reindexing -- no GPU inference needed -- as long as the SAME
+Unimodal "_a"/"_v" embeddings for the temporal-scramble control of
+omni3b/topoomni. The true unimodal embeddings (from omni3b_extract_intact.py /
+topo_omni_extract_intact.py) come from forward passes with no cross-modal
+tokens present at all, so they cannot depend on which audio was paired with
+which video. The nuisance regressors for the scrambled integration contrast
+can therefore be built by pure reindexing -- no GPU inference needed -- as long as the SAME
 permutation (seed=42, applied to the SAME natsorted 626-segment list) is
 used as in omni3b_extract_scramble.py / topo_omni_extract_scramble.py:
 
@@ -30,7 +30,7 @@ from natsort import natsorted
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 DATA_BASE       = DATA / "segmented_stimulus/filtered"
 EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"

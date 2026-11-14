@@ -20,7 +20,7 @@ dependencies:
     - soundfile>=0.12
     - safetensors>=0.4
     # Qwen2.5-Omni-3B-lineage models (omni3b/topoomni unimodal+scramble
-    # extraction reused from this env, Move 1/3/5) and video-chunk decoding
+    # extraction) and video-chunk decoding
     # for PE-AV/nemotron/dummy-modality extraction:
     - qwen-omni-utils
     - qwen-vl-utils

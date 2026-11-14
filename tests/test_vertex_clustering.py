@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from cifti_io import save_cifti_map
+from shared.cifti_io import save_cifti_map
 from cluster.io_cluster import write_dlabel
 from cluster.vertex_clustering import (
     CLUSTERERS,

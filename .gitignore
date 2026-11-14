@@ -39,6 +39,7 @@ __pycache__/
 !/reports/measure_comparison/
 /reports/measure_comparison/measure_comparison.md
 /graphify-out/
+/logs/
 /outputs_subcortical_selfcheck_cache/
 
 # notebook exports
@@ -80,3 +81,6 @@ Thumbs.db
 *.html
 /cf_modeling/vendor/
 /cf_modeling/NOTICE
+
+# private notes
+encoding/NOTES.md

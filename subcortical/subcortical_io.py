@@ -1,14 +1,14 @@
 """
 subcortical/subcortical_io.py
 ==============================
-Geometry plumbing for the subcortical RSA/encoding extension: extraction,
+Geometry plumbing for subcortical RSA, CKA and encoding: extraction,
 per-structure column bookkeeping, k-NN neighbor arrays (geodesic + Euclidean
 fallback), nucleus coordinate masks, and the CIFTI template used to save
 subcortical maps.
 
-Everything downstream (subcortical_rsa.py, subcortical_encoding.py) reuses
-rsa/shared/rsa_utils.py, rsa/searchlight.py::run_searchlight, and cifti_io.py
-unchanged. This file is the only new geometry logic (see subcortex.txt).
+Everything downstream (subcortical_noise_ceiling.py) uses
+shared/binning.py, shared/searchlight.py::run_searchlight, and cifti_io.py
+unchanged; this file holds the subcortical geometry.
 """
 
 import logging
@@ -24,9 +24,9 @@ from scipy.spatial import cKDTree
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from preprocess_individual import RUN_IDS, get_run_path, preprocess_run, save_dtseries  # noqa: E402
-from cifti_io import save_cifti_map  # noqa: E402 (unused here but re-exported for callers)
-from paths import DATA  # noqa: E402
+from preprocessing.preprocess_individual import RUN_IDS, get_run_path, preprocess_run, save_dtseries  # noqa: E402
+from shared.cifti_io import save_cifti_map  # noqa: E402 (unused here but re-exported for callers)
+from shared.paths import DATA  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ SUBCORTICAL_STRUCTURES = [
     "DIENCEPHALON_VENTRAL_LEFT", "DIENCEPHALON_VENTRAL_RIGHT",
 ]
 
-# Neighbor-mode policy (user directive): geodesic everywhere; Euclidean is
+# Neighbor-mode policy: geodesic everywhere; Euclidean is
 # only the automatic fallback inside build_neighbors when a structure's
 # in-mask voxel graph is disconnected. Cerebellum additionally gets the
 # purist SUIT surface geodesic (build_cerebellum_surface_neighbors).
@@ -53,9 +53,9 @@ STRUCTURE_NEIGHBOR_MODE = {s: "geodesic" for s in SUBCORTICAL_STRUCTURES}
 
 K_DEFAULT = 100
 
-# ponytail: coord spheres (peaks from Sitek 2019, Front. Neurosci.; standard
+# Coordinate spheres (peaks from Sitek 2019, Front. Neurosci.; standard
 # geniculate coordinates). Upgrade to Sitek/Bianciardi probabilistic atlas
-# masks here if the user wants true anatomical masks instead of spheres.
+# masks for true anatomical masks instead of spheres.
 NUCLEI_SEEDS = {
     "IC_L": ((-6, -33, -11), "BRAIN_STEM"),      "IC_R": ((6, -33, -11), "BRAIN_STEM"),
     "SC_L": ((-4, -31, -4),  "BRAIN_STEM"),      "SC_R": ((4, -31, -4),  "BRAIN_STEM"),
@@ -312,7 +312,7 @@ def build_neighbors(voxel_ijk: np.ndarray, world_xyz: np.ndarray, k: int,
 # =============================================================================
 # Purist cerebellar SURFACE geodesic (SUIT flatmap surface)
 # =============================================================================
-# ponytail: purist = SUIT surface geodesic (required by user directive).
+# Cerebellar neighbors use the SUIT surface geodesic.
 # Voxel-graph geodesic (build_neighbors mode="geodesic") is the guaranteed
 # fallback if SUITPy/wb_command are unavailable at run time; Euclidean is
 # not an acceptable fallback for cerebellum.
@@ -332,8 +332,7 @@ def build_cerebellum_surface_neighbors(world_xyz: np.ndarray, k: int,
     geodesic, per the required-fallback policy above.
     """
     import SUITPy.flatmap as flatmap
-    sys.path.insert(0, str(ROOT / "rsa"))
-    from searchlight import _compute_geodesic_dconn  # noqa: E402
+    from shared.searchlight import _compute_geodesic_dconn
 
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)

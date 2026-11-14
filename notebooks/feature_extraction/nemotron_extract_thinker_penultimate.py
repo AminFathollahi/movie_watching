@@ -1,19 +1,18 @@
 """
 notebooks/feature_extraction/nemotron_extract_thinker_penultimate.py
 =========================================================================
-Adds the PENULTIMATE THINKER layer to nemotron's layer sweep (currently
-9/18/27/36, where 36 = config.text_config.num_hidden_layers = the TRUE
+Extracts the penultimate thinker layer of nemotron (layers 9/18/27/36 are
+extracted by nemotron_extract_intact.py, where 36 = config.text_config.num_hidden_layers = the TRUE
 FINAL layer under nemotron's own 1-indexed hidden_states convention:
 hidden_states[i] = output of layer i, tuple length N_LAYERS+1). Penultimate
 = hidden_states index 35 -- named "layer35" here, which (unlike omni3b/
 topoomni's 0-indexed decoder_layers convention) is directly consistent with
 this family's own layer{N}=hidden_states[N] naming, no override needed.
 
-Identical extraction methodology to nemotron_extract_intact.py (separate
-_a/_v/_av forward passes, mean-pool + L2-normalize readout, plus last-token
-_lt variant) -- see that script's docstring for the full rationale. Narrow
-copy (TARGET_LAYERS=[35] only) to avoid re-running the already-extracted
-9/18/27/36 layers.
+Same extraction method as nemotron_extract_intact.py (separate _a/_v/_av
+forward passes, mean-pool + L2-normalize readout, plus last-token _lt
+variant); see that script's docstring for the rationale. TARGET_LAYERS=[35]
+only.
 
 Run with:
     conda run --no-capture-output -n avtransformer \
@@ -27,7 +26,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, MODELS  # noqa: E402
 
 os.environ["HF_HOME"] = str(MODELS)
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"

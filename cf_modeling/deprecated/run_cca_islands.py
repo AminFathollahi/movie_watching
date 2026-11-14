@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT as BASE  # noqa: E402
+from shared.paths import ROOT as BASE  # noqa: E402
 
 DEFAULT_MAP = (BASE / "outputs/rsa/raw/group_average/pe-av-small-16-frame_av"
                "/k100_delay5s_bin5s_skip5s_spearman"

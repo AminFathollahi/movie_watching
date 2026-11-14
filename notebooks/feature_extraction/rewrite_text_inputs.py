@@ -34,7 +34,7 @@ except ImportError:
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 CONCEPT_EXCEL = Path(
     str(DATA / "Video_Audio_Pair_Concepts_All.xlsx")

@@ -1,22 +1,18 @@
 """
 notebooks/feature_extraction/topo_omni_extract_thinker_penultimate.py
 ==========================================================================
-Adds the PENULTIMATE THINKER layer to topoomni's layer sweep (currently
-9/18/27, plus the pre-existing stale bare "topoomni_layer35"/"_sheet" --
-which is actually the FINAL layer under this family's 0-indexed
+Extracts the penultimate thinker layer of topoomni (layers 9/18/27 are
+extracted by topo_omni_extract_intact.py; the bare "topoomni_layer35"/"_sheet"
+is the final layer under this family's 0-indexed
 decoder_layers/cortical_adaptors convention: N_LAYERS=36, valid indices
-0..35, so "layer35" == index 35 == the last of 36 layers, not the
-penultimate). See omni3b_extract_thinker_penultimate.py's docstring for the
-identical naming reasoning -- penultimate is index 34, named "layer34" here
-(not "layer35") to avoid colliding with the existing final-layer files and
-to stay consistent with this family's own idx-as-name convention.
+0..35). See omni3b_extract_thinker_penultimate.py's docstring for the
+naming: the penultimate layer is index 34, named "layer34".
 
-Identical extraction methodology to topo_omni_extract_intact.py (separate-
-pass _mp unimodal + joint-pass last-token _lt, both "hidden" (x_hat) and
-"sheet" (z) cortical-adaptor readouts) -- see that script's docstring for
-the full rationale. Narrow copy (TARGET_LAYERS=[34] only) to avoid
-re-running the already-extracted 9/18/27 layers. Uses the SAME custom
-Topo-Omni repo class (CorticalAdaptor) as the intact script -- NOT the stock
+Same extraction method as topo_omni_extract_intact.py (separate-pass _mp
+unimodal + joint-pass last-token _lt, both "hidden" (x_hat) and "sheet" (z)
+cortical-adaptor readouts); see that script's docstring for the rationale.
+TARGET_LAYERS=[34] only. Uses the same custom Topo-Omni repo class
+(CorticalAdaptor) as the intact script, not the stock
 transformers class used by topo_omni_extract_encoder_penultimate.py, since
 cortical_adaptors is a Topo-Omni-specific module not present in stock Qwen.
 
@@ -46,7 +42,7 @@ from tqdm import tqdm
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT, DATA, OUTPUTS  # noqa: E402
+from shared.paths import ROOT, DATA, OUTPUTS  # noqa: E402
 
 TOPO_OMNI_REPO = ROOT / "Model Repos/topo-omni"
 assert TOPO_OMNI_REPO.is_dir(), f"topo-omni repo not found at {TOPO_OMNI_REPO}"

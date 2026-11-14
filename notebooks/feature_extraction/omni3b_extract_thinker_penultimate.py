@@ -1,26 +1,20 @@
 """
 notebooks/feature_extraction/omni3b_extract_thinker_penultimate.py
 =======================================================================
-Adds the PENULTIMATE THINKER layer to omni3b's layer sweep (currently
-9/18/27, plus the pre-existing stale bare "omni3b_layer35" -- which is
-actually the FINAL layer: omni3b_extract_intact.py's sibling notebook
-(omni3b.ipynb) defines `_last_layer = N_LAYERS - 1` and N_LAYERS=36, so
-"layer35" there == decoder_layers[35] == the last of 36 layers, not the
-penultimate).
+Extracts the penultimate thinker layer of omni3b (layers 9/18/27 are
+extracted by omni3b_extract_intact.py; the bare "omni3b_layer35" is the final
+layer: omni3b.ipynb defines `_last_layer = N_LAYERS - 1` with N_LAYERS=36).
 
-Thinker decoder stack has N_LAYERS=36 (0-indexed decoder_layers ModuleList,
-valid indices 0..35). Penultimate = index 34 (second-to-last of 36). Named
-"layer34" here -- NOT "layer35" -- to stay consistent with this family's own
-idx-as-name convention (layer9=decoder_layers[9], layer27=decoder_layers[27])
-and to avoid colliding with the pre-existing "layer35" (final-layer) files.
-nemotron's own penultimate-layer script uses its own 1-indexed hidden_states
-convention, where the same conceptual layer is correctly named "layer35" --
-both names refer to the SAME position: second-to-last of 36 thinker layers.
+The thinker decoder stack has N_LAYERS=36 (0-indexed decoder_layers
+ModuleList, valid indices 0..35); the penultimate layer is index 34. It is
+named "layer34", following this family's idx-as-name convention
+(layer9=decoder_layers[9], layer27=decoder_layers[27]). nemotron's
+penultimate-layer script uses its 1-indexed hidden_states convention, where
+the same position is named "layer35".
 
-Identical extraction methodology to omni3b_extract_intact.py (separate-pass
-_mp unimodal + joint-pass last-token _lt) -- see that script's docstring for
-the full non-tautology rationale. This is a narrow copy (TARGET_LAYERS=[34]
-only) to avoid re-running the already-extracted 9/18/27 layers.
+Same extraction method as omni3b_extract_intact.py (separate-pass _mp
+unimodal + joint-pass last-token _lt); see that script's docstring for the
+rationale. TARGET_LAYERS=[34] only.
 
 Run with:
     conda run --no-capture-output -n avtransformer \
@@ -49,7 +43,7 @@ MODEL_PATH      = "Qwen/Qwen2.5-Omni-3B"
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 DATA_BASE       = DATA / "segmented_stimulus/filtered"
 EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"

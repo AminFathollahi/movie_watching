@@ -3,7 +3,7 @@ notebooks/feature_extraction/whisper_transcribe_bin2s.py
 ==========================================================
 Standalone bin2s_skip2s Whisper transcription, extracted from text.ipynb's
 Whisper+VAD cells (that notebook only loops SEGMENT_DURATIONS = [(5,5),(10,10)]).
-Needed so rsa/topoomni_sheet_localizer.py's whisper_speech_proxy (word count per
+Needed so deprecated/rsa/topoomni_sheet_localizer.py's whisper_speech_proxy (word count per
 bin, see whisper_speech_proxy_a.npy) can be computed at bin2s.
 
 Run: conda run -n avtransformer python notebooks/feature_extraction/whisper_transcribe_bin2s.py
@@ -22,7 +22,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, MODELS  # noqa: E402
 
 WHISPER_LOCAL_PATH = str(MODELS / "manual/models--openai--whisper-large-v3")
 WHISPER_BATCH_SIZE = 16

@@ -12,37 +12,27 @@ trained mean-pooling + L2-normalize readout at the final decoder layer
 Per the model card, audio and video are encoded independently (no TMRoPE
 interleaving) even when both are present in one input.
 
-Because this checkpoint has an OFFICIAL, already-non-tautological joint (av)
-readout recipe -- mean-pool over the full sequence (all modality tokens
-together) of a genuine joint audio+video forward pass -- there is no
-(a+v)/2-style circularity risk here the way there was for omni3b/topo-omni's
-placeholder: "_av" below is a real joint forward pass, pooled over ALL
-tokens (audio + video + text), not an average of two separately-pooled
-unimodal vectors. "_a"/"_v" are genuinely separate forward passes (no
-cross-modal tokens at all in the sequence), matching the omni3b/topo-omni
-unimodal-extraction convention (omni3b_extract_intact.py) so the Move-1
-integration contrast (av regressed on [a, v]) is not tautological here either.
+This checkpoint has an official joint (av) readout recipe -- mean-pool over
+the full sequence (all modality tokens together) of a joint audio+video
+forward pass -- so, unlike the (a+v)/2 average of omni3b/topo-omni, "_av" is
+not a function of "_a" and "_v": it is a real joint forward pass, pooled over
+all tokens (audio + video + text). "_a"/"_v" are separate forward passes (no
+cross-modal tokens in the sequence), as in omni3b_extract_intact.py, so the
+integration contrast (av regressed on [a, v]) is not tautological.
 
 Layers extracted: 9, 18, 27 (comparable probe depths to omni3b/topo-omni)
 plus 36 -- the TRUE FINAL layer (config.text_config.num_hidden_layers = 36),
 which is this model's own NATIVE, contrastively-trained embedding output
 (hidden_states[-1] in the model card's official usage example). Layer 36 is
 the layer used for this model's "native embedding" entries in
-rsa/shared/model_registry.py and for Move 4's cross-architecture convergence
-set; layers 9/18/27 are supplementary depth-sweep diagnostics only (that
-depth sweep was never part of this checkpoint's training objective).
+shared/model_registry.py; layers 9/18/27 are supplementary depth-sweep
+diagnostics only (the checkpoint was not trained for a depth sweep).
 
-A "_lt" (last-token) variant IS also produced (nemotron_layer{N}_lt_{a,v,av},
-same target layers), unlike the earlier reasoning that it was unnecessary here
-(unlike omni3b/topo-omni, where lasttoken works around the (a+v)/2 placeholder
-bug, nemotron's official mean-pool readout is already non-tautological, so
-that specific rationale still does not apply). It is produced anyway because
-TopoOmni's own ad-hoc probe-extraction script (topo-discover/
+A "_lt" (last-token) variant is also produced (nemotron_layer{N}_lt_{a,v,av},
+same target layers). TopoOmni's probe-extraction script (topo-discover/
 extract_video_embeddings.py: hidden_states[-1][:, -1, :]) uses last-token
-pooling at the final layer, not nemotron's official mean-pool recipe -- so
-both variants exist as separate driver options for the in-silico localizer,
-letting either "nemotron's own trained readout" or "the exact pooling
-TopoOmni's authors used" serve as the independent judge.
+pooling at the final layer, not nemotron's official mean-pool recipe, so both
+readouts are available as drivers of the in-silico localizer.
 
 Prompted with the model's own "passage: " document prefix (config_sentence_
 transformers.json: prompts.document = "passage: "), since we are embedding
@@ -53,14 +43,17 @@ Run with:
         python "notebooks/feature_extraction/nemotron_extract_intact.py"
 """
 
+import argparse
 import gc
+import json
 import os
+import shutil
 
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, MODELS  # noqa: E402
 
 # Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
 # proxy config gets locked in at import time, so stripping these afterward
@@ -93,6 +86,7 @@ DTYPE           = torch.bfloat16
 BIN_SEC = float(os.environ.get("BIN_SEC", "2.0"))
 SKIP_SEC = float(os.environ.get("SKIP_SEC", str(BIN_SEC)))
 TARGET_LAYERS   = [9, 18, 27, 35, 36]
+CAT_LAYERS      = [1, 9, 18, 27, 36]
 MODEL_TAG       = "nemotron"
 AUDIO_SR        = 16000
 DOC_PREFIX      = "passage: "
@@ -102,7 +96,56 @@ TEXT_KWARGS   = {"truncation": True, "padding": True, "max_length": 204800}
 AUDIO_KWARGS  = {"max_length": 2048000}
 
 
+def token_stats(n):
+    return {"min": int(n.min()), "mean": float(n.mean()), "max": int(n.max())}
+
+
+def save_new(path, array):
+    if path.exists():
+        old = np.load(path)
+        diff = float(np.abs(old - array).max()) if old.shape == array.shape else float("inf")
+        print(f"  exists, not written: {path.name} max abs difference {diff:.3g}")
+    else:
+        np.save(path, array)
+
+
+def save_mpcat(segs, mean_a, mean_v, halves, dur_int, skip_int):
+    """mean_a, mean_v: {layer: (n, D)} unimodal mean-pool vectors; halves: {layer: (audio (n, D), video (n, D))}."""
+    bin_dir = f"bin{dur_int}s_skip{skip_int}s"
+    counts = np.array(halves["counts"])
+    for layer in CAT_LAYERS:
+        audio, video = halves[layer]
+        scale_a = float(np.sqrt((audio ** 2).sum(axis=1).mean()))
+        scale_v = float(np.sqrt((video ** 2).sum(axis=1).mean()))
+        source = f"{MODEL_TAG}_layer{layer}_mp"
+        src_dir = EMBEDDINGS_BASE / source / bin_dir
+        src_dir.mkdir(parents=True, exist_ok=True)
+        for mod, array in (("a", mean_a[layer]), ("v", mean_v[layer])):
+            save_new(src_dir / f"{source}_{mod}.npy", array.astype(np.float32))
+        name = f"{MODEL_TAG}_layer{layer}_mpcat"
+        out_dir = EMBEDDINGS_BASE / name / bin_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        joint = np.concatenate([audio / scale_a, video / scale_v], axis=1).astype(np.float32)
+        np.save(out_dir / f"{name}_av.npy", joint)
+        np.save(out_dir / f"{name}_tokens.npy", counts)
+        for mod in "av":
+            shutil.copyfile(src_dir / f"{source}_{mod}.npy", out_dir / f"{name}_{mod}.npy")
+        info = {"model": MODEL_PATH, "dtype": "bfloat16", "layer": layer, "n_windows": len(segs),
+                "pooling": "joint pass; mean over audio tokens | mean over video tokens, each half divided by its RMS norm",
+                "scale_audio": scale_a, "scale_video": scale_v,
+                "audio_tokens": token_stats(counts[:, 0]), "video_tokens": token_stats(counts[:, 1]),
+                "a_v_copied_from": source}
+        (out_dir / f"{name}_layers.json").write_text(json.dumps(info, indent=1))
+        print(f"[{name}] saved av={joint.shape} -> {out_dir}\n{json.dumps(info)}", flush=True)
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pooling", choices=["mp", "mpcat"], default="mp",
+                        help="mp: mean over all tokens (layers 9-36, a/v/av). mpcat: layers 1, 9, 18, 27, 36; "
+                             "J = [mean over audio tokens | mean over video tokens] of the joint pass, each half scaled "
+                             "to unit RMS norm; also writes the audio-only and video-only mp vectors that are missing.")
+    pooling = parser.parse_args().pooling
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -118,6 +161,9 @@ def main():
     N_LAYERS = model.config.text_config.num_hidden_layers
     print(f"N_LAYERS={N_LAYERS}  TARGET_LAYERS={TARGET_LAYERS}")
     assert max(TARGET_LAYERS) == N_LAYERS, f"expected final layer {N_LAYERS}, got {TARGET_LAYERS}"
+    tokenizer = processor.tokenizer
+    AUDIO_TOKEN_ID = tokenizer.convert_tokens_to_ids("<|AUDIO|>")
+    VIDEO_TOKEN_ID = tokenizer.convert_tokens_to_ids("<|VIDEO|>")
 
     def _load_audio(path, target_sr):
         with av.open(str(path)) as container:
@@ -148,7 +194,7 @@ def main():
             content.append({"type": "audio", "audio": str(audio_path)})
         return [{"role": "user", "content": content}]
 
-    def extract(pair, modality, target_layers=TARGET_LAYERS):
+    def forward(pair, modality):
         messages = _build_messages(pair, modality)
         text = processor.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
         audio, images, videos = process_mm_info(messages, use_audio_in_video=False)
@@ -161,6 +207,22 @@ def main():
 
         with torch.inference_mode():
             out = model(**batch, output_hidden_states=True)
+        return batch, out
+
+    def extract_cat(pair, layers):
+        batch, out = forward(pair, "av")
+        ids = batch["input_ids"][0]
+        masks = [ids == AUDIO_TOKEN_ID, ids == VIDEO_TOKEN_ID]
+        assert all(m.any() for m in masks), f"{pair[0].name}: missing audio or video tokens"
+        halves = {layer: [out.hidden_states[layer][0][m].float().mean(dim=0).cpu().numpy() for m in masks]
+                  for layer in layers}
+        counts = [int(m.sum()) for m in masks]
+        del batch, out
+        torch.cuda.empty_cache()
+        return halves, counts
+
+    def extract(pair, modality, target_layers=TARGET_LAYERS):
+        batch, out = forward(pair, modality)
         hidden_states = out.hidden_states  # tuple, len N_LAYERS+1, index i = output of layer i
         attention_mask = batch["attention_mask"]
 
@@ -197,6 +259,24 @@ def main():
     if _limit:
         all_segs = all_segs[: int(_limit)]
         print(f"NEMOTRON_UNIMODAL_LIMIT set -- truncated to {len(all_segs)} segments (smoke test).")
+
+    if pooling == "mpcat":
+        mean_a, mean_v = {k: [] for k in CAT_LAYERS}, {k: [] for k in CAT_LAYERS}
+        audio, video, counts = {k: [] for k in CAT_LAYERS}, {k: [] for k in CAT_LAYERS}, []
+        for pair in tqdm(all_segs, desc="nemotron mpcat extraction"):
+            pooled_a, _ = extract(pair, "audio", CAT_LAYERS)
+            pooled_v, _ = extract(pair, "video", CAT_LAYERS)
+            halves, n = extract_cat(pair, CAT_LAYERS)
+            counts.append(n)
+            for k in CAT_LAYERS:
+                mean_a[k].append(pooled_a[k])
+                mean_v[k].append(pooled_v[k])
+                audio[k].append(halves[k][0])
+                video[k].append(halves[k][1])
+        stack = lambda d: {k: np.stack(v) for k, v in d.items()}
+        joint = {k: (np.stack(audio[k]), np.stack(video[k])) for k in CAT_LAYERS} | {"counts": counts}
+        save_mpcat(all_segs, stack(mean_a), stack(mean_v), joint, dur_int, skip_int)
+        return
 
     results_a  = {idx: [] for idx in TARGET_LAYERS}
     results_v  = {idx: [] for idx in TARGET_LAYERS}

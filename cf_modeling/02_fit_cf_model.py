@@ -3,9 +3,8 @@ cf_modeling/02_fit_cf_model.py
 ================================
 Fit a multi-source spectral CF model using vicsompy's MssCf pipeline.
 
-This script is the main modeling entry point.  It replaces run_cfmodeling.py
-and is designed to import directly from the vicsompy source repository rather
-than vendored copies, ensuring maximum alignment with Hedger et al. (2025).
+This script is the main modeling entry point.  It imports directly from the
+vicsompy source repository, following Hedger et al. (2025).
 
 Pipeline (matching vicsompy's analyse_subject exactly, without splicing)
 ------------------------------------------------------------------------
@@ -51,7 +50,7 @@ STREAMING MODE (--raw-dir):
 Skip logic
 ----------
 If both ``cf_model_null_corrected_split_r2_{roi}.npy`` maps exist in the
-output directory, the run is skipped (safe for GNU parallel reruns).
+output directory, the run is skipped (safe to repeat under GNU parallel).
 
 Usage (see README for the full mode/input-mode matrix)
 -----
@@ -79,7 +78,7 @@ from scipy.stats import zscore
 # Vicsompy import — must be before lib imports that re-export vicsompy classes
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from paths import OUTPUTS, ROOT  # noqa: E402
+from shared.paths import OUTPUTS, ROOT  # noqa: E402
 
 VICSOMPY_REPO = os.environ.get("VICSOMPY_REPO", str(ROOT / "Vicarious_somatotopy"))
 if VICSOMPY_REPO not in sys.path:
@@ -244,7 +243,7 @@ def split_train_test(cortex_data: np.ndarray, run_trs: list, n_test_trs: int):
 
 def load_subsurface(cache_dir: str, roi_name: str):
     """Load a Subsurface pkl from the cache built by 01_extract_geometry.py."""
-    path = os.path.join(cache_dir, f"sub_{roi_name.lower()}.pkl")
+    path = os.path.join(cache_dir, f"sub_{roi_name}.pkl")
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Subsurface cache not found: {path}\n"
@@ -506,7 +505,7 @@ def _run_streaming(args) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    from preprocess_individual import preprocess_subject
+    from preprocessing.preprocess_individual import preprocess_subject
 
     sub      = args.subject
     roi_tag  = f"{args.roi_a}_{args.roi_b}"

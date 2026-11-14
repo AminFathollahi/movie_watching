@@ -7,9 +7,9 @@
 # Usage
 #   bash cluster/cluster.sh MODE
 #
-#   MODE   groupaverage   PRIMARY FIRST PASS. Loop MODELS x modalities, run
+#   MODE   groupaverage   Loop MODELS x modalities, run
 #                          run_cluster.py --mode groupaverage for each.
-#          persubject     Same loop but --mode persubject (stub this pass).
+#          persubject     Same loop but --mode persubject (not implemented).
 #          temporal_differentiation  Screen every candidate clustering (vertex and
 #                          channel) for mean/max off-diagonal |Pearson r| among its
 #                          own cluster mean profiles.
@@ -41,17 +41,16 @@ CONDA_ENV="movie"
 OUTDIR="${OUTPUTS_BASE}/cluster"
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 
-# task shorthand "nemotron:a,v,av" -> on-disk name nemotron_layer27_mp
-# (verified present; a/v/av all (626,2048) at bin5s_skip5s). One-line edit
-# here to swap the layer or add more models.
+# shorthand "nemotron:a,v,av" -> on-disk name nemotron_layer27_mp
+# (a/v/av all (626,2048) at bin5s_skip5s). Edit here to swap the layer or add
+# models.
 #
 # _avscramble / _clsav_from_a / _clsav_from_v (modality=av) are AV-integration
 # CONTROL conditions, not new stimuli: avscramble pairs real audio with a
 # randomly-permuted video (breaks temporal correspondence, tests binding
 # sensitivity); clsav_from_a/clsav_from_v blank out one real modality (tests
-# whether a network needs BOTH modalities simultaneously present). Reuses
-# run_cluster.py unchanged -- these are just other {model}/{modality} on-disk
-# embedding names. Consumed by cluster/av_integration.py.
+# whether a network needs BOTH modalities simultaneously present). They are
+# run by run_cluster.py like any other {model}/{modality} on-disk embedding. Consumed by cluster/av_integration.py.
 MODELS=(
     "nemotron_layer27_mp:a,v,av"
     "nemotron_layer27_mp_avscramble:av"

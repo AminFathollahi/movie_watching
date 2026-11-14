@@ -46,7 +46,7 @@ CLUSTER_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(CLUSTER_DIR))
 
-from cifti_io import load_cifti_data  # noqa: E402
+from shared.cifti_io import load_cifti_data  # noqa: E402
 from io_cluster import GROUP_AVG_CIFTI, write_dlabel  # noqa: E402
 from vertex_clustering import (  # noqa: E402
     MASK_CIFTI,

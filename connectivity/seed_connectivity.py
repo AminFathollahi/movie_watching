@@ -3,7 +3,7 @@ connectivity/seed_connectivity.py
 ==================================
 Seed-based functional connectivity from a border-defined ROI.
 
-Takes lh/rh .border files (e.g. produced by rsa/draw_rsa_borders.py with
+Takes lh/rh .border files (e.g. produced by deprecated/rsa/draw_rsa_borders.py with
 --threshold-mode percentile), converts them to a grayordinate ROI mask via
 `wb_command -border-to-rois`, averages the ROI timeseries into a single seed
 timeseries, and Pearson-correlates it against every cortical grayordinate.
@@ -65,9 +65,9 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cifti_io import get_bm_axis, get_cortex_vertex_indices, save_cifti_map
-from rsa.glasser import load_glasser_parcels
-from paths import ROOT as _BASE
+from shared.cifti_io import get_bm_axis, get_cortex_vertex_indices, save_cifti_map
+from shared.glasser import load_glasser_parcels
+from shared.paths import ROOT as _BASE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ _R_SURF = (_BASE / "data/HCP_S1200_GroupAvg_v1/GroupAverage_59k"
 # NOTE: data/HCP Data/Q1-Q6_RelatedValidation210_{LEFT,RIGHT}.label.gii are the
 # 32k-mesh label files (32,492 verts/hem) — WRONG resolution for this 59k-mesh
 # pipeline (59,292 verts/hem full surface). Use the combined 59k dlabel instead
-# (same one used by rsa/analysis.sh for the ranked_report.csv parcel tables).
+# (same one used by deprecated/rsa/analysis.sh for the ranked_report.csv parcel tables).
 _GLASSER_DLABEL_59K = (_BASE / "data/HCP_S1200_GroupAvg_v1"
                         "/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.59k_fs_LR.dlabel.nii")
 _TIMING_CSV = _BASE / "data/movie_timing.csv"
@@ -163,7 +163,7 @@ def build_official_rest_mask(n_trs_total: int, official_timing_csv: str,
     Drops the first rest_trim_sec seconds of each rest block (HRF
     carry-over from the preceding clip's offset).
     """
-    from official_timing import load_official_timing, add_global_time
+    from shared.official_timing import load_official_timing, add_global_time
     df = add_global_time(load_official_timing(official_timing_csv), run_trs_npy)
     rest = df[df["is_rest"]]
     mask = np.zeros(n_trs_total, dtype=bool)
@@ -239,7 +239,7 @@ def summarize_and_save(r_map: np.ndarray, roi_mask: np.ndarray, template_cifti: 
     mean_pos = float(r_map[outside][r_map[outside] > 0].mean())
     pct_pos = float((r_map[outside] > 0).mean() * 100)
 
-    # Glasser parcels (combined 59k dlabel — same one rsa/analysis.sh uses)
+    # Glasser parcels (combined 59k dlabel — same one deprecated/rsa/analysis.sh uses)
     bm_axis = get_bm_axis(template_cifti)
     rows = []
     try:
@@ -337,7 +337,7 @@ def run_group_average(args, roi_mask: np.ndarray) -> None:
 
 def run_per_subject(args, roi_mask: np.ndarray) -> None:
     import types
-    from preprocess_individual import preprocess_subject, load_subjects
+    from preprocessing.preprocess_individual import preprocess_subject, load_subjects
 
     subjects = load_subjects(args.subjects_list)
     if args.excluded_list and Path(args.excluded_list).exists():

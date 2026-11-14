@@ -2,18 +2,15 @@
 notebooks/feature_extraction/compute_linear_residual_embeddings.py
 =====================================================================
 Generates the "_linear_resid_unimodal" pseudo-model embeddings: for every model in
-rsa.shared.model_registry.RESIDUALIZED_AV_MODELS, the ridge-regression residual of
+shared.model_registry.RESIDUALIZED_AV_MODELS, the ridge-regression residual of
 its AV joint embedding after regressing out AudioMAE(audio) +
 VideoMAEv2-Large(video) -- two independent unimodal specialists (same
-nuisance pair as rsa/partial_rsa.py's generalized partial_corr_* runs, but
+nuisance pair as shared/partial_rsa.py's generalized partial_corr_* runs, but
 computed directly in embedding space here so the result is a normal
 {model}_{modality}.npy file that both RSA and the encoding pipeline can
 consume unchanged).
 
-Uses rsa.shared.residuals.linear_residual() (thin wrapper around
-cka.multimodal_decomposition.compute_interaction_residual_cv, the
-cross-validated-ridge residual already relied on by
-encoding/variance_partition.py's Move-6 AVresid band).
+Uses shared.residuals.linear_residual(), the cross-validated-ridge residual.
 
 Output convention (matches every other pseudo-model, e.g. "_avscramble"):
     {embeddings_dir}/{model}_av_linear_resid_unimodal/bin{B}s_skip{S}s/{model}_av_linear_resid_unimodal_av.npy
@@ -24,7 +21,7 @@ which regresses out the target model's own a/v streams instead -- see
 --variant-suffix below.
 
 Once saved, run e.g.:
-    python rsa/searchlight.py --model {model}_av_linear_resid_unimodal --modality av ...
+    python shared/searchlight.py --model {model}_av_linear_resid_unimodal --modality av ...
 
 Usage
 -----
@@ -49,8 +46,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from rsa.shared.rsa_utils import preprocess_fmri, process_model_embeddings, align_and_assert_bins
-from rsa.shared.model_registry import (
+from shared.binning import preprocess_fmri, process_model_embeddings, align_and_assert_bins
+from shared.model_registry import (
     BIN_SEC_DEFAULT,
     DELAY_SEC_DEFAULT,
     TR_DEFAULT,
@@ -58,7 +55,7 @@ from rsa.shared.model_registry import (
     check_embeddings_exist,
     emb_path,
 )
-from rsa.shared.residuals import linear_residual
+from shared.residuals import linear_residual
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)

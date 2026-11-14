@@ -14,6 +14,7 @@ from encoding.shared.fold_evaluator import ALL_SUBSETS, evaluate_split
 
 log = logging.getLogger(__name__)
 REPEATED_VALIDATION_CLIPS = ("video5", "video9", "video14", "video18")
+DEFAULT_EXCLUDED = {"fixed": REPEATED_VALIDATION_CLIPS, "loro": REPEATED_VALIDATION_CLIPS[1:], "loco": REPEATED_VALIDATION_CLIPS}
 RESPONSE_SCALINGS = ("run", "train", "clip", "none")
 FEATURE_SCALINGS = ("demean", "zscore", "none")
 
@@ -30,11 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--split", choices=("fixed", "loro", "loco"), default="loro",
         help="fixed: train on the other clips, test on the repeated clips; "
-             "loro: drop the repeated clips, outer leave-one-run-out; "
+             "loro: drop the second to fourth showings of the repeated clip, outer leave-one-run-out; "
              "loco: outer leave-one-clip-out over every clip not in --exclude-video-ids.",
     )
     parser.add_argument(
-        "--feature-scaling", choices=FEATURE_SCALINGS, default="demean",
+        "--feature-scaling", choices=FEATURE_SCALINGS, default="zscore",
         help="Embeddings are scaled over the same rows and with the same statistics as the responses "
              "(--response-scaling): demean subtracts the mean, zscore also divides by the standard deviation, "
              "none leaves them as extracted.",
@@ -73,8 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hrf", action="store_true")
     parser.add_argument(
         "--exclude-video-ids",
-        default=",".join(REPEATED_VALIDATION_CLIPS),
-        help="Clips excluded from all fitting and main evaluation.",
+        help="Clips excluded from all fitting and main evaluation (default: all four repeated clips for fixed and loco, "
+             "the last three for loro, which keeps the first showing, video5).",
     )
     parser.add_argument("--alpha-min", type=float, default=-2.0)
     parser.add_argument("--alpha-max", type=float, default=9.0)
@@ -161,7 +162,8 @@ def load_inputs(args) -> dict:
         embeddings = {k: apply_hrf_by_clip(v, metadata, args.bin_sec) for k, v in embeddings.items()}
         joint = {k: apply_hrf_by_clip(v, metadata, args.bin_sec) for k, v in joint.items()}
 
-    excluded = {item.strip() for item in args.exclude_video_ids.split(",") if item.strip()}
+    ids = DEFAULT_EXCLUDED[args.split] if args.exclude_video_ids is None else args.exclude_video_ids.split(",")
+    excluded = {item.strip() for item in ids if item.strip()}
     if args.split == "fixed" and not excluded:
         raise ValueError("--split fixed needs the repeated clips in --exclude-video-ids")
     keep = ~metadata["video_id"].isin(excluded).to_numpy()

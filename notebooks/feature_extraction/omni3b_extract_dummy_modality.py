@@ -6,10 +6,10 @@ dummy_modality.py -- extracts Qwen2.5-Omni-3B's own joint-pass hidden
 embedding with one real modality and one fixed content-free dummy
 substitute, at TARGET_LAYERS=[9,18,27] (matching omni3b_extract_scramble.py).
 
-omni3b is not used as a localizer driver/sheet in this round -- it feeds
-ONLY the whole-embedding dummy-modality diff study (rsa/dummy_diff_maps.py),
-the same role its existing omni3b_layer{N}_mp_avscramble.npy plays in
-rsa/scramble_diff_maps.py.
+omni3b is not used as a localizer driver/sheet; it feeds only the
+whole-embedding dummy-modality diff study (deprecated/rsa/dummy_diff_maps.py),
+the same role its omni3b_layer{N}_mp_avscramble.npy plays in
+deprecated/rsa/scramble_diff_maps.py.
 
 --dummy-modality a: dummy VIDEO + real AUDIO -> omni3b_layer{N}_mp_clsav_from_a
 --dummy-modality v: dummy AUDIO + real VIDEO -> omni3b_layer{N}_mp_clsav_from_v
@@ -53,7 +53,7 @@ MODEL_PATH      = "Qwen/Qwen2.5-Omni-3B"
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 DATA_BASE       = DATA / "segmented_stimulus/filtered"
 EMBEDDINGS_BASE = OUTPUTS / "model_embeddings"

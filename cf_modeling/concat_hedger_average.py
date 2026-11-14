@@ -18,9 +18,9 @@ import nibabel as nib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from paths import DATA  # noqa: E402
+from shared.paths import DATA  # noqa: E402
 
-HEDGER_DIR = DATA / "hedger2026/hcp_movie/hcp_movie/subjects/999999"
+HEDGER_DIR = DATA / "vicsompy_data/hcp_movie/hcp_movie/subjects/999999"
 OUT_DIR    = DATA / "preprocessed/average_sub/hedger_sg_psc"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 

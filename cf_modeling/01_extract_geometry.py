@@ -4,9 +4,8 @@ cf_modeling/01_extract_geometry.py
 Build vicsompy Subsurface objects and compute Laplace-Beltrami Operator
 Eigenfunctions (LBOEs) for two Glasser HCP-MMP1 ROIs.
 
-This script replaces the vendored approach: the Subsurface class is now
-imported DIRECTLY from the vicsompy source repository (no installation needed).
-Set VICSOMPY_REPO below (or via the --vicsompy-repo CLI flag) to the local
+The Subsurface class is imported directly from the vicsompy source repository
+(no installation needed). Set VICSOMPY_REPO below (or via the --vicsompy-repo CLI flag) to the local
 clone of https://github.com/nicholashedger/vicsompy.
 
 Scientific alignment with Hedger et al. (2025)
@@ -30,8 +29,8 @@ Scientific alignment with Hedger et al. (2025)
 Output
 ------
 Per ROI pair, in {output_base}/{mode}/{ROI_A}_{ROI_B}/subsurfaces/:
-  sub_{roi_lower}.pkl              — Subsurface pickle (our naming convention)
-  {roi_lower}_subsurface.pickle   — identical copy in vicsompy naming format
+  sub_{roi}.pkl              — Subsurface pickle
+  {roi}_subsurface.pickle   — identical copy in vicsompy naming format
                                      (required by MssCf.make_subsurfaces(force_new=False))
 
 Both files are pickled with class = vicsompy's Subsurface, so they can be
@@ -58,7 +57,7 @@ import pandas as pd
 import scipy as sp
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from paths import DATA, OUTPUTS, ROOT  # noqa: E402
+from shared.paths import DATA, OUTPUTS, ROOT  # noqa: E402
 
 try:
     from cf_naming import strip_lboe_suffix
@@ -96,10 +95,10 @@ CX_SUB        = "hcp_999999_draw_NH"
 SURF_TYPE     = "fiducial"    # 'fiducial' = midthickness in pycortex; sphere absent
 N_VERTS_PER_HEM = 59292
 
-_DATA_BASE      = str(DATA / "Setareh")
+_DATA_BASE      = str(DATA)
 _HCP_DIR        = f"{_DATA_BASE}/HCP_S1200_GroupAvg_v1"
 _OUT_BASE       = str(OUTPUTS / "cf_modeling")
-_PYCORTEX_STORE = str(DATA / "hedger2026")
+_PYCORTEX_STORE = str(DATA / "vicsompy_data")
 _GLASSER_DLABEL = (
     f"{DATA}/HCP_S1200_GroupAvg_v1/"
     "Q1-Q6_RelatedParcellation210"
@@ -258,8 +257,8 @@ def build_subsurface(
     build time from hours to minutes.
 
     Two cache files are written:
-      sub_{name.lower()}.pkl            — our internal naming convention
-      {name.lower()}_subsurface.pickle  — vicsompy naming convention
+      sub_{name}.pkl            — Subsurface pickle
+      {name}_subsurface.pickle  — vicsompy naming convention
                                           (for MssCf.make_subsurfaces(force_new=False))
 
     Parameters
@@ -276,8 +275,8 @@ def build_subsurface(
     -------
     sub : StableSubsurface (class = Subsurface from vicsompy, for pickle compat)
     """
-    our_path     = os.path.join(cache_dir, f"sub_{name.lower()}.pkl")
-    vicsompy_path = os.path.join(cache_dir, f"{name.lower()}_subsurface.pickle")
+    our_path     = os.path.join(cache_dir, f"sub_{name}.pkl")
+    vicsompy_path = os.path.join(cache_dir, f"{name}_subsurface.pickle")
 
     # ── Load from cache if both files exist ───────────────────────────────
     if os.path.exists(our_path) and os.path.exists(vicsompy_path):

@@ -1,13 +1,9 @@
 """
 notebooks/feature_extraction/nemotron_extract_intact_bin5s_skip1s.py
 =======================================================================
-One-off variant of nemotron_extract_intact.py at BIN_SEC=5.0, SKIP_SEC=1.0
+Variant of nemotron_extract_intact.py at BIN_SEC=5.0, SKIP_SEC=1.0
 (sliding window, 80% overlap -- ~3090 segments vs. 626 at bin5s_skip5s).
-Kept as a separate file rather than editing nemotron_extract_intact.py's
-constants, per that file's own working-tree convention (it currently runs
-at bin2s_skip2s for reasons unrelated to this run -- see
-nemotron_extract_lasttoken_av_layer36_bin5s.py's docstring for precedent).
-Everything else (layers, pooling, output layout) is identical.
+Layers, pooling and output layout are as in nemotron_extract_intact.py.
 
 Requires Video{N}_av_chunks_5s_skip1s/*.mp4 chunks to exist first
 (segment_bin5s_skip1s.py).
@@ -23,37 +19,27 @@ trained mean-pooling + L2-normalize readout at the final decoder layer
 Per the model card, audio and video are encoded independently (no TMRoPE
 interleaving) even when both are present in one input.
 
-Because this checkpoint has an OFFICIAL, already-non-tautological joint (av)
-readout recipe -- mean-pool over the full sequence (all modality tokens
-together) of a genuine joint audio+video forward pass -- there is no
-(a+v)/2-style circularity risk here the way there was for omni3b/topo-omni's
-placeholder: "_av" below is a real joint forward pass, pooled over ALL
-tokens (audio + video + text), not an average of two separately-pooled
-unimodal vectors. "_a"/"_v" are genuinely separate forward passes (no
-cross-modal tokens at all in the sequence), matching the omni3b/topo-omni
-unimodal-extraction convention (omni3b_extract_intact.py) so the Move-1
-integration contrast (av regressed on [a, v]) is not tautological here either.
+This checkpoint has an official joint (av) readout recipe -- mean-pool over
+the full sequence (all modality tokens together) of a joint audio+video
+forward pass -- so, unlike the (a+v)/2 average of omni3b/topo-omni, "_av" is
+not a function of "_a" and "_v": it is a real joint forward pass, pooled over
+all tokens (audio + video + text). "_a"/"_v" are separate forward passes (no
+cross-modal tokens in the sequence), as in omni3b_extract_intact.py, so the
+integration contrast (av regressed on [a, v]) is not tautological.
 
 Layers extracted: 9, 18, 27 (comparable probe depths to omni3b/topo-omni)
 plus 36 -- the TRUE FINAL layer (config.text_config.num_hidden_layers = 36),
 which is this model's own NATIVE, contrastively-trained embedding output
 (hidden_states[-1] in the model card's official usage example). Layer 36 is
 the layer used for this model's "native embedding" entries in
-rsa/shared/model_registry.py and for Move 4's cross-architecture convergence
-set; layers 9/18/27 are supplementary depth-sweep diagnostics only (that
-depth sweep was never part of this checkpoint's training objective).
+shared/model_registry.py; layers 9/18/27 are supplementary depth-sweep
+diagnostics only (the checkpoint was not trained for a depth sweep).
 
-A "_lt" (last-token) variant IS also produced (nemotron_layer{N}_lt_{a,v,av},
-same target layers), unlike the earlier reasoning that it was unnecessary here
-(unlike omni3b/topo-omni, where lasttoken works around the (a+v)/2 placeholder
-bug, nemotron's official mean-pool readout is already non-tautological, so
-that specific rationale still does not apply). It is produced anyway because
-TopoOmni's own ad-hoc probe-extraction script (topo-discover/
+A "_lt" (last-token) variant is also produced (nemotron_layer{N}_lt_{a,v,av},
+same target layers). TopoOmni's probe-extraction script (topo-discover/
 extract_video_embeddings.py: hidden_states[-1][:, -1, :]) uses last-token
-pooling at the final layer, not nemotron's official mean-pool recipe -- so
-both variants exist as separate driver options for the in-silico localizer,
-letting either "nemotron's own trained readout" or "the exact pooling
-TopoOmni's authors used" serve as the independent judge.
+pooling at the final layer, not nemotron's official mean-pool recipe, so both
+readouts are available as drivers of the in-silico localizer.
 
 Prompted with the model's own "passage: " document prefix (config_sentence_
 transformers.json: prompts.document = "passage: "), since we are embedding
@@ -71,7 +57,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, MODELS  # noqa: E402
 
 # Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
 # proxy config gets locked in at import time, so stripping these afterward

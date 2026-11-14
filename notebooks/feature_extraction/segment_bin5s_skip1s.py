@@ -29,7 +29,7 @@ from natsort import natsorted
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA  # noqa: E402
+from shared.paths import DATA  # noqa: E402
 
 DATA_BASE = DATA / "segmented_stimulus/filtered"
 BIN_SEC, SKIP_SEC = 5.0, 1.0

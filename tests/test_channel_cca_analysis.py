@@ -1,11 +1,10 @@
 """Tests for the per-channel modality-axis vs CCA-axis correlation.
 
-Covers the entire surviving analysis: two continuous per-channel axes
+Covers the analysis: two continuous per-channel axes
 (modality = audio-minus-video, CCA = anterior-minus-posterior), each in a
 zero-order and a partial variant, and one block-bootstrapped Spearman +
 Pearson correlation between them. No classes, no permutation testing, no
-FDR, no winner-take-all group test -- see the module docstring in
-cf_modeling/deprecated/channel_cca_analysis.py for what was deleted and why.
+FDR, no winner-take-all group test.
 """
 
 import importlib.util
@@ -21,19 +20,6 @@ PATH = ROOT / "cf_modeling" / "deprecated" / "channel_cca_analysis.py"
 SPEC = importlib.util.spec_from_file_location("channel_cca_analysis", PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
-
-
-def test_no_class_or_significance_machinery_remains():
-    """The whole point of this rebuild: no labelling/inference surface."""
-    forbidden = {
-        "CLASS_ORDER", "channel_sensitivity", "channel_index_sets",
-        "adjust_fdr", "modality_selectivity", "sufficiency_region",
-        "axis_reliability", "disattenuated_correlation",
-        "group_association_bootstrap", "_sufficiency_null_test",
-        "_circular_shift_indices", "_cliffs_delta",
-    }
-    present = forbidden & set(dir(MODULE))
-    assert not present, f"Retired names still present: {present}"
 
 
 def test_profile_correlation_is_offset_and_scale_invariant():
@@ -127,7 +113,7 @@ def test_block_bootstrap_axis_correlation_shape_and_ci_contains_observed_directi
 
 
 def test_model_files_uses_correct_ablation_suffixes():
-    intact, from_a, from_v = MODULE._model_files(Path("/root"), "peav")
+    intact, from_a, from_v = MODULE.model_files(Path("/root"), "peav")
     assert intact == Path("/root/peav/bin5s_skip5s/peav_av.npy")
     assert from_a == Path("/root/peav_clsav_from_a/bin5s_skip5s/peav_clsav_from_a_av.npy")
     assert from_v == Path("/root/peav_clsav_from_v/bin5s_skip5s/peav_clsav_from_v_av.npy")

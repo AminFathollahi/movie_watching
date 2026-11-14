@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -26,7 +25,7 @@ import nibabel as nib
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from paths import OUTPUTS  # noqa: E402
+from shared.paths import OUTPUTS  # noqa: E402
 
 DEFAULT_SELECTION_ROOT = OUTPUTS / "cluster/group_average/_vertex/norm-zscore_raw"
 DEFAULT_STIMULUS_MAP = (
@@ -247,9 +246,6 @@ def delete_duplicate_dlabels(records: list[dict], selection_root: Path,
             continue
         path.unlink()
         removed.append(path)
-    archive = selected_maps / "superseded_unscaled_hdbscan"
-    if archive.exists():
-        shutil.rmtree(archive)
     return removed
 
 

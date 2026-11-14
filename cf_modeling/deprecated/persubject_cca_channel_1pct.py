@@ -58,14 +58,14 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from cf_modeling.cf_naming import persubject_output_root  # noqa: E402
-from paths import DATA, EXTERNAL, OUTPUTS  # noqa: E402
+from shared.paths import DATA, EXTERNAL, OUTPUTS  # noqa: E402
 from cf_modeling.roi_mean_partial_connectivity import _load_mask  # noqa: E402
 from cf_modeling.deprecated.channel_cca_analysis import (  # noqa: E402
-    MODEL_CONFIGS, VARIANTS, _model_files, _processed_embedding, cca_axis,
+    MODEL_CONFIGS, VARIANTS, model_files, _processed_embedding, cca_axis,
     modality_axis,
 )
-from rsa.shared.rsa_utils import get_run_bin_counts, preprocess_fmri  # noqa: E402
-from preprocess_individual import preprocess_subject  # noqa: E402
+from shared.binning import get_run_bin_counts, preprocess_fmri  # noqa: E402
+from preprocessing.preprocess_individual import preprocess_subject  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("persubject_cca")
@@ -189,7 +189,7 @@ def main() -> None:
     args = _Args(timing_csv=TIMING_CSV, run_trs=DATA / "preprocessed/average_sub/hedger_sg_psc"
                  "/group_average_hedger_sg_psc_run_trs.npy",
                  bin_sec=BIN_SEC, skip_sec=SKIP_SEC, delay_sec=DELAY_SEC, tr=TR)
-    intact_path, from_a_path, from_v_path = _model_files(EMBEDDINGS_DIR, MODEL_CONFIGS["peav"])
+    intact_path, from_a_path, from_v_path = model_files(EMBEDDINGS_DIR, MODEL_CONFIGS["peav"])
     intact = _processed_embedding(intact_path, args, run_bins)
     from_a = _processed_embedding(from_a_path, args, run_bins)
     from_v = _processed_embedding(from_v_path, args, run_bins)

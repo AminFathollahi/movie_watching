@@ -43,7 +43,7 @@ bash cf_modeling/run_analysis.sh [MODE] [BATCH_SIZE] [START_FROM]
 |---|---|
 | `masks` | Step 0 for all ROIs in the pair lists. |
 | `geometry` | Step 1 for all pairs (skipped if both `sub_*.pkl` caches exist). |
-| `preprocess` | `preprocess_individual.py` (Savitzky-Golay filter, percent signal change, optional global signal regression per run) and the group average. |
+| `preprocess` | `preprocessing/preprocess_individual.py` (Savitzky-Golay filter, percent signal change, optional global signal regression per run) and the group average. |
 | `avg` | For each `AVG_PAIRS` entry: steps 1, 2, 3, 3b. |
 | `persubject` | For each `PERSUBJECT_PAIRS` entry: step 1; step 2 for every subject in `SUBJECTS_LIST` (GNU `parallel`, `BATCH_SIZE` jobs, sequential without it; `START_FROM` resumes at that subject ID); then steps 3, 3b, 4. |
 | `all` (default) | `geometry`, `avg`, `persubject`. |
@@ -77,7 +77,7 @@ Root `outputs/cf_modeling/` (`--output-base`), pair directory `{mode}/{ROI_A}_{R
 
 | Path | Content |
 |---|---|
-| `subsurfaces/` | `sub_{roi}.pkl` and `{roi}_subsurface.pickle` (identical copies, `roi` lowercased), `lboe_provenance_{ROI_A}_{ROI_B}.json` (requested and actual eigenfunction counts, vertex counts) |
+| `subsurfaces/` | `sub_{roi}.pkl` and `{roi}_subsurface.pickle` (identical copies), `lboe_provenance_{ROI_A}_{ROI_B}.json` (requested and actual eigenfunction counts, vertex counts) |
 | `prep/` (`group_average`) or `subjects/{subject}/` (`per_subject`) | the arrays below, `betas_{ROI}.npy`, `train_scores.npy`, `test_scores.npy`, `best_alphas.npy`, and `band_sizes.npy` (`[2k_A, 2k_B]`) |
 | `group/` (`per_subject`) | `per_subject_mean_*.npy`; `stats/` and `cifti_maps/` from `overlap.py` |
 | `cifti_maps/` | `.dscalar.nii`, `.dlabel.nii` and legend PNGs. `integration_maps.py` writes the combined CIFTI here for `group_average` and to `group/cifti_maps/` for `per_subject` |
@@ -93,7 +93,7 @@ Arrays are `.npy` of shape `(108441,)`:
 | `cf_model_null_corrected_split_r2_{ROI}` | split R^2 minus null R^2 |
 | `cf_model_joint_split_r2_geomean`, `cf_model_joint_null_corrected_split_r2_geomean` | geometric mean over the two ROIs |
 
-The combined CIFTI is `cf_model_maps_{roi_a}_{roi_b}_{estimate}.dscalar.nii` (ROI names lowercased; `estimate` is `fit_to_group_mean_timeseries` for `group_average` and `mean_of_subject_maps` for `per_subject`). It holds the nine arrays above and `cf_model_null_corrected_split_r2_balance` (modality balance).
+The combined CIFTI is `cf_model_maps_{roi_a}_{roi_b}_{estimate}.dscalar.nii` (`estimate` is `fit_to_group_mean_timeseries` for `group_average` and `mean_of_subject_maps` for `per_subject`). It holds the nine arrays above and `cf_model_null_corrected_split_r2_balance` (modality balance).
 
 The bivariate export writes `bivariate_cf_model_split_r2_{ROI_A}_{ROI_B}_{estimate}_{bins}bin.dlabel.nii` (each grayordinate coloured by the bin of ROI B on the horizontal axis and ROI A on the vertical axis of the pycortex `PU_RdBu_covar_alpha` colour map), `..._axes.dscalar.nii` (the two continuous maps) and `..._legend.png`.
 
@@ -103,33 +103,32 @@ The bivariate export writes `bivariate_cf_model_split_r2_{ROI_A}_{ROI_B}_{estima
 - `stats/stats_summary.json`: `N`, critical t (two-sided, 0.05, `N - 1` degrees of freedom), mean d, and counts of vertices passing the corrected and uncorrected thresholds.
 - `cifti_maps/{name}.dscalar.nii`: t, d and the FDR masks.
 
-## ROI-mean time-series correlation
+## ROI-mean time-series connectivity
 
-Companion maps without the geometric basis. With `m_r(t)` the mean time series of ROI `r`, every vertex series and `m_r` are z-scored within each run and the Pearson r is the mean product over time.
+Companion maps without the geometric basis, from the raw group-average time series. With `m_A(t)` and `m_B(t)` the mean time series of ROI A and ROI B (both hemispheres pooled), every vertex series and both means are z-scored within each run. For each held-out run, the target vertex and `m_A` are each regressed on `m_B` with the intercept and slope fitted on the other runs, and the Pearson correlation of the two held-out residuals is the partial correlation of that run; the four runs are averaged weighted by their number of TRs. The second map swaps A and B. Grayordinates inside either ROI or within 10 mm of it (shortest path along the edges of the midthickness mesh) are NaN.
 
 | Script | Output |
 |---|---|
-| `roi_mean_raw_connectivity.py` | zero-order `r(vertex, m_A)` and `r(vertex, m_P)` |
-| `roi_mean_partial_connectivity.py` | partial `r(vertex, m_A \| m_P) = (r_yA - r_yP r_AP) / sqrt((1 - r_yP^2)(1 - r_AP^2))` and the symmetric map |
-| `export_raw_corr_bivariate_cifti.py`, `export_partial_bivariate_cifti.py` | four 2-D dlabels each (`bilateral`, `within_hemisphere`, `L`, `R`) |
-| `make_glasser_roi_mask.py` | bilateral Glasser ROI mask `.dscalar.nii`, the format of `--mask-a` and `--mask-p` |
+| `roi_mean_partial_connectivity.py` | `roi_mean_timeseries_connectivity_{A}_given_{B}_{label}` and `..._{B}_given_{A}_{label}`, in `roi_mean_timeseries_connectivity_{A}_{B}_{label}.dscalar.nii` |
+| `export_partial_bivariate_cifti.py` | 2-D dlabel `bivariate_roi_mean_timeseries_connectivity_{A}_{B}_{label}_{bins}bin.dlabel.nii` and its legend |
+| `make_glasser_roi_mask.py` | bilateral Glasser ROI mask `.dscalar.nii`, the format of `--mask-a` and `--mask-b` |
 
 ```bash
 python cf_modeling/roi_mean_partial_connectivity.py --dtseries FILE --run-trs FILE.npy \
-    --roi-a A5 --roi-p FFC --mask-a A5_mask.dscalar.nii --mask-p FFC_mask.dscalar.nii \
+    --roi-a A5 --roi-b FFC --mask-a A5_mask.dscalar.nii --mask-b FFC_mask.dscalar.nii \
     --output-dir DIR/cifti_maps [--preprocessing raw|sg_psc]
+bash cf_modeling/run_analysis.sh roimean
 ```
 
-`roi_mean_raw_connectivity.py` takes the same options. The exporters take `--partial-cifti` or `--zero-order-cifti`, `--roi-a`, `--roi-p`, `--output-dir` and the required `--preprocessing-label {raw,sg_psc}_per_run_zscore`. `--preprocessing raw` (default) reads the unfiltered continuous group average and `sg_psc` the Savitzky-Golay plus percent-signal-change group average; the label is part of every file name. The `bilateral` maps pool both hemispheres' ROI means, `within_hemisphere` correlates left vertices with the left ROI mean and right vertices with the right one, and `L` and `R` keep one hemisphere (other grayordinates NaN). Combined maps are `roi_mean_timeseries_{zero_order,partial}_pearson_r_{A}_{P}_{label}.dscalar.nii`, collected in `group_average/roi_mean_timeseries_connectivity_{A}_{P}/`. `run_analysis.sh` has no mode for these scripts.
+`--preprocessing raw` (default, primary) reads the unfiltered continuous group average, giving label `raw_per_run_zscore`; `sg_psc` (control) reads the Savitzky-Golay plus percent-signal-change group average, giving `sg_psc_per_run_zscore`. The label is part of every file name. The exporter takes `--connectivity-cifti`, `--roi-a`, `--roi-b`, `--output-dir` and the required `--preprocessing-label {raw,sg_psc}_per_run_zscore`. Files are collected in `group_average/roi_mean_timeseries_connectivity_{A}_glasser_{B}_glasser/`; `roimean` mode of `run_analysis.sh` runs both labels for `ROIMEAN_PAIRS`.
 
 ## Utilities
 
 | Script | Purpose |
 |---|---|
 | `concat_hedger_average.py` | Concatenates the four per-run `sg_psc` CIFTIs of pseudo-subject 999999 into the cortex-only and full-brain group-average dtseries and `run_trs.npy`. Locations are set at the top of the script. |
-| `migrate_lboe_artifacts.py` | `python cf_modeling/migrate_lboe_artifacts.py OUTPUT_BASE [--default-lboe 200] [--apply]` renames fitted pair trees to the `_lboe{N}` convention; a dry run unless `--apply`. |
 | `validate_hedger_data.py` | Fits 3b x V1 (200 eigenfunctions) on Hedger's pseudo-subject 999999 and prints mean R^2 and the fraction of positive grayordinates beside our group-average fit. |
-| `viz.ipynb`, `functional_masks_cf.ipynb` | Flatmap figures of the CF outputs; functional-mask analysis for an A1 x V1 fit. |
+| `functional_masks_cf.ipynb` | Functional-mask analysis for an A1 x V1 fit. The flat-map figures of the CF outputs are drawn by `notebooks/visualization/cf_modeling_figures.ipynb`. |
 
 `lib/`, `shared/` and `deprecated/` have their own READMEs.
 
@@ -137,6 +136,5 @@ python cf_modeling/roi_mean_partial_connectivity.py --dtseries FILE --run-trs FI
 
 ```bash
 pytest tests/test_cf_math.py tests/test_lboe_naming.py tests/test_bivariate_cifti.py \
-       tests/test_partial_bivariate_cifti.py tests/test_raw_corr_bivariate_cifti.py \
-       tests/test_roi_mean_partial_connectivity.py tests/test_roi_mean_raw_connectivity.py -v
+       tests/test_partial_bivariate_cifti.py tests/test_roi_mean_partial_connectivity.py -v
 ```

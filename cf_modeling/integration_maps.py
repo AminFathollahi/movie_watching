@@ -7,7 +7,7 @@ For ``group_average`` mode: loads the CF fit to one group-mean fMRI time
 series from the prep directory.  This is not an average of fitted maps.
 For ``per_subject`` mode: aggregates subject-level CF R² maps (nanmean).
 
-Single CIFTI output: cf_model_maps_{roi_a}_{roi_b}_*.dscalar.nii
+Single CIFTI output: cf_model_maps_{roi_a}_{roi_b}_{estimate}.dscalar.nii
   All scalar maps in one file for wb_view / viz_cf_modeling.ipynb:
     cf_model_full_r2, cf_model_split_r2_{a}, cf_model_split_r2_{b},
     cf_model_roi_mean_null_r2_{a}, cf_model_roi_mean_null_r2_{b},
@@ -34,14 +34,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from cifti_io import save_cifti_multimap
-from paths import DATA, OUTPUTS
-from cf_modeling.cf_naming import (
-    cf_model_map_stems,
-    legacy_cf_model_map_stems,
-    per_subject_mean_stem,
-    resolve_cf_model_map_path,
-)
+from shared.cifti_io import save_cifti_multimap
+from shared.paths import DATA, OUTPUTS
+from cf_modeling.cf_naming import CF_ESTIMATES, cf_maps_stem, cf_model_map_stems, per_subject_mean_stem
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)s  %(message)s",
@@ -49,19 +44,19 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger(__name__)
 
 _OUT_BASE       = str(OUTPUTS / "cf_modeling")
-_PYCORTEX_STORE = str(DATA / "hedger2026")
+_PYCORTEX_STORE = str(DATA / "vicsompy_data")
 
 
 # =============================================================================
 # Per-subject map collection
 # =============================================================================
 
-def collect_maps(subjects_dir, map_name, min_subjects, legacy_name=None):
-    """Load a canonical subject map, accepting legacy names during migration."""
+def collect_maps(subjects_dir, map_name, min_subjects):
+    """Stack the named map of every subject directory that has it."""
     sub_dirs = sorted(glob(os.path.join(subjects_dir, "*")))
     arrays, missing = [], []
     for sd in sub_dirs:
-        path = resolve_cf_model_map_path(sd, map_name, legacy_name)
+        path = os.path.join(sd, f"{map_name}.npy")
         if os.path.exists(path):
             arrays.append(np.load(path))
         else:
@@ -111,7 +106,6 @@ def main():
     roi_a    = args.roi_a
     roi_b    = args.roi_b
     stems = cf_model_map_stems(roi_a, roi_b)
-    legacy_stems = legacy_cf_model_map_stems(roi_a, roi_b)
 
     log.info("=" * 60)
     log.info("Integration maps — %s  %s × %s", args.mode, roi_a, roi_b)
@@ -125,8 +119,7 @@ def main():
 
         log.info("Loading held-out CF R² maps …")
         def _load(key):
-            return np.load(resolve_cf_model_map_path(
-                prep_dir, stems[key], legacy_stems[key]))
+            return np.load(f"{prep_dir}/{stems[key]}.npy")
         R2_full    = _load("full_r2")
         R2_a       = _load("split_r2_a")
         R2_b       = _load("split_r2_b")
@@ -147,7 +140,7 @@ def main():
         log.info("Aggregating subject-level held-out CF R² maps …")
         def _avg(key):
             return np.nanmean(collect_maps(
-                subjects_dir, stems[key], args.min_subjects, legacy_stems[key]),
+                subjects_dir, stems[key], args.min_subjects),
                               axis=0).astype(np.float32)
 
         R2_full    = _avg("full_r2")
@@ -197,11 +190,9 @@ def main():
         modality_balance
     ]
 
-    estimate = ("fit_to_group_mean_timeseries" if args.mode == "group_average"
-                else "mean_of_subject_maps")
-    combined_path = os.path.join(
-        out_cifti_dir,
-        f"cf_model_maps_{roi_a.lower()}_{roi_b.lower()}_{estimate}.dscalar.nii")
+    estimate = CF_ESTIMATES[args.mode]
+    maps_stem = cf_maps_stem(roi_a, roi_b, args.mode)
+    combined_path = os.path.join(out_cifti_dir, f"{maps_stem}.dscalar.nii")
     save_cifti_multimap(
         np.vstack([a.reshape(1, -1) for a in map_arrays]),
         map_names,
@@ -214,8 +205,7 @@ def main():
                  name, float(np.nanmean(arr)), 100.0 * float(np.mean(arr > 0)))
 
     # Keep cifti_maps/ view-only: CIFTIs and legends, no JSON sidecars.
-    metadata_path = Path(out_cifti_dir).parent / (
-        f"cf_model_maps_{roi_a.lower()}_{roi_b.lower()}_{estimate}.json")
+    metadata_path = Path(out_cifti_dir).parent / f"{maps_stem}.json"
     metadata_path.write_text(json.dumps({
         "analysis": "connective_field_model_heldout_r2_maps",
         "estimate": estimate,

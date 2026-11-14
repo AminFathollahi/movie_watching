@@ -18,7 +18,7 @@ formula ``r_xy.z = (r_xy - r_xz r_yz) / sqrt((1-r_xz^2)(1-r_yz^2))``).
 
 Preprocessing (identical for every series entering either axis): z-score
 PER RUN over the 626 movie bins (runs = [151, 161, 156, 158]), done once by
-``rsa.shared.rsa_utils.process_model_embeddings``/``preprocess_fmri`` with
+``shared.binning.process_model_embeddings``/``preprocess_fmri`` with
 ``normalize=True`` before any correlation is taken.
 
 No channel is ever assigned to a class, region, region-pair, or
@@ -51,25 +51,38 @@ from scipy.stats import spearmanr
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from cf_modeling.roi_mean_partial_connectivity import (  # noqa: E402
-    _load_mask, _stream_mask_means, paired_partial_correlations,
-)
-from rsa.shared.rsa_utils import (  # noqa: E402
+from cluster.io_cluster import MODEL_CONFIGS, model_files  # noqa: E402
+from cf_modeling.roi_mean_partial_connectivity import _load_mask, _stream_mask_means  # noqa: E402
+from shared.binning import (  # noqa: E402
     get_run_bin_counts, preprocess_fmri, process_model_embeddings,
 )
 
 
 log = logging.getLogger("channel_cca_analysis")
 
+
+def paired_partial_correlations(target_z, first_z, second_z):
+    target_z = np.asarray(target_z, dtype=np.float64)
+    first_z = np.asarray(first_z, dtype=np.float64).reshape(-1)
+    second_z = np.asarray(second_z, dtype=np.float64).reshape(-1)
+    if target_z.ndim == 1:
+        target_z = target_z[:, None]
+    if target_z.shape[0] != first_z.size or first_z.size != second_z.size:
+        raise ValueError("Targets and both ROI series must have the same number of TRs")
+    n_obs = float(first_z.size)
+    r_y_first = np.clip((target_z.T @ first_z) / n_obs, -1.0, 1.0)
+    r_y_second = np.clip((target_z.T @ second_z) / n_obs, -1.0, 1.0)
+    r_first_second = float(np.clip((first_z @ second_z) / n_obs, -1.0, 1.0))
+    eps = np.finfo(np.float64).eps
+    first_den = np.sqrt(np.maximum((1.0 - r_y_second ** 2) * (1.0 - r_first_second ** 2), eps))
+    second_den = np.sqrt(np.maximum((1.0 - r_y_first ** 2) * (1.0 - r_first_second ** 2), eps))
+    return (np.clip((r_y_first - r_y_second * r_first_second) / first_den, -1.0, 1.0).astype(np.float32),
+            np.clip((r_y_second - r_y_first * r_first_second) / second_den, -1.0, 1.0).astype(np.float32))
+
 FAMILY_LABELS = {
     "peav": "PE-AV",
     "nemotron_layer18_mp": "Nemotron-18",
     "topoomni_layer18_sheet_mp": "Topo-Omni-18 sheet",
-}
-MODEL_CONFIGS = {
-    "peav": "pe-av-small-16-frame",
-    "nemotron_layer18_mp": "nemotron_layer18_mp",
-    "topoomni_layer18_sheet_mp": "topoomni_layer18_sheet_mp",
 }
 VARIANTS = ("zero_order", "partial")
 
@@ -257,15 +270,6 @@ def save_scatter(
     return path
 
 
-def _model_files(root: Path, model: str) -> tuple[Path, Path, Path]:
-    """(intact, from_a, from_v). ``from_a`` is the audio-only-input pass
-    (video ablated, file suffix ``_clsav_from_a``); ``from_v`` is the
-    video-only-input pass (audio ablated, file suffix ``_clsav_from_v``)."""
-    def _path(tag: str) -> Path:
-        return root / tag / "bin5s_skip5s" / f"{tag}_av.npy"
-    return _path(model), _path(f"{model}_clsav_from_a"), _path(f"{model}_clsav_from_v")
-
-
 def _processed_embedding(path: Path, args: argparse.Namespace, run_bins: np.ndarray) -> np.ndarray:
     timing = pd.read_csv(args.timing_csv)
     run_trs = np.asarray(np.load(args.run_trs), dtype=int)
@@ -372,7 +376,7 @@ def main() -> None:
     results: dict[str, dict] = {}
     for tag in args.models:
         model = MODEL_CONFIGS[tag]
-        intact_path, from_a_path, from_v_path = _model_files(args.embeddings_dir, model)
+        intact_path, from_a_path, from_v_path = model_files(args.embeddings_dir, model)
         for path in (intact_path, from_a_path, from_v_path):
             if not path.exists():
                 raise FileNotFoundError(path)

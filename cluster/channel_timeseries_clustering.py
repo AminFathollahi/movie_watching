@@ -4,7 +4,7 @@ Channel analogue of ``vertex_clustering.py``: instead of one row
 per cortical grayordinate and one column per fMRI TR, each row here is one
 embedding channel (1,024 for PE-AV; 2,048 for each Omni-family layer-18
 mean-pooled model) and each column is one of the 626 aligned 5-second movie
-bins used throughout ``cf_modeling/deprecated/channel_cca_analysis.py``. All
+bins used throughout the channel analyses. All
 reduction/clustering math (PCA, MDS, Isomap, t-SNE, FastICA, UMAP,
 k-means/HDBSCAN/BIRCH) is imported unchanged from ``vertex_clustering.py``.
 The only differences are the input load (channel embeddings, not a CIFTI
@@ -28,10 +28,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from paths import DATA, OUTPUTS  # noqa: E402
-from cf_modeling.deprecated.channel_cca_analysis import MODEL_CONFIGS, _model_files  # noqa: E402
-from rsa.shared.rsa_utils import process_model_embeddings  # noqa: E402
-from io_cluster import write_channel_labels_csv  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
+from shared.rsa_utils import process_model_embeddings  # noqa: E402
+from io_cluster import MODEL_CONFIGS, model_files, write_channel_labels_csv  # noqa: E402
 from vertex_clustering import (  # noqa: E402
     REDUCTIONS, CLUSTERERS, analysis_tag, reduction_tag, clustering_tag,
     zscore_timeseries_inplace, reduce_grayordinates,
@@ -106,7 +105,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 def load_channel_timeseries(args: argparse.Namespace) -> tuple[np.ndarray, list[str]]:
     """Load the (channels, movie bins) matrix analyzed in channel_cca_analysis.py."""
     model = MODEL_CONFIGS[args.family]
-    intact_path, _, _ = _model_files(Path(args.embeddings_dir), model)
+    intact_path, _, _ = model_files(Path(args.embeddings_dir), model)
     timing = pd.read_csv(args.timing_csv)
     run_trs = np.asarray(np.load(args.run_trs), dtype=int)
     bins_by_channels = process_model_embeddings(

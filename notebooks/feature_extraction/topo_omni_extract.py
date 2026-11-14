@@ -81,7 +81,7 @@ os.environ.pop("all_proxy", None)
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import ROOT, DATA, OUTPUTS, MODELS  # noqa: E402
+from shared.paths import ROOT, DATA, OUTPUTS, MODELS  # noqa: E402
 
 # topo-omni ships a *custom* modeling file (CorticalAdaptor modules spliced after every
 # audio/vision/text layer). The stock transformers Qwen2_5OmniThinkerForConditionalGeneration
@@ -237,11 +237,10 @@ print(f"N_LAYERS       : {N_LAYERS}")
 print(f"QUARTER_LAYERS : {QUARTER_LAYERS}")
 
 # Only {N_LAYERS//4, N_LAYERS//2, 3*N_LAYERS//4} (9/18/27 for N_LAYERS=36) have a
-# "_lasttoken"-now-"_lt" counterpart (extracted separately by topo_omni_extract_
-# intact.py) -- those get the explicit "_mp" mean-pool tag so the two variants
-# stay distinguishable. The other quarter-layer sweep probes (1, 2, 4, N_LAYERS-1)
-# have no lasttoken counterpart, so there is nothing to disambiguate; they keep
-# their bare "{MODEL_TAG}_layer{idx}" name unchanged.
+# last-token "_lt" counterpart (extracted by topo_omni_extract_intact.py), so
+# those get the explicit "_mp" mean-pool tag to keep the two variants
+# distinguishable. The other quarter-layer sweep probes (1, 2, 4, N_LAYERS-1)
+# have no last-token counterpart and keep the bare "{MODEL_TAG}_layer{idx}" name.
 MP_TAGGED_LAYERS = {N_LAYERS // 4, N_LAYERS // 2, 3 * N_LAYERS // 4}
 
 

@@ -56,9 +56,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from cifti_io import get_bm_axis, load_cifti_data, load_single_map  # noqa: E402
+from shared.cifti_io import get_bm_axis, load_cifti_data, load_single_map  # noqa: E402
 from io_cluster import GROUP_AVG_CIFTI, write_dlabel  # noqa: E402
-from paths import OUTPUTS  # noqa: E402
+from shared.paths import OUTPUTS  # noqa: E402
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

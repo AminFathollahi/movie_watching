@@ -1,12 +1,10 @@
 """
 cluster/io_cluster.py
 ======================
-Thin loaders for the cluster pipeline. Re-exports the existing binning /
-alignment machinery (rsa/shared/rsa_utils.py) and CIFTI I/O (cifti_io.py)
-verbatim — no re-implementation. The only new code here is the group-average
-loader (a two-array read, not the compute-and-cache logic subcortical uses,
-since the cortical group average is already built by rsa/analysis.sh) and a
-minimal .dlabel writer (no writer exists anywhere in the repo).
+Thin loaders for the cluster pipeline. Re-exports the binning / alignment
+machinery (shared/rsa_utils.py) and CIFTI I/O (shared/cifti_io.py), and adds
+the group-average loader (a two-array read of the prebuilt cortical group
+average) and a minimal .dlabel writer.
 """
 
 import logging
@@ -19,21 +17,35 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "rsa"))
 
-from rsa.shared.rsa_utils import (  # noqa: E402
+from shared.rsa_utils import (  # noqa: E402
     preprocess_fmri, process_model_embeddings, get_run_bin_counts, align_and_assert_bins,
 )
-from cifti_io import (  # noqa: E402
+from shared.cifti_io import (  # noqa: E402
     load_cifti_data, get_bm_axis, get_cortex_vertex_indices, save_cifti_map,
 )
-from paths import DATA  # noqa: E402
+from shared.paths import DATA  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 GROUP_AVG_CIFTI = str(DATA / "preprocessed/average_sub/raw/group_average_raw_cortex_59k.dtseries.nii")
 GROUP_AVG_TRS = str(DATA / "preprocessed/average_sub/raw/group_average_raw_run_trs.npy")
+
+MODEL_CONFIGS = {
+    "peav": "pe-av-small-16-frame",
+    "nemotron_layer18_mp": "nemotron_layer18_mp",
+    "topoomni_layer18_sheet_mp": "topoomni_layer18_sheet_mp",
+}
+
+
+def model_files(root: Path, model: str) -> tuple[Path, Path, Path]:
+    """(intact, from_a, from_v): the intact embedding, the audio-only-input pass
+    (video ablated, suffix ``_clsav_from_a``) and the video-only-input pass
+    (audio ablated, suffix ``_clsav_from_v``)."""
+    def path(tag: str) -> Path:
+        return root / tag / "bin5s_skip5s" / f"{tag}_av.npy"
+    return path(model), path(f"{model}_clsav_from_a"), path(f"{model}_clsav_from_v")
 
 
 def load_group_average(cifti_path: str = GROUP_AVG_CIFTI, trs_path: str = GROUP_AVG_TRS):

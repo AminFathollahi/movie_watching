@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
+from shared.paths import DATA, OUTPUTS, EXTERNAL, MODELS  # noqa: E402
 
 # Must run BEFORE any transformers/huggingface_hub import: the HTTP client's
 # proxy config gets locked in at import time, so stripping these afterward
@@ -41,10 +41,9 @@ from av_pairing import factorial_contrast, fold_confined_pairing, fold_reference
 
 # ── Config ────────────────────────────────────────────────────────────────
 MODEL_ID = "nvidia/omni-embed-nemotron-3b"
-# The default Hugging Face cache link can be dead when its drive is not
-# attached; resolve the snapshot dir directly against the models folder
-# instead of trusting HF_HOME resolution (same fix as
-# topo_omni_extract_full_sheet.py's _resolve_model_path()).
+# The snapshot dir is resolved directly against the candidate locations below
+# instead of through HF_HOME (as in topo_omni_extract_full_sheet.py's
+# _resolve_model_path()).
 _HF_SNAPSHOT_CANDIDATES = [
     Path.home() / ".cache/huggingface/hub/models--nvidia--omni-embed-nemotron-3b",
     MODELS / "hub/models--nvidia--omni-embed-nemotron-3b",

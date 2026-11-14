@@ -54,7 +54,7 @@ MODEL_PATH        = "Qwen/Qwen2.5-Omni-3B"
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from paths import DATA, OUTPUTS  # noqa: E402
+from shared.paths import DATA, OUTPUTS  # noqa: E402
 
 DATA_BASE         = DATA / "segmented_stimulus/filtered"
 EMBEDDINGS_BASE   = OUTPUTS / "model_embeddings"

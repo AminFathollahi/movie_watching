@@ -15,6 +15,7 @@
 #                            save per-subject + group-average CIFTIs
 #               avg          Group-average CF modeling for all AVG_PAIRS
 #               persubject   Per-subject CF modeling for all PERSUBJECT_PAIRS
+#               roimean      ROI-mean time-series partial correlation maps for all ROIMEAN_PAIRS
 #               all          geometry + avg + persubject  (default)
 #
 #   BATCH_SIZE  N            Parallel subjects per ROI pair (default 8)
@@ -67,7 +68,7 @@ ROOT="${MOVIE_ROOT:-$(dirname "$REPO_DIR")}"
 
 DATA_BASE="$ROOT/data"
 HCP_DIR="${MOVIE_HCP_DIR:-$DATA_BASE/HCP_S1200_GroupAvg_v1}"
-PYCORTEX_STORE="${DATA_BASE}/hedger2026"
+PYCORTEX_STORE="${DATA_BASE}/vicsompy_data"
 export PYCORTEX_FILESTORE="$PYCORTEX_STORE"
 OUTPUTS_BASE="$ROOT/outputs"
 
@@ -83,7 +84,7 @@ GLASSER_DLABEL="${HCP_DIR}/Q1-Q6_RelatedParcellation210.CorticalAreas_dil_Final_
 
 # ── LBOE count ────────────────────────────────────────────────────────────────
 # Capped at min(N_LBOE, n_L-2, n_R-2) by 01_extract_geometry.py.
-N_LBOE=100
+N_LBOE=${N_LBOE:-100}
 
 # ── Streaming toggle ──────────────────────────────────────────────────────────
 # false → disk mode (read pre-saved preprocessed CIFTIs from PREPROCESSED_INDIV_DIR)
@@ -140,6 +141,10 @@ RAW_PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/raw"
 RAW_GROUP_CIFTI="${RAW_PREPROCESSED_DIR}/group_average_raw_cortex_59k.dtseries.nii"
 RAW_GROUP_RUN_TRS="${RAW_PREPROCESSED_DIR}/group_average_raw_run_trs.npy"
 
+SG_PSC_PREPROCESSED_DIR="${DATA_BASE}/preprocessed/average_sub/sg_psc"
+SG_PSC_GROUP_CIFTI="${SG_PSC_PREPROCESSED_DIR}/group_average_sg_psc_cortex_59k.dtseries.nii"
+SG_PSC_GROUP_RUN_TRS="${SG_PSC_PREPROCESSED_DIR}/group_average_sg_psc_run_trs.npy"
+
 # Single authoritative subject list — 175 subjects with full 7T fMRI + midthickness.
 SUBJECTS_LIST="${DATA_BASE}/subjects.txt"
 
@@ -152,7 +157,7 @@ MASKS_DIR="${OUTPUT_BASE}/masks"
 # ── himalaya modeling parameters ─────────────────────────────────────────────
 BACKEND="torch_cuda"    # torch_cuda | torch | numpy
 N_ITER=20               # random-search iterations for alpha selection
-N_TARGETS_BATCH=20000   # targets processed per GPU batch
+N_TARGETS_BATCH=${N_TARGETS_BATCH:-20000}   # targets processed per GPU batch
 
 # ── Parallelisation ──────────────────────────────────────────────────────────
 CONDA_ENV="movie"
@@ -171,8 +176,13 @@ AVG_PAIRS=(
     "3b:V1"
     "A1:V1"
     "A5:FFC"
-    
 )
+# ROI-mean time-series connectivity pairs (roimean mode)
+ROIMEAN_PAIRS=(
+    "A5:FFC"
+)
+# PAIRS="ROI_A:ROI_B ..." restricts the group-average pairs for one invocation
+[ -n "${PAIRS:-}" ] && read -ra AVG_PAIRS <<< "$PAIRS"
 
 # All unique ROIs across all pairs — used for geometry + mask steps
 _all_rois() {
@@ -190,6 +200,7 @@ START_FROM=${3:-""}
 
 # Parallelism control: one BLAS thread per Python process so parallel jobs
 # don't fight for CPU cores.
+export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -218,10 +229,6 @@ qualify_lboe_roi() {
     fi
 }
 
-source_mask_roi() {
-    printf '%s\n' "$1" | sed -E 's/_lboe[0-9]+$//'
-}
-
 run_python() {
     conda run --no-capture-output -n "$CONDA_ENV" python "$@"
 }
@@ -242,104 +249,34 @@ run_bivariate_workbench_export() {
         --vmax           0.4
 }
 
-run_roi_mean_partial_connectivity() {
+run_roi_mean_connectivity() {
     local ROI_A="$1"
-    local ROI_P="$2"
+    local ROI_B="$2"
     local PREPROCESSING="$3"
     local DTC_SERIES="$4"
     local RUN_TRS="$5"
-    local COLLECTION_TAG="${6:-${ROI_A}_${ROI_P}}"
     local PREPROCESSING_LABEL="${PREPROCESSING}_per_run_zscore"
-    local OUT_DIR="${OUTPUT_BASE}/group_average/roi_mean_timeseries_connectivity_${COLLECTION_TAG}/cifti_maps"
-    local PARTIAL_CIFTI="${OUT_DIR}/roi_mean_timeseries_partial_pearson_r_${ROI_A}_${ROI_P}_${PREPROCESSING_LABEL}.dscalar.nii"
-    local MASK_ROI_A MASK_ROI_P
-    MASK_ROI_A=$(source_mask_roi "$ROI_A")
-    MASK_ROI_P=$(source_mask_roi "$ROI_P")
-    log "  ROI-mean partial Pearson-r (${ROI_A}|${ROI_P}; ${PREPROCESSING_LABEL}) ..."
+    local OUT_DIR="${OUTPUT_BASE}/group_average/roi_mean_timeseries_connectivity_${ROI_A}_glasser_${ROI_B}_glasser/cifti_maps"
+    local CIFTI="${OUT_DIR}/roi_mean_timeseries_connectivity_${ROI_A}_${ROI_B}_${PREPROCESSING_LABEL}.dscalar.nii"
+    log "  ROI-mean partial Pearson-r (${ROI_A}|${ROI_B}; ${PREPROCESSING_LABEL}) ..."
     run_python "${SCRIPT_DIR}/roi_mean_partial_connectivity.py" \
         --dtseries   "$DTC_SERIES" \
         --run-trs    "$RUN_TRS" \
         --roi-a      "$ROI_A" \
-        --roi-p      "$ROI_P" \
-        --mask-a     "${MASKS_DIR}/${MASK_ROI_A}_mask.dscalar.nii" \
-        --mask-p     "${MASKS_DIR}/${MASK_ROI_P}_mask.dscalar.nii" \
+        --roi-b      "$ROI_B" \
+        --mask-a     "${MASKS_DIR}/${ROI_A}_mask.dscalar.nii" \
+        --mask-b     "${MASKS_DIR}/${ROI_B}_mask.dscalar.nii" \
         --output-dir "$OUT_DIR" \
         --preprocessing "$PREPROCESSING"
-    log "  Exporting bilateral/within-hemisphere/L/R partial-r bivariate dlabels ..."
     run_python "${SCRIPT_DIR}/export_partial_bivariate_cifti.py" \
-        --partial-cifti "$PARTIAL_CIFTI" \
+        --connectivity-cifti "$CIFTI" \
         --roi-a         "$ROI_A" \
-        --roi-p         "$ROI_P" \
+        --roi-b         "$ROI_B" \
         --output-dir    "$OUT_DIR" \
         --preprocessing-label "$PREPROCESSING_LABEL" \
         --bins          32 \
         --vmin          0 \
         --vmax          0.4
-}
-
-run_roi_mean_raw_connectivity() {
-    local ROI_A="$1"
-    local ROI_P="$2"
-    local PREPROCESSING="$3"
-    local DTC_SERIES="$4"
-    local RUN_TRS="$5"
-    local COLLECTION_TAG="${6:-${ROI_A}_${ROI_P}}"
-    local PREPROCESSING_LABEL="${PREPROCESSING}_per_run_zscore"
-    local OUT_DIR="${OUTPUT_BASE}/group_average/roi_mean_timeseries_connectivity_${COLLECTION_TAG}/cifti_maps"
-    local ZERO_ORDER_CIFTI="${OUT_DIR}/roi_mean_timeseries_zero_order_pearson_r_${ROI_A}_${ROI_P}_${PREPROCESSING_LABEL}.dscalar.nii"
-    local BIVARIATE_STEM="${OUT_DIR}/bivariate_roi_mean_timeseries_zero_order_pearson_r_${ROI_A}_${ROI_P}_${PREPROCESSING_LABEL}"
-    local MASK_ROI_A MASK_ROI_P
-    MASK_ROI_A=$(source_mask_roi "$ROI_A")
-    MASK_ROI_P=$(source_mask_roi "$ROI_P")
-    if [ -f "$ZERO_ORDER_CIFTI" ] && \
-       [ -f "${BIVARIATE_STEM}_bilateral_32bin.dlabel.nii" ] && \
-       [ -f "${BIVARIATE_STEM}_within_hemisphere_32bin.dlabel.nii" ] && \
-       [ -f "${BIVARIATE_STEM}_L_32bin.dlabel.nii" ] && \
-       [ -f "${BIVARIATE_STEM}_R_32bin.dlabel.nii" ]; then
-        log "  Zero-order ROI-mean Pearson-r maps already exist for ${ROI_A} x ${ROI_P} (${PREPROCESSING_LABEL}) — skipping"
-        return 0
-    fi
-    log "  Zero-order ROI-mean Pearson-r maps (${ROI_A}, ${ROI_P}; ${PREPROCESSING_LABEL}; not CF maps) ..."
-    run_python "${SCRIPT_DIR}/roi_mean_raw_connectivity.py" \
-        --dtseries   "$DTC_SERIES" \
-        --run-trs    "$RUN_TRS" \
-        --roi-a      "$ROI_A" \
-        --roi-p      "$ROI_P" \
-        --mask-a     "${MASKS_DIR}/${MASK_ROI_A}_mask.dscalar.nii" \
-        --mask-p     "${MASKS_DIR}/${MASK_ROI_P}_mask.dscalar.nii" \
-        --output-dir "$OUT_DIR" \
-        --preprocessing "$PREPROCESSING"
-    log "  Exporting zero-order Pearson-r bilateral/within-hemisphere/L/R bivariate dlabels ..."
-    run_python "${SCRIPT_DIR}/export_raw_corr_bivariate_cifti.py" \
-        --zero-order-cifti "$ZERO_ORDER_CIFTI" \
-        --roi-a      "$ROI_A" \
-        --roi-p      "$ROI_P" \
-        --output-dir "$OUT_DIR" \
-        --preprocessing-label "$PREPROCESSING_LABEL" \
-        --bins       32 \
-        --vmin       0 \
-        --vmax       0.4
-}
-
-run_roi_mean_connectivity_preprocessing_variants() {
-    local ROI_A="$1"
-    local ROI_P="$2"
-    local MASK_ROI_A MASK_ROI_P COLLECTION_TAG
-    MASK_ROI_A=$(source_mask_roi "$ROI_A")
-    MASK_ROI_P=$(source_mask_roi "$ROI_P")
-    if [ "$MASK_ROI_A" = a5 ] && [ "$MASK_ROI_P" = ffc ]; then
-        COLLECTION_TAG="A5_glasser_FFC_glasser"
-    else
-        COLLECTION_TAG="${MASK_ROI_A}_${MASK_ROI_P}"
-    fi
-    run_roi_mean_raw_connectivity "$MASK_ROI_A" "$MASK_ROI_P" \
-        "sg_psc" "$FMRI_GROUP_CIFTI" "$FMRI_GROUP_RUN_TRS" "$COLLECTION_TAG"
-    run_roi_mean_partial_connectivity "$MASK_ROI_A" "$MASK_ROI_P" \
-        "sg_psc" "$FMRI_GROUP_CIFTI" "$FMRI_GROUP_RUN_TRS" "$COLLECTION_TAG"
-    run_roi_mean_raw_connectivity "$MASK_ROI_A" "$MASK_ROI_P" \
-        "raw" "$RAW_GROUP_CIFTI" "$RAW_GROUP_RUN_TRS" "$COLLECTION_TAG"
-    run_roi_mean_partial_connectivity "$MASK_ROI_A" "$MASK_ROI_P" \
-        "raw" "$RAW_GROUP_CIFTI" "$RAW_GROUP_RUN_TRS" "$COLLECTION_TAG"
 }
 
 # =============================================================================
@@ -374,8 +311,8 @@ _run_geometry_for_pair() {
     local ROI_B="$2"
     local CF_MODE="$3"   # group_average | per_subject
 
-    local SUB_A_PKL="${OUTPUT_BASE}/${CF_MODE}/${ROI_A}_${ROI_B}/subsurfaces/sub_$(echo "$ROI_A" | tr '[:upper:]' '[:lower:]').pkl"
-    local SUB_B_PKL="${OUTPUT_BASE}/${CF_MODE}/${ROI_A}_${ROI_B}/subsurfaces/sub_$(echo "$ROI_B" | tr '[:upper:]' '[:lower:]').pkl"
+    local SUB_A_PKL="${OUTPUT_BASE}/${CF_MODE}/${ROI_A}_${ROI_B}/subsurfaces/sub_${ROI_A}.pkl"
+    local SUB_B_PKL="${OUTPUT_BASE}/${CF_MODE}/${ROI_A}_${ROI_B}/subsurfaces/sub_${ROI_B}.pkl"
 
     if [ -f "$SUB_A_PKL" ] && [ -f "$SUB_B_PKL" ]; then
         log "  [01] ${CF_MODE} ${ROI_A}×${ROI_B}: subsurfaces cached — skipping"
@@ -435,7 +372,7 @@ run_preprocess() {
     [ "$GSR"       = "true" ] && GSR_FLAG="--gsr"
 
     # shellcheck disable=SC2086
-    run_python "${SCRIPT_DIR}/../preprocess_individual.py" \
+    run_python "${SCRIPT_DIR}/../preprocessing/preprocess_individual.py" \
         --raw-dir        "$CIFTI_DIR" \
         --out-dir        "$PREPROCESSED_INDIV_DIR" \
         --subjects-list  "$SUBJECTS_LIST" \
@@ -702,6 +639,22 @@ run_avg() {
     log "=== Group-average CF modeling complete ==="
 }
 
+run_roimean() {
+    log "=== ROI-mean time-series connectivity (${#ROIMEAN_PAIRS[@]} ROI pairs) ==="
+    local PAIR ROI_A ROI_B ROI
+    for PAIR in "${ROIMEAN_PAIRS[@]}"; do
+        IFS=':' read -r ROI_A ROI_B <<< "$PAIR"
+        for ROI in "$ROI_A" "$ROI_B"; do
+            [ -f "${MASKS_DIR}/${ROI}_mask.dscalar.nii" ] || run_python "${SCRIPT_DIR}/make_glasser_roi_mask.py" \
+                --glasser-dlabel "$GLASSER_DLABEL" --template-cifti "$FMRI_GROUP_CIFTI" \
+                --roi "$ROI" --output-path "${MASKS_DIR}/${ROI}_mask.dscalar.nii"
+        done
+        run_roi_mean_connectivity "$ROI_A" "$ROI_B" "raw" "$RAW_GROUP_CIFTI" "$RAW_GROUP_RUN_TRS"
+        run_roi_mean_connectivity "$ROI_A" "$ROI_B" "sg_psc" "$SG_PSC_GROUP_CIFTI" "$SG_PSC_GROUP_RUN_TRS"
+    done
+    log "=== ROI-mean time-series connectivity complete ==="
+}
+
 # =============================================================================
 # DISPATCH
 # =============================================================================
@@ -711,10 +664,11 @@ case "$MODE" in
     preprocess)                run_preprocess ;;
     avg|groupaverage)          run_avg ;;
     persubject)                run_persubject ;;
+    roimean)                   run_roimean ;;
     all)                       run_geometry; run_avg; run_persubject ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Use: masks | geometry | preprocess | avg | persubject | all" >&2
+        echo "Use: masks | geometry | preprocess | avg | persubject | roimean | all" >&2
         exit 1 ;;
 esac
 

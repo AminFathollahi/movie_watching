@@ -35,7 +35,7 @@ from subcortical_io import (  # noqa: E402
     struct_slices, build_neighbors, get_cerebellum_neighbors,
     extract_subcortical,
 )
-from preprocess_individual import get_run_path, RUN_IDS  # noqa: E402
+from preprocessing.preprocess_individual import get_run_path, RUN_IDS  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)

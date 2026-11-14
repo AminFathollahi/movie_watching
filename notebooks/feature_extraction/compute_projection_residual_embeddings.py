@@ -3,7 +3,7 @@ notebooks/feature_extraction/compute_projection_residual_embeddings.py
 ===========================================================================
 Generates "_projection_resid_own" pseudo-model embeddings: the per-timepoint
 orthogonal-projection residual of a joint AV embedding after removing its
-component in span{a_t, v_t} (see rsa.shared.residuals.projection_residual --
+component in span{a_t, v_t} (see shared.residuals.projection_residual --
 distinct from "_linear_resid_unimodal", which fits one shared linear map
 ACROSS all samples; this is a purely local, per-row geometric decomposition).
 
@@ -11,7 +11,7 @@ Two families of runs:
 
 1. Own-unimodal variant (dimension-compatible: target and nuisance share the
    SAME embedding space, so a genuine 2D projection is well-defined):
-     - PE-AV and legacy bare probes: AV vs own A/V in the same space.
+     - PE-AV and the bare-name probes: AV vs own A/V in the same space.
      - CAV-MAE: av=concat(cls-a, cls-v), with own A/V placed in their
        corresponding zero-padded blocks before projection.
      - omni-family: av={base}_mp/_lt vs (a={base}_mp_a, v={base}_mp_v)
@@ -31,7 +31,7 @@ Two families of runs:
    same vector space, so a genuine geometric projection (which requires
    target and nuisance to share one space) is mathematically undefined here.
    This pairing therefore uses the cross-validated ridge residual
-   (rsa.shared.residuals.linear_residual) and is tagged
+   (shared.residuals.linear_residual) and is tagged
    "_linear_resid_encoder" rather than "_projection_resid_own".
 
 Usage
@@ -57,16 +57,16 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from rsa.shared.rsa_utils import preprocess_fmri, process_model_embeddings, align_and_assert_bins
-from rsa.shared.model_registry import (
+from shared.binning import preprocess_fmri, process_model_embeddings, align_and_assert_bins
+from shared.model_registry import (
     BIN_SEC_DEFAULT,
     DELAY_SEC_DEFAULT,
-    LEGACY_BARE_AV_MODELS,
+    BARE_NAME_AV_MODELS,
     RESIDUALIZED_AV_MODELS,
     TR_DEFAULT,
     emb_path,
 )
-from rsa.shared.residuals import projection_residual, linear_residual
+from shared.residuals import projection_residual, linear_residual
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ log = logging.getLogger(__name__)
 SAME_SPACE_OWN_MODELS = (
     "pe-av-small-16-frame",
     "cav-mae-sync",
-    *LEGACY_BARE_AV_MODELS,
+    *BARE_NAME_AV_MODELS,
 )
 OMNI_FAMILY_BASES = list(dict.fromkeys(
     model.rsplit("_", 1)[0]
